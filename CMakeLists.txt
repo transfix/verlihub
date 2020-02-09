@@ -233,7 +233,7 @@ CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/dirsettings.h.cm" "${CMAKE_BINARY_DIR}
 # ----------------------------------------------------------------------------------------------------
 
 if(INSTALL_CMAKE_FILES)
-	install(FILES "${CMAKE_SOURCE_DIR}/cmake/Modules/FindVerlihub.cmake" DESTINATION ${CMAKE_ROOT}/Modules)
+	install(FILES "${CMAKE_SOURCE_DIR}/cmake/Modules/FindVerlihub.cmake" DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/cmake)
 endif()
 
 CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in" "${CMAKE_BINARY_DIR}/cmake/cmake_uninstall.cmake" IMMEDIATE @ONLY) # create uninstall configuration file and uninstall target

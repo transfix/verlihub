@@ -356,8 +356,9 @@ int w_Begin(w_Tcallback *callbacks)
 
 int w_End()
 {
-	PyGILState_Ensure();
+	PyGILState_STATE gil = PyGILState_Ensure();
 	Py_Finalize();
+	PyGILState_Release(gil);
 	free(w_Python);
 	return 1;
 }
@@ -405,7 +406,9 @@ int w_Load(w_Targs *args)
 	}
 	script->name = strdup(module_name.c_str());
 
+	PyGILState_STATE gil = PyGILState_Ensure();
 	script->state = Py_NewInterpreter();
+	PyGILState_Release(gil);
 	if (!script->state) return -1;
 
 	PyEval_AcquireThread(script->state);

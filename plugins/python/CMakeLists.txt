@@ -50,7 +50,13 @@ IF(CMAKE_COMPILER_IS_GNUCC) # prevent strict aliasing warning
 	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-strict-aliasing")
 ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
-# Build the wrapper library first (needed by both plugin and tests)
+CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/cpipython.cpp" "${CMAKE_CURRENT_BINARY_DIR}/cpipython.cpp" @ONLY)
+LIST(APPEND PYTHON_SRCS "${CMAKE_CURRENT_BINARY_DIR}/cpipython.cpp")
+
+ADD_LIBRARY(libpython_pi MODULE ${PYTHON_SRCS})
+SET_TARGET_PROPERTIES(libpython_pi PROPERTIES OUTPUT_NAME "python_pi")
+TARGET_LINK_LIBRARIES(libpython_pi ${DL_LIBRARIES} libverlihub_so)
+
 ADD_LIBRARY(libvh_python_wrapper SHARED ${PYTHON_WRAPPER_SRCS})
 SET_TARGET_PROPERTIES(libvh_python_wrapper PROPERTIES OUTPUT_NAME "vh_python_wrapper")
 target_link_libraries(libvh_python_wrapper ${Python3_LIBRARIES})

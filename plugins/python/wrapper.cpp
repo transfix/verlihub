@@ -360,6 +360,7 @@ int w_End()
 {
 	PyGILState_Ensure();
 	Py_Finalize();
+	// No PyGILState_Release after Py_Finalize
 	free(w_Python);
 	return 1;
 }
@@ -394,7 +395,7 @@ int w_Load(w_Targs *args)
 	char *path_dup = strdup(path);
 	char *script_dir_c = dirname(path_dup);
 	string script_dir = string(script_dir_c);
-	free(path_dup);  // dirname modifies the string, but we dup'ed
+	free(path_dup);
 
 	path_dup = strdup(path);
 	char *base_c = basename(path_dup);
@@ -407,7 +408,11 @@ int w_Load(w_Targs *args)
 	}
 	script->name = strdup(module_name.c_str());
 
+	PyGILState_STATE gil = PyGILState_Ensure();
+	PyThreadState *main_state = PyThreadState_Get();
 	script->state = Py_NewInterpreter();
+	PyThreadState_Swap(main_state);
+	PyGILState_Release(gil);
 	if (!script->state) return -1;
 
 	PyEval_AcquireThread(script->state);
@@ -493,8 +498,8 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	if (!script) return NULL;
 
 	PyGILState_STATE gstate = PyGILState_Ensure();
-
-	PyThreadState *old_state = PyThreadState_Swap(script->state);
+	PyThreadState *old_state = PyThreadState_Get();
+	PyThreadState_Swap(script->state);
 
 	const char *name = w_HookName(num);
 	if (!name) {
@@ -575,7 +580,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		if (!s) s = "";
 		ret = w_pack("s", strdup(s));
 	} else if (res == Py_None) {
-		ret = w_pack("");
+		ret = w_pack("l", (long)0);  // Default to 0 for None
 	} else if (PyTuple_Check(res)) {
 		int len = PyTuple_Size(res);
 		if (len > W_MAX_RETVALS) len = W_MAX_RETVALS;
@@ -617,7 +622,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		if (!s) s = "";
 		ret = w_pack("s", strdup(s));
 	} else if (res == Py_None) {
-		ret = w_pack("");
+		ret = w_pack("l", (long)0);  // Default to 0 for None
 	} else if (PyTuple_Check(res)) {
 		int len = PyTuple_Size(res);
 		if (len > W_MAX_RETVALS) len = W_MAX_RETVALS;

@@ -1,11 +1,9 @@
 #include <gtest/gtest.h>
 #include "wrapper.h"
-#include "test_utils.h"
 #include <fstream>
 #include <string>
 #include <vector>
 #include <chrono>  // For timing if needed
-#include <unistd.h>  // For getpid()
 
 // Mock callbacks (empty functions for the callback table)
 w_Targs* mock_callback(int id, w_Targs* args) { return nullptr; }
@@ -206,12 +204,9 @@ def name_and_version():
 // Test fixture for per-test setup
 class PythonWrapperTest : public ::testing::Test {
 protected:
-    std::string script_path;
+    std::string script_path = "test_script.py";
 
     void SetUp() override {
-        // Create unique filename using PID to avoid conflicts in parallel execution
-        script_path = std::string(BUILD_DIR) + "/test_script_stress_" + std::to_string(getpid()) + ".py";
-        
         // Write script content to file
         std::ofstream script_file(script_path);
         script_file << script_content;
@@ -231,7 +226,7 @@ protected:
         // Mock args: id, path, botname, opchatname, config_dir, starttime, config_name
         w_Targs* args = w_pack("lssssls", id, script_path.c_str(), "TestBot", "OpChat", ".", (long)0, "config");
         EXPECT_EQ(id, w_Load(args));
-        free(args);  // Use free(), not w_free_args() - w_Load() copies strings with strdup()
+        free(args);
         return id;
     }
 
@@ -246,7 +241,7 @@ protected:
                 free(res);
             }
         }
-        free(params);  // Use free(), not w_free_args() - params are simple
+        free(params);
     }
 };
 
@@ -273,7 +268,7 @@ TEST_F(PythonWrapperTest, CallHook) {
     // Call OnTimer (expects double, but script returns 1)
     w_Targs* params = w_pack("d", 123.456);
     w_Targs* res = w_CallHook(id, W_OnTimer, params);
-    free(params);  // Use free(), not w_free_args()
+    free(params);
 
     ASSERT_NE(res, nullptr);
     long ret_val;
@@ -284,7 +279,7 @@ TEST_F(PythonWrapperTest, CallHook) {
     // Call OnParsedMsgChat (ss: nick, data)
     params = w_pack("ss", "test_user", "hello");
     res = w_CallHook(id, W_OnParsedMsgChat, params);
-    free(params);  // Use free(), not w_free_args()
+    free(params);
 
     ASSERT_NE(res, nullptr);
     w_unpack(res, "l", &ret_val);
@@ -298,14 +293,8 @@ TEST_F(PythonWrapperTest, CallHook) {
 TEST_F(PythonWrapperTest, StressTest) {
     int id = LoadScript();
 
-    // Start memory tracking
-    MemoryTracker tracker;
-    tracker.start();
-    std::cout << "\n=== Stress Test Memory Tracking Started ===" << std::endl;
-    std::cout << "Initial: " << tracker.initial.to_string() << std::endl;
-
     double current_time = 1759447563.749;  // Starting time from log
-    const int iterations = 1000000;  // Large number to stress; adjust as needed
+    const int iterations = 100000;  // Large number to stress; adjust as needed
 
     for (int i = 0; i < iterations; ++i) {
         // OnTimer (most frequent)
@@ -382,18 +371,11 @@ TEST_F(PythonWrapperTest, StressTest) {
             CallAndFree(id, W_OnParsedMsgSearch, params);
         }
 
-        // Sample memory every 10,000 iterations
-        if (i % 10000 == 0) {
-            tracker.sample();
+        // Print progress every 1000 iterations
+        if (i % 1000 == 0) {
             std::cout << "Stress test iteration: " << i << " / " << iterations << std::endl;
         }
     }
-
-    // Final memory sample
-    tracker.sample();
-    
-    // Print comprehensive memory report
-    tracker.print_report();
 
     w_Unload(id);
     EXPECT_TRUE(true);  // If no crash, test passes

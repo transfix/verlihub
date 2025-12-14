@@ -185,7 +185,7 @@ typedef struct {
 		double d;        // 'd' - double
 		void *p;         // 'p' - void pointer
 		char **L;        // 'L' - list of strings (NULL-terminated array)
-		PyObject *O;     // 'O' - PyObject*
+		PyObject *O;     // 'O' - PyObject* (advanced, for Phase 3)
 	};
 } w_Telement;
 

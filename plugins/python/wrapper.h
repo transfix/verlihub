@@ -32,8 +32,6 @@ extern "C" {
 #include <vector>
 #include <map>
 
-#include <wchar.h>
-
 #if PY_MAJOR_VERSION >= 3
 #include <wchar.h>
 #endif
@@ -208,10 +206,8 @@ typedef struct {
 	char          *opchatname;
 	bool           use_old_ontimer;
 	char          *config_name;
-	char          *config_dir;
-	bool           had_threads;  // Track if this interpreter used threading/asyncio
 	
-	// Dynamic function registry
+	// Dynamic function registry (Dimension 4)
 	std::map<std::string, w_Tcallback> *dynamic_funcs;
 } w_TScript;
 
@@ -233,7 +229,7 @@ PyObject *w_GetHook(int hook);
 const char *w_HookName(int hook);
 const char *w_CallName(int callback);
 
-// Dynamic function registration
+// Dimension 4: Dynamic function registration
 // Register a C++ function that can be called from Python scripts
 int w_RegisterFunction(int script_id, const char *func_name, w_Tcallback callback);
 // Unregister a dynamically registered function

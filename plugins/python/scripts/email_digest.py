@@ -516,12 +516,12 @@ def check_stats_interval():
 # Verlihub Event Hooks
 # =============================================================================
 
-def email_digest_chat_handler(nick, message):
+def OnParsedMsgChat(nick, message):
     """Capture chat messages for digest"""
     add_chat_message(nick, message)
     return 1  # Allow message
 
-def email_digest_login_handler(nick):
+def OnUserLogin(nick):
     """Record user login for statistics"""
     try:
         ip = vh.GetUserIP(nick) or ""
@@ -530,7 +530,7 @@ def email_digest_login_handler(nick):
         print(f"[Email Digest] Error recording login for {nick}: {e}")
     return 1
 
-def email_digest_logout_handler(nick):
+def OnUserLogout(nick):
     """Record user logout for statistics"""
     try:
         ip = vh.GetUserIP(nick) or ""
@@ -539,7 +539,7 @@ def email_digest_logout_handler(nick):
         print(f"[Email Digest] Error recording logout for {nick}: {e}")
     return 1
 
-def email_digest_timer_handler(msec=0):
+def OnTimer(msec=0):
     """Check for digest sending conditions (runs in main thread)"""
     if not running:
         return 0
@@ -552,123 +552,105 @@ def email_digest_timer_handler(msec=0):
     
     return 1
 
-def email_digest_command_handler(nick, command, user_class, in_pm, prefix):
-    """Handle admin commands
-    
-    IMPORTANT: Return value logic (Python -> C++ -> Verlihub core):
-    - return 1 → C++ returns true → Command is ALLOWED (passes through)
-    - return 0 → C++ returns false → Command is BLOCKED (consumed/handled)
-    
-    So: return 1 for commands we DON'T handle, return 0 for commands we DO handle
-    """
-    # Debug output
-    print(f"[Email Digest] OnHubCommand called: nick={nick}, command='{command}', user_class={user_class}, prefix='{prefix}'")
+def OnHubCommand(nick, command, user_class, in_pm, prefix):
+    """Handle admin commands"""
+    if user_class < 10:  # Only ops and above
+        return 0
     
     args = command.split()
-    if not args:
-        return 1  # Empty command, allow it through
-    
     cmd = args[0].lower()
     
-    # The prefix (! + etc) is stripped, so command is just "digest ..."
-    if cmd != "digest":
-        return 1  # Not our command, allow it through
-    
-    # Check permissions
-    if user_class < 10:  # Only ops and above
-        vh.pm("Permission denied. Operators only.", nick)
-        return 0  # Block this command
-    
-    if len(args) < 2:
-        vh.pm("\n".join([
-            "Email Digest Commands:",
-            "  !digest status            - Show current status",
-            "  !digest chat send         - Send chat digest now",
-            "  !digest chat clear        - Clear chat buffer",
-            "  !digest stats send        - Send client stats now",
-            "  !digest stats clear       - Clear client stats",
-            "  !digest config            - Show configuration",
-            "  !digest test <email>      - Send test email",
-        ]), nick)
-        return 0  # Block command, we handled it
-    
-    subcmd = args[1].lower()
-    
-    if subcmd == "status":
-        with chat_buffer_lock:
-            chat_count = len(chat_buffer)
-            if chat_buffer:
-                chat_age = time.time() - last_chat_time
-                chat_status = f"{chat_count} messages, {chat_age:.0f}s since last"
-            else:
-                chat_status = "Empty"
+    if cmd == "!digest":
+        if len(args) < 2:
+            vh.pm(nick, "\n".join([
+                "Email Digest Commands:",
+                "  !digest status            - Show current status",
+                "  !digest chat send         - Send chat digest now",
+                "  !digest chat clear        - Clear chat buffer",
+                "  !digest stats send        - Send client stats now",
+                "  !digest stats clear       - Clear client stats",
+                "  !digest config            - Show configuration",
+                "  !digest test <email>      - Send test email",
+            ]))
+            return 1
         
-        with client_stats_lock:
-            stats_count = len(client_stats)
-            if stats_count > 0:
-                total_activity = sum(s["joins"] + s["quits"] for s in client_stats.values())
-                stats_status = f"{stats_count} clients, {total_activity} events"
-            else:
-                stats_status = "No activity"
+        subcmd = args[1].lower()
         
-        vh.pm("\n".join([
-            "Email Digest Status:",
-            f"  Chat Buffer: {chat_status}",
-            f"  Client Stats: {stats_status}",
-            f"  Chat Recipients: {len(CONFIG['chat_recipients'])}",
-            f"  Stats Recipients: {len(CONFIG['stats_recipients'])}",
-        ]), nick)
-        return 0  # Block command, we handled it
-    
-    elif subcmd == "chat" and len(args) > 2:
-        action = args[2].lower()
-        if action == "send":
-            send_chat_digest()
-            vh.pm("Chat digest sent", nick)
-        elif action == "clear":
+        if subcmd == "status":
             with chat_buffer_lock:
-                count = len(chat_buffer)
-                chat_buffer.clear()
-            vh.pm(f"Cleared {count} messages from chat buffer", nick)
-        return 0  # Block command, we handled it
-    
-    elif subcmd == "stats" and len(args) > 2:
-        action = args[2].lower()
-        if action == "send":
-            send_client_stats()
-            vh.pm("Client statistics sent", nick)
-        elif action == "clear":
+                chat_count = len(chat_buffer)
+                if chat_buffer:
+                    chat_age = time.time() - last_chat_time
+                    chat_status = f"{chat_count} messages, {chat_age:.0f}s since last"
+                else:
+                    chat_status = "Empty"
+            
             with client_stats_lock:
-                count = len(client_stats)
-                client_stats.clear()
-            vh.pm(f"Cleared statistics for {count} clients", nick)
-        return 0  # Block command, we handled it
+                stats_count = len(client_stats)
+                if stats_count > 0:
+                    total_activity = sum(s["joins"] + s["quits"] for s in client_stats.values())
+                    stats_status = f"{stats_count} clients, {total_activity} events"
+                else:
+                    stats_status = "No activity"
+            
+            vh.pm(nick, "\n".join([
+                "Email Digest Status:",
+                f"  Chat Buffer: {chat_status}",
+                f"  Client Stats: {stats_status}",
+                f"  Chat Recipients: {len(CONFIG['chat_recipients'])}",
+                f"  Stats Recipients: {len(CONFIG['stats_recipients'])}",
+            ]))
+            return 1
+        
+        elif subcmd == "chat" and len(args) > 2:
+            action = args[2].lower()
+            if action == "send":
+                send_chat_digest()
+                vh.pm(nick, "Chat digest sent")
+            elif action == "clear":
+                with chat_buffer_lock:
+                    count = len(chat_buffer)
+                    chat_buffer.clear()
+                vh.pm(nick, f"Cleared {count} messages from chat buffer")
+            return 1
+        
+        elif subcmd == "stats" and len(args) > 2:
+            action = args[2].lower()
+            if action == "send":
+                send_client_stats()
+                vh.pm(nick, "Client statistics sent")
+            elif action == "clear":
+                with client_stats_lock:
+                    count = len(client_stats)
+                    client_stats.clear()
+                vh.pm(nick, f"Cleared statistics for {count} clients")
+            return 1
+        
+        elif subcmd == "config":
+            vh.pm(nick, "\n".join([
+                "Email Digest Configuration:",
+                f"  SMTP Server: {CONFIG['smtp_server']}:{CONFIG['smtp_port']}",
+                f"  From: {CONFIG['from_address'] or CONFIG['smtp_username']}",
+                f"  Chat Inactivity: {CONFIG['chat_inactivity_minutes']} minutes",
+                f"  Stats Interval: {CONFIG['stats_interval_minutes']} minutes",
+                f"  Chat Recipients: {', '.join(CONFIG['chat_recipients']) or 'None'}",
+                f"  Stats Recipients: {', '.join(CONFIG['stats_recipients']) or 'None'}",
+            ]))
+            return 1
+        
+        elif subcmd == "test" and len(args) > 2:
+            test_email = args[2]
+            subject = f"[{CONFIG['hub_name']}] Test Email"
+            body = f"This is a test email from the Verlihub Email Digest script.\n\nSent at: {datetime.now()}"
+            if send_email(subject, body, [test_email]):
+                vh.pm(nick, f"Test email sent to {test_email}")
+            else:
+                vh.pm(nick, "Failed to send test email - check console for errors")
+            return 1
     
-    elif subcmd == "config":
-        vh.pm("\n".join([
-            "Email Digest Configuration:",
-            f"  SMTP Server: {CONFIG['smtp_server']}:{CONFIG['smtp_port']}",
-            f"  From: {CONFIG['from_address'] or CONFIG['smtp_username']}",
-            f"  Chat Inactivity: {CONFIG['chat_inactivity_minutes']} minutes",
-            f"  Stats Interval: {CONFIG['stats_interval_minutes']} minutes",
-            f"  Chat Recipients: {', '.join(CONFIG['chat_recipients']) or 'None'}",
-            f"  Stats Recipients: {', '.join(CONFIG['stats_recipients']) or 'None'}",
-        ]), nick)
-        return 0  # Block command, we handled it
-    
-    elif subcmd == "test" and len(args) > 2:
-        test_email = args[2]
-        subject = f"[{CONFIG['hub_name']}] Test Email"
-        body = f"This is a test email from the Verlihub Email Digest script.\n\nSent at: {datetime.now()}"
-        if send_email(subject, body, [test_email]):
-            vh.pm(f"Test email sent to {test_email}", nick)
-        else:
-            vh.pm("Failed to send test email - check console for errors", nick)
-        return 0  # Block command, we handled it
-    
-    return 1  # Not our command (or unrecognized subcommand), allow it through
+    return 0
 
-def email_digest_cleanup():
+def UnLoad():
     """Cleanup when script unloads"""
     global running
     running = False
@@ -687,40 +669,6 @@ def email_digest_cleanup():
     print("[Email Digest] Script unloaded")
 
 # =============================================================================
-# Hook Registration
-# =============================================================================
-
-HOOKS = {
-    'OnTimer': email_digest_timer_handler,
-    'OnParsedMsgChat': email_digest_chat_handler,
-    'OnUserLogin': email_digest_login_handler,
-    'OnUserLogout': email_digest_logout_handler,
-    'OnHubCommand': email_digest_command_handler
-}
-
-if USING_DISPATCHER:
-    SCRIPT_ID = register_script(
-        script_name="EmailDigest",
-        hooks=HOOKS,
-        cleanup=email_digest_cleanup,
-        priority=100
-    )
-    print(f"[Email Digest] Registered with dispatcher, ID={SCRIPT_ID}")
-else:
-    # Sub-interpreter mode: assign hooks globally
-    OnTimer = email_digest_timer_handler
-    OnParsedMsgChat = email_digest_chat_handler
-    OnUserLogin = email_digest_login_handler
-    OnUserLogout = email_digest_logout_handler
-    OnHubCommand = email_digest_command_handler
-
-def UnLoad():
-    """Cleanup on script unload"""
-    if USING_DISPATCHER and SCRIPT_ID is not None:
-        unregister_script(SCRIPT_ID)
-    email_digest_cleanup()
-
-# =============================================================================
 # Initialization
 # =============================================================================
 
@@ -732,10 +680,6 @@ print(f"  Chat inactivity timeout: {CONFIG['chat_inactivity_minutes']} minutes")
 print(f"  Stats interval: {CONFIG['stats_interval_minutes']} minutes")
 print(f"  Chat recipients: {len(CONFIG['chat_recipients'])}")
 print(f"  Stats recipients: {len(CONFIG['stats_recipients'])}")
-if USING_DISPATCHER:
-    print("✓ Using dispatcher for hook management")
-else:
-    print("ℹ Running in sub-interpreter mode (no dispatcher)")
 print("")
 print("IMPORTANT: Edit CONFIG dictionary in script to set SMTP credentials and recipients")
 print("Commands: !digest help")

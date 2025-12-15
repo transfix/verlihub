@@ -53,18 +53,6 @@ except ImportError:
     REQUESTS_AVAILABLE = False
     print("WARNING: requests library not installed. Run: pip install requests")
 
-# Try to import dispatcher for single-interpreter mode
-try:
-    from dispatcher import register_script, unregister_script
-    USING_DISPATCHER = True
-except ImportError:
-    USING_DISPATCHER = False
-    register_script = None
-    unregister_script = None
-
-# Script registration ID (for dispatcher mode)
-SCRIPT_ID = None
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -366,7 +354,7 @@ def is_bridge_connected() -> bool:
 # Verlihub Event Hooks
 # =============================================================================
 
-def matterbridge_timer_handler(msec=0):
+def OnTimer(msec=0):
     """Process queued messages from bridge thread (runs in main thread)"""
     # Process all queued messages
     messages_processed = 0
@@ -386,7 +374,7 @@ def matterbridge_timer_handler(msec=0):
     
     return 1
 
-def matterbridge_chat_handler(nick, message):
+def OnParsedMsgChat(nick, message):
     """Relay hub chat messages to Matterbridge"""
     
     # Check if bridge is running
@@ -411,7 +399,7 @@ def matterbridge_chat_handler(nick, message):
     
     return 1  # Allow message to proceed normally
 
-def matterbridge_command_handler(nick, command, user_class, in_pm, prefix):
+def OnHubCommand(nick, command, user_class, in_pm, prefix):
     """Handle bridge commands"""
     parts = command.split()
     
@@ -420,91 +408,86 @@ def matterbridge_command_handler(nick, command, user_class, in_pm, prefix):
     
     # Check permissions (operators only)
     if user_class < 3:
-        vh.pm("Permission denied. Operators only.", nick)
+        vh.pm(nick, "Permission denied. Operators only.")
         return 0
     
-    # Helper function to send messages (handles the correct vh.pm/vh.usermc signature)
-    def send_message(msg):
-        if in_pm:
-            vh.pm(msg, nick)  # pm(message, destination_nick, [from_nick], [bot_nick])
-        else:
-            vh.usermc(msg, nick)  # usermc(message, destination_nick, [bot_nick])
+    write = vh.pm if in_pm else vh.usermc
     
     if len(parts) < 2:
-        send_message("Usage: !bridge [start|stop|status|config|token|gateway|channel|help]")
+        write(nick, "Usage: !bridge [start|stop|status|config|token|gateway|channel|help]")
         return 0
     
     subcmd = parts[1].lower()
     
     if subcmd == "start":
         if not REQUESTS_AVAILABLE:
-            send_message("ERROR: requests library not installed. Run: pip install requests")
+            write(nick, "ERROR: requests library not installed. Run: pip install requests")
             return 0
         
         if is_bridge_running():
-            send_message("Bridge is already running")
+            write(nick, "Bridge is already running")
         else:
             if start_bridge():
-                send_message(f"Bridge starting... Connecting to {CONFIG['api_url']}")
-                send_message(f"Gateway: {CONFIG['gateway']}, Channel: {CONFIG['channel']}")
+                write(nick, f"Bridge starting... Connecting to {CONFIG['api_url']}")
+                write(nick, f"Gateway: {CONFIG['gateway']}, Channel: {CONFIG['channel']}")
             else:
-                send_message("ERROR: Failed to start bridge")
+                write(nick, "ERROR: Failed to start bridge")
     
     elif subcmd == "stop":
         if is_bridge_running():
             stop_bridge()
-            send_message("Bridge stopped")
+            write(nick, "Bridge stopped")
         else:
-            send_message("Bridge is not running")
+            write(nick, "Bridge is not running")
     
     elif subcmd == "status":
         if is_bridge_running():
             status = "CONNECTED" if is_bridge_connected() else "CONNECTING"
-            send_message(f"Bridge is {status}")
-            send_message(f"API: {CONFIG['api_url']}")
-            send_message(f"Gateway: {CONFIG['gateway']}")
-            send_message(f"Channel: {CONFIG['channel']}")
+            write(nick, f"Bridge is {status}")
+            write(nick, f"API: {CONFIG['api_url']}")
+            write(nick, f"Gateway: {CONFIG['gateway']}")
+            write(nick, f"Channel: {CONFIG['channel']}")
             if last_error and not is_bridge_connected():
-                send_message(f"Last error: {last_error}")
+                write(nick, f"Last error: {last_error}")
         else:
-            send_message("Bridge is STOPPED")
+            write(nick, "Bridge is STOPPED")
     
     elif subcmd == "config":
         if len(parts) < 3:
-            send_message(f"Current API URL: {CONFIG['api_url']}")
-            send_message("Usage: !bridge config <url>")
+            write(nick, f"Current API URL: {CONFIG['api_url']}")
+            write(nick, "Usage: !bridge config <url>")
         else:
             CONFIG["api_url"] = parts[2].rstrip('/')
-            send_message(f"API URL set to: {CONFIG['api_url']}")
+            write(nick, f"API URL set to: {CONFIG['api_url']}")
             if is_bridge_running():
-                send_message("Restart bridge for changes to take effect")
+                write(nick, "Restart bridge for changes to take effect")
     
     elif subcmd == "token":
         if len(parts) < 3:
             has_token = "SET" if CONFIG["api_token"] else "NOT SET"
-            send_message(f"API token: {has_token}")
-            send_message("Usage: !bridge token <token>")
+            write(nick, f"API token: {has_token}")
+            write(nick, "Usage: !bridge token <token>")
         else:
             CONFIG["api_token"] = parts[2]
-            send_message("API token updated")
+            write(nick, "API token updated")
             if is_bridge_running():
-                send_message("Restart bridge for changes to take effect")
+                write(nick, "Restart bridge for changes to take effect")
     
     elif subcmd == "gateway":
         if len(parts) < 3:
-            send_message(f"Current gateway: {CONFIG['gateway']}")
-            send_message("Usage: !bridge gateway <name>")
+            write(nick, f"Current gateway: {CONFIG['gateway']}")
+            write(nick, "Usage: !bridge gateway <name>")
         else:
             CONFIG["gateway"] = parts[2]
-            send_message(f"Gateway set to: {CONFIG['gateway']}")
+            write(nick, f"Gateway set to: {CONFIG['gateway']}")
     
     elif subcmd == "channel":
         if len(parts) < 3:
-            send_message(f"Current channel: {CONFIG['channel']}")
-            send_message("Usage: !bridge channel <name>")
+            write(nick, f"Current channel: {CONFIG['channel']}")
+            write(nick, "Usage: !bridge channel <name>")
         else:
             CONFIG["channel"] = parts[2]
-            send_message(f"Channel set to: {CONFIG['channel']}")
+            write(nick, f"Channel set to: {CONFIG['channel']}")
     
     elif subcmd == "help":
         help_text = """
@@ -549,15 +532,15 @@ Matterbridge Configuration Example:
 """.format(**CONFIG)
         
         for line in help_text.strip().split('\n'):
-            send_message(line)
+            write(nick, line)
     
     else:
-        send_message(f"Unknown subcommand: {subcmd}")
-        send_message("Use: !bridge help")
+        write(nick, f"Unknown subcommand: {subcmd}")
+        write(nick, "Use: !bridge help")
     
     return 0  # Command handled
 
-def matterbridge_cleanup():
+def UnLoad():
     """Cleanup when script unloads"""
     global bridge_running
     
@@ -571,36 +554,6 @@ def matterbridge_cleanup():
     print("Matterbridge script unloaded")
 
 # =============================================================================
-# Hook Registration
-# =============================================================================
-
-HOOKS = {
-    'OnTimer': matterbridge_timer_handler,
-    'OnParsedMsgChat': matterbridge_chat_handler,
-    'OnHubCommand': matterbridge_command_handler
-}
-
-if USING_DISPATCHER:
-    SCRIPT_ID = register_script(
-        script_name="Matterbridge",
-        hooks=HOOKS,
-        cleanup=matterbridge_cleanup,
-        priority=100
-    )
-    print(f"[Matterbridge] Registered with dispatcher, ID={SCRIPT_ID}")
-else:
-    # Sub-interpreter mode: assign hooks globally
-    OnTimer = matterbridge_timer_handler
-    OnParsedMsgChat = matterbridge_chat_handler
-    OnHubCommand = matterbridge_command_handler
-
-def UnLoad():
-    """Cleanup on script unload"""
-    if USING_DISPATCHER and SCRIPT_ID is not None:
-        unregister_script(SCRIPT_ID)
-    matterbridge_cleanup()
-
-# =============================================================================
 # Initialization
 # =============================================================================
 
@@ -608,10 +561,6 @@ if REQUESTS_AVAILABLE:
     print("Matterbridge connector loaded successfully")
     print(f"API: {CONFIG['api_url']}")
     print(f"Gateway: {CONFIG['gateway']}, Channel: {CONFIG['channel']}")
-    if USING_DISPATCHER:
-        print("✓ Using dispatcher for hook management")
-    else:
-        print("ℹ Running in sub-interpreter mode (no dispatcher)")
     print("Use !bridge help to see available commands")
 else:
     print("Matterbridge connector loaded with LIMITED functionality")

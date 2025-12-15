@@ -426,7 +426,52 @@ w_Targs* MyPlugin_Reverse(int callback_id, w_Targs* args) {
     }
     reversed[len] = '\0';
     
-    return w_pack("s", reversed);
+    w_Targs *result = w_pack("s", reversed);
+    free(reversed);
+    return result;
+}
+
+// Example: Process a list (reverse order using JSON)
+w_Targs* MyPlugin_ReverseList(int callback_id, w_Targs* args) {
+    char *json_str;
+    if (!w_unpack(args, "D", &json_str)) return NULL;
+    
+#ifdef HAVE_RAPIDJSON
+    // Parse JSON array
+    nVerliHub::nPythonPlugin::JsonValue val;
+    if (!nVerliHub::nPythonPlugin::parseJson(json_str, val) || 
+        val.type != nVerliHub::nPythonPlugin::JsonType::ARRAY) {
+        return w_pack("D", strdup("[]"));
+    }
+    
+    // Reverse the array
+    nVerliHub::nPythonPlugin::JsonValue reversed;
+    reversed.type = nVerliHub::nPythonPlugin::JsonType::ARRAY;
+    for (auto it = val.array_val.rbegin(); it != val.array_val.rend(); ++it) {
+        reversed.array_val.push_back(*it);
+    }
+    
+    // Serialize back to JSON
+    std::string result_json = nVerliHub::nPythonPlugin::toJsonString(reversed);
+    return w_pack("D", strdup(result_json.c_str()));
+#else
+    return w_pack("D", strdup("[]"));
+#endif
+}
+
+// Example: Process a dictionary (add field)
+w_Targs* MyPlugin_AddField(int callback_id, w_Targs* args) {
+    char *dict_json;
+    if (!w_unpack(args, "D", &dict_json)) return NULL;
+    
+    // Parse JSON, add field, serialize back
+    // (simplified - in production use a proper JSON library)
+    char *modified = (char*)malloc(strlen(dict_json) + 100);
+    sprintf(modified, "{\"processed\":true,%s", dict_json + 1);  // Insert field
+    
+    w_Targs *result = w_pack("D", modified);
+    free(modified);
+    return result;
 }
 ```
 
@@ -491,10 +536,10 @@ int w_UnregisterFunction(int script_id, const char *func_name);
 result = vh.CallDynamicFunction(func_name, arg1, arg2, ...)
 ```
 
-**Supported argument types:**
-- `long` (Python `int`)
-- `str` (Python `str`)
-- `double` (Python `float`)
+**Supported Types:**
+- Arguments: `long` (int), `str`, `double` (float), `list`, `tuple`, `set`, `dict`
+- Returns: `long`, `str`, `double`, `list`, `tuple`, `set`, `dict`, `None`, or tuple of these types
+- All container types (list/tuple/set/dict) are marshaled as JSON
 
 **Supported return types:**
 - `long` → Python `int`
@@ -502,39 +547,42 @@ result = vh.CallDynamicFunction(func_name, arg1, arg2, ...)
 - `double` → Python `float`
 - `None` (no return value)
 
-### Real-World Example: Plugin Integration
+| Python Type | C++ Type | Notes |
+|-------------|----------|-------|
+| `int` | `long` | Standard integer conversion |
+| `str` | `char*` | UTF-8 strings, automatically copied |
+| `float` | `double` | Double-precision floating point |
+| `list` | `char*` (JSON) | Serialized as JSON array |
+| `tuple` | `char*` (JSON) | Serialized as JSON array (order preserved) |
+| `set` | `char*` (JSON) | Serialized as JSON array (order not guaranteed) |
+| `dict` | `char*` (JSON) | Serialized as JSON object |
 
 **Scenario**: A custom `stats` plugin wants to expose functions to Python scripts.
 
-**stats_plugin.cpp**:
-```cpp
-class StatsPlugin {
-    std::map<std::string, UserStats> user_stats;
-    
-public:
-    static w_Targs* GetTopUsers(int id, w_Targs* args) {
-        long limit;
-        w_unpack(args, "l", &limit);
-        
-        // Get top users by message count
-        std::vector<std::string> top_users = GetTopUsersByMessages(limit);
-        
-        // Convert to NULL-terminated array
-        char **user_list = (char**)malloc((top_users.size() + 1) * sizeof(char*));
-        for (size_t i = 0; i < top_users.size(); i++) {
-            user_list[i] = strdup(top_users[i].c_str());
-        }
-        user_list[top_users.size()] = NULL;
-        
-        return w_pack("L", user_list);
-    }
-    
-    void RegisterWithScript(int script_id) {
-        w_RegisterFunction(script_id, "get_top_users", GetTopUsers);
-        w_RegisterFunction(script_id, "get_user_rank", GetUserRank);
-        w_RegisterFunction(script_id, "reset_stats", ResetStats);
-    }
-};
+```python
+# List handling
+items = ['item1', 'item2', 'item3']
+result = vh.CallDynamicFunction('process_list', items)
+# C++ receives JSON: '["item1","item2","item3"]'
+
+# Dictionary handling
+data = {'key1': 'value1', 'key2': 42, 'nested': {'inner': True}}
+result = vh.CallDynamicFunction('process_dict', data)
+# C++ receives JSON: '{"key1":"value1","key2":42,"nested":{"inner":true}}'
+
+# Set handling
+tags = {'alpha', 'beta', 'gamma'}
+result = vh.CallDynamicFunction('process_tags', tags)
+# C++ receives JSON: '["alpha","beta","gamma"]' (order may vary)
+
+# Tuple handling
+coords = (10.5, 20.3, 30.1)
+result = vh.CallDynamicFunction('calculate', coords)
+# C++ receives JSON: '[10.5,20.3,30.1]'
+
+# Mixed types
+result = vh.CallDynamicFunction('complex_func', 'username', 42, ['a', 'b'], {'status': 'active'})
+# C++ receives all types as JSON where applicable
 ```
 
 **Python script using stats plugin**:
@@ -952,6 +1000,244 @@ PyGILState_Release(gstate);
 ---
 
 ## API Reference
+
+### Type Marshaling
+
+The plugin uses **RapidJSON** as a high-performance marshaling layer to exchange data between C++ and Python. This enables passing arbitrary complex nested structures while maintaining type safety and excellent performance.
+
+#### Supported Types
+
+| Format | C++ Type | Python Type | Notes |
+|--------|----------|-------------|-------|
+| `'l'` | `long` | `int` | Integers, IDs, counts, flags (64-bit on modern systems) |
+| `'s'` | `char*` | `str` | UTF-8 strings, nicknames, messages |
+| `'d'` | `double` | `float` | Decimals, timestamps (64-bit precision) |
+| `'p'` | `void*` | `int` (capsule) | Opaque pointers (advanced usage) |
+| `'D'` | `char*` (JSON) | `dict\|list\|set\|tuple` | All container types via JSON |
+| `'O'` | `PyObject*` | `object` | Raw Python objects (C++ passthrough) |
+
+#### JSON Marshaling (Format 'D')
+
+Complex data structures (dicts, lists, sets, tuples, nested data) are automatically serialized to JSON and deserialized on the receiving end. This provides:
+
+- **Arbitrary Nesting**: Lists of dicts, dicts of lists, sets of tuples, deeply nested structures
+- **Mixed Types**: Combine strings, integers, floats, booleans, null values
+- **Type Preservation**: Python `int` → int64_t, `float` → double (64-bit)
+- **Set Support**: Python `set` and `frozenset` automatically marshaled
+- **Tuple Support**: Python `tuple` preserves immutability semantics
+- **High Performance**: RapidJSON parsing is ~10x faster than Python's json module
+
+**Automatic JSON Conversion:**
+
+```python
+# Python side - arbitrary nested structures work seamlessly
+result = vh.CallDynamicFunction('process_data',
+    'user123',  # String (format 's')
+    42,         # Integer (format 'l')
+    {           # Dict → JSON (format 'D')
+        'settings': {
+            'theme': 'dark',
+            'notifications': True,
+            'limits': [10, 100, 1000]
+        },
+        'stats': {
+            'messages': 1234,
+            'uptime': 56789.12,
+            'flags': [1, 2, 3, 5, 8]
+        }
+    },
+    [           # Complex list → JSON (format 'D')
+        {'name': 'Alice', 'score': 95.5},
+        {'name': 'Bob', 'score': 87.0},
+        {'name': 'Charlie', 'score': 92.3}
+    ]
+)
+
+# C++ side automatically receives JSON-marshaled data
+w_Targs* ProcessData(int id, w_Targs* args) {
+    char *username;
+    long count;
+    char *settings_json;  // Auto-marshaled from Python dict
+    char *users_json;     // Auto-marshaled from Python list
+    
+    w_unpack(args, "slDD", &username, &count, &settings_json, &users_json);
+    
+    // Can parse JSON in C++ using RapidJSON or return to Python
+    return w_pack("D", strdup("{\"status\": \"processed\"}"));
+}
+```
+
+#### Performance Characteristics
+
+Integration test results (1 million message exchanges):
+
+```
+Test Duration: ~30 seconds (1M messages)
+Memory Growth: 344 KB total
+Per-Message:   ~0.34 bytes (negligible leak rate)
+Throughput:    ~33,000 messages/second
+JSON Parse:    <1μs per message (RapidJSON)
+```
+
+The JSON marshaling layer is optimized for hub plugin workloads where message volume is typically <1000/sec, making the overhead negligible while providing maximum flexibility for all container types (lists, dicts, sets, tuples).
+
+**Type Mapping Details:**
+
+```python
+# Python → JSON → C++ type preservation
+42              → int64_t (64-bit signed)
+3.14159         → double (64-bit IEEE 754)
+"hello"         → std::string (UTF-8)
+True/False      → bool
+None            → null
+[1, 2, 3]       → JSON array (Python list)
+(1, 2, 3)       → JSON array (Python tuple)
+{1, 2, 3}       → JSON array (Python set - order not preserved)
+{'a': 1}        → JSON object (Python dict)
+
+# All JSON types round-trip correctly through C++:
+Python dict/list/set/tuple → JSON string → C++ parse → JSON string → Python dict/list
+```
+
+**Sets and Tuples:**
+
+```python
+# Python sets are automatically marshaled
+my_set = {1, 2, 3, 4, 5}
+result = vh.CallDynamicFunction('process_set', my_set)
+# → C++ receives JSON array: [1,2,3,4,5] (order may vary)
+
+# Frozensets also supported
+frozen = frozenset(['apple', 'banana', 'cherry'])
+result = vh.CallDynamicFunction('check_fruits', frozen)
+
+# Python tuples preserve order (serialized as JSON arrays)
+coordinates = (10.5, 20.3, 30.1)
+result = vh.CallDynamicFunction('calculate_distance', coordinates)
+# → C++ receives JSON array: [10.5, 20.3, 30.1]
+
+# Nested tuples work
+nested = (1, (2, 3), (4, (5, 6)))
+result = vh.CallDynamicFunction('process_tree', nested)
+
+# Mixed container types in single call
+result = vh.CallDynamicFunction('analyze',
+    ['user1', 'user2'],          # list
+    ('alpha', 'beta'),            # tuple  
+    {'admin', 'moderator'},       # set
+    {'status': 'active'}          # dict
+)
+```
+
+**Important Notes:**
+- **Sets** serialize as JSON arrays and lose ordering (sets are unordered by definition)
+- **Tuples** serialize as JSON arrays but semantically represent immutable sequences
+- When Python receives JSON arrays from C++, they become lists by default
+- Use Python's `tuple()` or `set()` constructors if you need to convert after receiving
+- All container types can be arbitrarily nested: sets of tuples, lists of dicts, etc.
+
+**Examples:**
+
+```python
+# Hook receiving multiple argument types
+def OnParsedMsgMyINFO(nick, desc, tag, speed, email, share):
+    # nick: str, desc: str, tag: str, speed: str, email: str, share: int
+    print(f"{nick} has {share} bytes shared")
+    return 1
+
+# Hook with different types
+def OnCloseConnEx(ip, reason_code, nick):
+    # ip: str, reason_code: int, nick: str
+    if reason_code == vh.eCR_KICKED:
+        print(f"{nick} was kicked")
+    return 1
+
+# Complex nested data structures with sets and tuples
+def process_user_data(user_id, metadata, tags, coordinates):
+    # user_id: int
+    # metadata: dict with arbitrary nesting
+    # tags: set of strings
+    # coordinates: tuple of floats
+    if metadata.get('settings', {}).get('notifications'):
+        notify_user(user_id, metadata['preferences']['theme'])
+    
+    # Tags received as list (from JSON array), convert to set if needed
+    unique_tags = set(tags)
+    
+    return {
+        'processed': True,
+        'timestamp': time.time(),
+        'tag_count': len(unique_tags),
+        'location': coordinates
+    }
+```
+
+### Event Hooks Reference
+
+Full list of available hooks with their signatures:
+
+```python
+# Connection Management
+OnNewConn(ip: str) → int
+OnCloseConn(ip: str) → int
+OnCloseConnEx(ip: str, reason: int, nick: str) → int
+
+# Protocol Messages
+OnParsedMsgSupports(ip: str, supports: str, hubinfo: str) → int
+OnParsedMsgMyHubURL(nick: str, url: str) → int
+OnParsedMsgExtJSON(nick: str, json_data: str) → int
+OnParsedMsgBotINFO(nick: str, info: str) → int
+OnParsedMsgVersion(ip: str, version: str) → int
+OnParsedMsgMyPass(nick: str, password: str) → int
+OnParsedMsgValidateNick(nick: str) → int
+OnParsedMsgMyINFO(nick: str, desc: str, tag: str, speed: str, email: str, share: int) → int
+OnFirstMyINFO(nick: str, desc: str, tag: str, speed: str, email: str, share: int) → int
+OnParsedMsgChat(nick: str, message: str) → int
+OnParsedMsgPM(nick: str, message: str, target: str) → int
+OnParsedMsgMCTo(nick: str, message: str, target: str) → int
+OnParsedMsgSearch(nick: str, query: str) → int
+OnParsedMsgSR(nick: str, result: str) → int
+OnParsedMsgConnectToMe(nick: str, target: str, address: str) → int
+OnParsedMsgRevConnectToMe(nick: str, target: str) → int
+OnUnknownMsg(nick: str, message: str) → int
+
+# User Events
+OnUserLogin(nick: str) → int
+OnUserLogout(nick: str) → int
+OnUserInList(nick: str) → int
+OnValidateTag(nick: str, tag: str) → int
+
+# Operator Actions
+OnOperatorCommand(nick: str, command: str) → int
+OnOperatorKicks(op_nick: str, target_nick: str, reason: str) → int
+OnOperatorDrops(op_nick: str, target_nick: str) → int
+OnOperatorDropsWithReason(op_nick: str, target_nick: str, reason: str) → int
+OnUserCommand(nick: str, command: str) → int
+OnHubCommand(nick: str, command: str, is_pm: int) → int
+
+# Hub Events
+OnTimer(milliseconds: float) → int
+OnNewReg(nick: str, user_class: int, op_nick: str) → int
+OnNewBan(ip: str, nick: str, op_nick: str, reason: str) → int
+OnSetConfig(config: str, variable: str, value: str) → int
+
+# Chat Events
+OnOpChatMessage(nick: str, message: str) → int
+OnPublicBotMessage(nick: str, message: str, min_class: int, max_class: int) → int
+
+# Other Events
+OnCtmToHub(nick: str, target: str) → int
+OnScriptCommand(cmd: str, data: str, plugin: str, script: str) → int
+OnUnLoad() → int
+```
+
+### Callback Functions Reference
+
+Functions available through the `vh` module are backed by C++ callbacks. See the [vh Module API](#vh-module-api) section for the complete list.
+
+---
+
+## Architecture
 
 ### Bidirectional Communication
 

@@ -394,6 +394,37 @@ const char *w_packprint(w_Targs *a)
 	return buf;
 }
 
+// Free a w_Targs structure and all dynamically allocated memory within it
+void w_free_args(w_Targs *a)
+{
+	if (!a) return;
+	
+	if (a->format) {
+		for (size_t i = 0; i < strlen(a->format); i++) {
+			switch (a->format[i]) {
+				case 's':  // String
+				case 'D':  // Dict (as JSON string)
+					if (a->args[i].s) {
+						free(a->args[i].s);
+						a->args[i].s = NULL;
+					}
+					break;
+				case 'L':  // List of strings
+					if (a->args[i].L) {
+						for (int j = 0; a->args[i].L[j] != NULL; j++) {
+							free(a->args[i].L[j]);
+						}
+						free(a->args[i].L);
+						a->args[i].L = NULL;
+					}
+					break;
+				// Other types (l, d, p, O) don't need cleanup
+			}
+		}
+	}
+	free(a);
+}
+
 //==============================================================================
 // Python 3 vh Module Implementation - Restored from Python 2 version
 //==============================================================================
@@ -1805,11 +1836,102 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 	std::string format_str;
 	for (int i = 0; i < arg_count; i++) {
 		PyObject *arg = PyTuple_GetItem(args, i + 1);
-		if (PyLong_Check(arg)) format_str += 'l';
-		else if (PyUnicode_Check(arg)) format_str += 's';
-		else if (PyFloat_Check(arg)) format_str += 'd';
+		
+		if (PyLong_Check(arg)) {
+			format_str[i] = 'l';
+			parsed_args->args[i].type = 'l';
+			parsed_args->args[i].l = PyLong_AsLong(arg);
+		}
+		else if (PyUnicode_Check(arg)) {
+			format_str[i] = 's';
+			parsed_args->args[i].type = 's';
+			const char *s = PyUnicode_AsUTF8(arg);
+			parsed_args->args[i].s = s ? strdup(s) : strdup("");
+		}
+		else if (PyFloat_Check(arg)) {
+			format_str[i] = 'd';
+			parsed_args->args[i].type = 'd';
+			parsed_args->args[i].d = PyFloat_AsDouble(arg);
+		}
+		else if (PyList_Check(arg)) {
+			// Convert Python list to NULL-terminated char** array
+			format_str[i] = 'L';
+			parsed_args->args[i].type = 'L';
+			
+			int list_size = PyList_Size(arg);
+			char **str_array = (char**)malloc((list_size + 1) * sizeof(char*));
+			if (!str_array) {
+				// Cleanup
+				format_str[i] = '\0';
+				parsed_args->format = format_str;
+				w_free_args(parsed_args);
+				PyErr_SetString(PyExc_MemoryError, "Failed to allocate list array");
+				return NULL;
+			}
+			
+			for (int j = 0; j < list_size; j++) {
+				PyObject *item = PyList_GetItem(arg, j);
+				if (PyUnicode_Check(item)) {
+					const char *s = PyUnicode_AsUTF8(item);
+					str_array[j] = s ? strdup(s) : strdup("");
+				} else {
+					str_array[j] = strdup("");
+				}
+			}
+			str_array[list_size] = NULL;
+			parsed_args->args[i].L = str_array;
+		}
+		else if (PyDict_Check(arg)) {
+			// Convert Python dict to JSON string
+			format_str[i] = 'D';
+			parsed_args->args[i].type = 'D';
+			
+			// Import json module
+			PyObject *json_module = PyImport_ImportModule("json");
+			if (!json_module) {
+				// Cleanup
+				format_str[i] = '\0';
+				parsed_args->format = format_str;
+				w_free_args(parsed_args);
+				PyErr_SetString(PyExc_ImportError, "Failed to import json module");
+				return NULL;
+			}
+			
+			PyObject *dumps_func = PyObject_GetAttrString(json_module, "dumps");
+			Py_DECREF(json_module);
+			
+			if (!dumps_func) {
+				// Cleanup
+				format_str[i] = '\0';
+				parsed_args->format = format_str;
+				w_free_args(parsed_args);
+				PyErr_SetString(PyExc_AttributeError, "Failed to get json.dumps");
+				return NULL;
+			}
+			
+			PyObject *json_str = PyObject_CallFunction(dumps_func, "O", arg);
+			Py_DECREF(dumps_func);
+			
+			if (!json_str) {
+				// Cleanup
+				format_str[i] = '\0';
+				parsed_args->format = format_str;
+				w_free_args(parsed_args);
+				PyErr_SetString(PyExc_ValueError, "Failed to serialize dict to JSON");
+				return NULL;
+			}
+			
+			const char *s = PyUnicode_AsUTF8(json_str);
+			parsed_args->args[i].s = s ? strdup(s) : strdup("{}");
+			Py_DECREF(json_str);
+		}
 		else {
-			PyErr_Format(PyExc_TypeError, "Unsupported argument type at position %d", i);
+			// Cleanup
+			format_str[i] = '\0';
+			parsed_args->format = format_str;
+			w_free_args(parsed_args);
+			PyErr_Format(PyExc_TypeError, "Unsupported argument type at position %d: %s", 
+				i, arg->ob_type->tp_name);
 			return NULL;
 		}
 	}
@@ -1838,19 +1960,36 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 	
 	w_Targs *result = callback(-1, parsed_args);  // Use -1 for dynamic functions
 	
-	free(parsed_args);
+	// Cleanup parsed_args
+	w_free_args(parsed_args);
+	
 	PyEval_AcquireThread(state);
 	
 	if (!result) Py_RETURN_NONE;
 	
-	// Convert result back to Python (simplified - only handle common cases)
-	if (result->format && strlen(result->format) > 0) {
-		switch (result->format[0]) {
-			case 'l': {
-				long ret_val;
-				w_unpack(result, "l", &ret_val);
-				free(result);
-				return PyLong_FromLong(ret_val);
+	// Convert result back to Python - support all types
+	if (!result->format || strlen(result->format) == 0) {
+		w_free_args(result);
+		Py_RETURN_NONE;
+	}
+	
+	PyObject *py_result = NULL;
+	
+	switch (result->format[0]) {
+		case 'l': {
+			long ret_val;
+			w_unpack(result, "l", &ret_val);
+			py_result = PyLong_FromLong(ret_val);
+			break;
+		}
+		case 's': {
+			char *ret_val;
+			w_unpack(result, "s", &ret_val);
+			if (ret_val) {
+				py_result = PyUnicode_FromString(ret_val);
+			} else {
+				Py_INCREF(Py_None);
+				py_result = Py_None;
 			}
 			case 's': {
 				char *ret_val;
@@ -1872,8 +2011,8 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 		}
 	}
 	
-	free(result);
-	Py_RETURN_NONE;
+	w_free_args(result);
+	return py_result ? py_result : Py_None;
 }
 
 PyObject *w_GetHook(int hook)

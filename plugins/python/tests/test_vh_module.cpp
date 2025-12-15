@@ -112,7 +112,7 @@ TEST_F(VHModuleTest, GetUserClassReturnsLong) {
 	EXPECT_EQ(call_log.size(), 1);
 	EXPECT_EQ(call_log[0], "MockCallback_ReturnLong");
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -141,7 +141,7 @@ TEST_F(VHModuleTest, GetConfigReturnsString) {
 	EXPECT_STREQ(ret, "test_result");
 	EXPECT_EQ(call_log.size(), 1);
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -169,7 +169,7 @@ TEST_F(VHModuleTest, SetConfigReturnsBool) {
 	EXPECT_EQ(call_log.size(), 1);
 	EXPECT_EQ(call_log[0], "MockCallback_ReturnBool");
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -202,7 +202,7 @@ TEST_F(VHModuleTest, GetNickListReturnsPythonList) {
 	EXPECT_EQ(count, 3);
 	EXPECT_EQ(call_log.size(), 1);
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -234,7 +234,7 @@ TEST_F(VHModuleTest, ModuleHasConstants) {
 	w_Targs* result = w_CallFunction(id, "test", w_pack(""));
 	ASSERT_NE(result, nullptr);
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -341,7 +341,7 @@ TEST_F(VHModuleTest, AllFunctionsExist) {
 	ASSERT_TRUE(w_unpack(result, "l", &count));
 	EXPECT_EQ(count, 58);  // All 58 functions exist (53 original + 3 list variants + 2 encode/decode)
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 
@@ -380,7 +380,7 @@ TEST_F(VHModuleTest, EncodeDecodeWorks) {
 	w_Targs* result = w_CallFunction(id, "test", w_pack(""));
 	ASSERT_NE(result, nullptr);
 	
-	free(result);
+	w_free_args(result);
 	w_Unload(id);
 }
 

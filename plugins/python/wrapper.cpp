@@ -31,10 +31,6 @@
 #include <pthread.h> // for pthread_mutex_trylock
 #include <errno.h>   // for EBUSY
 
-#include <libgen.h>  // for basename, dirname
-#include <cstring>   // for strrchr
-#include <time.h>    // for nanosleep
-
 using namespace std;
 using namespace nVerliHub::nEnums;
 using namespace nVerliHub::nPythonPlugin;
@@ -1716,7 +1712,8 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 {
 	w_TScript *script = w_Scripts[id];
 	if (!script) return NULL;
-
+	
+	// Acquire GIL and switch to script's interpreter
 	PyGILState_STATE gstate = PyGILState_Ensure();
 	PyThreadState *old_state = PyThreadState_Get();
 	PyThreadState_Swap(script->state);

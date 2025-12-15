@@ -156,6 +156,9 @@ static std::string getEnvOrDefault(const char* name, const char* defaultValue) {
 // Global server instance (requires MySQL)
 static nVerliHub::nSocket::cServerDC* g_server = nullptr;
 
+// Global Python plugin instance - initialized ONCE and shared across all tests
+static nVerliHub::nPythonPlugin::cpiPython* g_py_plugin = nullptr;
+
 /*
  * INTEGRATION TEST ENVIRONMENT
  * 
@@ -244,16 +247,38 @@ public:
         if (!g_server) {
             throw std::runtime_error("Server creation returned null");
         }
+        
+        // Initialize Python plugin ONCE for all tests
+        // This initializes Python interpreter (Py_Initialize) and the wrapper library
+        std::cerr << "Initializing Python plugin (shared across all tests)..." << std::endl;
+        g_py_plugin = new nVerliHub::nPythonPlugin::cpiPython();
+        g_py_plugin->SetMgr(&g_server->mPluginManager);
+        g_py_plugin->OnLoad(g_server);
+        g_py_plugin->RegisterAll();
+        std::cerr << "Python plugin initialized successfully" << std::endl;
     }
 
     void TearDown() override {
         std::cerr << "VerlihubEnv::TearDown() called" << std::endl;
         
+        // Delete server FIRST, before Python cleanup
+        // This ensures no C++ objects are referenced by Python threads during cleanup
         if (g_server) {
             std::cerr << "Deleting g_server..." << std::endl;
             delete g_server;
             std::cerr << "g_server deleted" << std::endl;
             g_server = nullptr;
+        }
+        
+        // Clean up Python plugin ONCE at the end of all tests
+        // Note: We cannot safely clean up Python if threading was used
+        // This is a known limitation of Python's sub-interpreter model
+        if (g_py_plugin) {
+            std::cerr << "Skipping Python cleanup (threading/asyncio was used)" << std::endl;
+            std::cerr << "Python memory will leak, but this prevents crashes" << std::endl;
+            // DO NOT call Empty() or delete - just leak the memory
+            // Calling any cleanup functions hangs or crashes when daemon threads exist
+            g_py_plugin = nullptr;
         }
         // Clean up config directory
         std::string config_dir = std::string(BUILD_DIR) + "/test_config_" + 
@@ -381,26 +406,29 @@ def print_summary():
 // Test fixture
 class VerlihubIntegrationTest : public ::testing::Test {
 protected:
-    std::string script_path = "./test_script.py";
-    nVerliHub::nPythonPlugin::cpiPython* py_plugin = nullptr;
+    std::string script_path;  // Will be set in SetUp() with unique test name
+    nVerliHub::cUser* test_user = nullptr;
 
     void SetUp() override {
-        // Manually create and register the Python plugin
-        // (normally loaded from .so file by PluginManager)
-        py_plugin = new nVerliHub::nPythonPlugin::cpiPython();
-        py_plugin->OnLoad(g_server);
+        // Generate unique script path for this test to avoid conflicts
+        const ::testing::TestInfo* const test_info =
+            ::testing::UnitTest::GetInstance()->current_test_info();
+        script_path = std::string(BUILD_DIR) + "/test_" + 
+                      test_info->name() + "_" + 
+                      std::to_string(getpid()) + ".py";
         
-        ASSERT_NE(py_plugin, nullptr) << "Failed to create Python plugin";
+        ASSERT_NE(g_py_plugin, nullptr) << "Global Python plugin not initialized";
 
         // Write script to file
         std::ofstream script_file(script_path);
         script_file << script_content;
         script_file.close();
 
-        // Load script into interpreter
+        // Load script into the GLOBAL plugin instance
+        // This adds a new sub-interpreter to the existing Python runtime
         nVerliHub::nPythonPlugin::cPythonInterpreter* interp = 
             new nVerliHub::nPythonPlugin::cPythonInterpreter(script_path);
-        py_plugin->AddData(interp);
+        g_py_plugin->AddData(interp);
         interp->Init();
     }
 
@@ -416,14 +444,12 @@ protected:
             test_user = nullptr;
         }
         
-        // NOTE: We do NOT unload the script here because unloading scripts
-        // with sub-interpreters that imported threading causes crashes.
-        // The script will be cleaned up when the plugin is destroyed.
-        std::cerr << "Skipping py_plugin->RemoveByName() to avoid threading cleanup issues" << std::endl;
+        // Unload just THIS test's script from the global plugin
+        // The sub-interpreter will be marked for cleanup but Python stays running
+        std::cerr << "Unloading script: " << script_path << std::endl;
+        g_py_plugin->RemoveByName(script_path);
         
-        py_plugin = nullptr;  // Just clear the pointer
-        
-        std::cerr << "Removing script file..." << std::endl;
+        std::cerr << "Removing script file: " << script_path << std::endl;
         std::remove(script_path.c_str());
         
         std::cerr << "VerlihubIntegrationTest::TearDown() completed" << std::endl;
@@ -439,6 +465,20 @@ protected:
         g_server->mP.TreatMsg(parser, conn);
         
         g_server->mP.DeleteParser(parser);
+    }
+
+    // Get interpreter by name
+    nVerliHub::nPythonPlugin::cPythonInterpreter* GetInterpreter() {
+        if (!g_py_plugin) return nullptr;
+        
+        // Iterate through interpreters to find ours
+        for (unsigned int i = 0; i < g_py_plugin->Size(); i++) {
+            nVerliHub::nPythonPlugin::cPythonInterpreter* interp = g_py_plugin->GetInterpreter(i);
+            if (interp && interp->mScriptName == script_path) {
+                return interp;
+            }
+        }
+        return nullptr;
     }
 };
 
@@ -532,15 +572,15 @@ TEST_F(VerlihubIntegrationTest, StressTreatMsg) {
     std::cout << "\n=== Testing Bidirectional Python-C++ API ===" << std::endl;
     
     // Get the interpreter (script) to call functions on
-    auto interp = py_plugin->GetInterpreter(0);
+    auto interp = g_py_plugin->GetInterpreter(0);
     ASSERT_NE(interp, nullptr) << "No Python interpreter found";
     
     // Test 1: Call get_total_calls() - returns an integer
     std::cout << "\n1. Calling Python function: get_total_calls()" << std::endl;
-    w_Targs *result = py_plugin->CallPythonFunction(interp->id, "get_total_calls", nullptr);
+    w_Targs *result = g_py_plugin->CallPythonFunction(interp->id, "get_total_calls", nullptr);
     if (result) {
         long total_calls = 0;
-        if (py_plugin->lib_unpack(result, "l", &total_calls)) {
+        if (g_py_plugin->lib_unpack(result, "l", &total_calls)) {
             std::cout << "   ✓ Total Python callbacks: " << total_calls << std::endl;
             EXPECT_GT(total_calls, 0) << "Python callbacks should have been invoked";
         } else {
@@ -554,10 +594,10 @@ TEST_F(VerlihubIntegrationTest, StressTreatMsg) {
     
     // Test 2: Call print_summary() - prints JSON to stderr, returns success
     std::cout << "\n2. Calling Python function: print_summary()" << std::endl;
-    result = py_plugin->CallPythonFunction(interp->id, "print_summary", nullptr);
+    result = g_py_plugin->CallPythonFunction(interp->id, "print_summary", nullptr);
     if (result) {
         long success = 0;
-        if (py_plugin->lib_unpack(result, "l", &success) && success) {
+        if (g_py_plugin->lib_unpack(result, "l", &success) && success) {
             std::cout << "   ✓ print_summary() succeeded (check stderr above for JSON output)" << std::endl;
         }
         w_free_args(result);
@@ -567,10 +607,10 @@ TEST_F(VerlihubIntegrationTest, StressTreatMsg) {
     
     // Test 3: Demonstrate calling by script name instead of ID
     std::cout << "\n3. Calling by script path: " << script_path << ".get_total_calls()" << std::endl;
-    result = py_plugin->CallPythonFunction(script_path, "get_total_calls", nullptr);
+    result = g_py_plugin->CallPythonFunction(script_path, "get_total_calls", nullptr);
     if (result) {
         long total_calls = 0;
-        if (py_plugin->lib_unpack(result, "l", &total_calls)) {
+        if (g_py_plugin->lib_unpack(result, "l", &total_calls)) {
             std::cout << "   ✓ Total callbacks (via path lookup): " << total_calls << std::endl;
         }
         w_free_args(result);
@@ -607,7 +647,7 @@ TEST_F(VerlihubIntegrationTest, StressTreatMsg) {
 // Test Python threading with event hooks - demonstrates that Python threads
 // can process data collected from C++ event hooks without blocking
 TEST_F(VerlihubIntegrationTest, ThreadedDataProcessing) {
-    ASSERT_NE(py_plugin, nullptr);
+    ASSERT_NE(g_py_plugin, nullptr);
 
     MemoryTracker mem_tracker;
     mem_tracker.start();
@@ -620,9 +660,13 @@ TEST_F(VerlihubIntegrationTest, ThreadedDataProcessing) {
     std::cout << "  3. GIL is properly managed across threads" << std::endl;
     std::cout << "  4. No race conditions or crashes under load" << std::endl;
 
-    // Create a Python script that uses threading
-    std::string script_path = "/tmp/vh_thread_test_" + std::to_string(getpid()) + ".py";
-    std::ofstream script_file(script_path);
+    // Create a Python script that uses threading (in build dir, not /tmp)
+    const ::testing::TestInfo* const test_info =
+        ::testing::UnitTest::GetInstance()->current_test_info();
+    std::string thread_script_path = std::string(BUILD_DIR) + "/test_" + 
+                                     test_info->name() + "_" + 
+                                     std::to_string(getpid()) + ".py";
+    std::ofstream script_file(thread_script_path);
     ASSERT_TRUE(script_file.is_open());
 
     script_file << R"PYCODE(#!/usr/bin/env python3
@@ -739,15 +783,15 @@ def stop_threads():
     script_file.close();
 
     // Load the script
-    std::cout << "\nLoading threaded script: " << script_path << std::endl;
+    std::cout << "\nLoading threaded script: " << thread_script_path << std::endl;
     
     // Create and register interpreter (same as fixture SetUp)
-    cPythonInterpreter* thread_interp = new cPythonInterpreter(script_path);
-    py_plugin->AddData(thread_interp);
+    cPythonInterpreter* thread_interp = new cPythonInterpreter(thread_script_path);
+    g_py_plugin->AddData(thread_interp);
     ASSERT_TRUE(thread_interp->Init());
     
     // Register callbacks so Python hooks are invoked
-    py_plugin->RegisterAll();
+    g_py_plugin->RegisterAll();
 
     // Create mock user and connection for event triggering
     cUser *user = new cUser();
@@ -784,11 +828,11 @@ def stop_threads():
 
     // Get statistics from Python (use the thread_interp we just created)
     std::cout << "\nRetrieving processing statistics..." << std::endl;
-    w_Targs *result = py_plugin->CallPythonFunction(thread_interp->id, "get_stats", nullptr);
+    w_Targs *result = g_py_plugin->CallPythonFunction(thread_interp->id, "get_stats", nullptr);
     ASSERT_NE(result, nullptr);
 
     char *stats_json = nullptr;
-    ASSERT_TRUE(py_plugin->lib_unpack(result, "s", &stats_json));
+    ASSERT_TRUE(g_py_plugin->lib_unpack(result, "s", &stats_json));
     ASSERT_NE(stats_json, nullptr);
 
     std::cout << "\nPython Threading Statistics:" << std::endl;
@@ -805,11 +849,11 @@ def stop_threads():
 
     // Stop threads gracefully
     std::cout << "\nStopping worker threads..." << std::endl;
-    result = py_plugin->CallPythonFunction(thread_interp->id, "stop_threads", nullptr);
+    result = g_py_plugin->CallPythonFunction(thread_interp->id, "stop_threads", nullptr);
     
     long alive_threads = 0;
     if (result) {
-        py_plugin->lib_unpack(result, "l", &alive_threads);
+        g_py_plugin->lib_unpack(result, "l", &alive_threads);
         w_free_args(result);
     }
     
@@ -820,11 +864,13 @@ def stop_threads():
         std::cout << "✓ All worker threads terminated successfully" << std::endl;
     }
     
-    // NOTE: We intentionally do NOT call py_plugin->RemoveByName() here
-    // to avoid Python sub-interpreter cleanup issues with threading.
-    // The interpreter will be cleaned up during test environment teardown.
-    // Just delete the temp file.
-    std::remove(script_path.c_str());
+    // Clean up the threaded script's interpreter
+    // This is safe now because w_Unload detects threading and skips Py_EndInterpreter
+    std::cout << "\nCleaning up threaded interpreter..." << std::endl;
+    g_py_plugin->RemoveByName(thread_script_path);
+    
+    // Delete the temp file
+    std::remove(thread_script_path.c_str());
 
     std::cout << "\n=== Threading Test Results ===" << std::endl;
     std::cout << "✓ Python threads successfully spawned" << std::endl;
@@ -843,7 +889,7 @@ def stop_threads():
 // Test Python asyncio with event hooks - demonstrates async coroutines
 // can process data from C++ event hooks without blocking
 TEST_F(VerlihubIntegrationTest, AsyncDataProcessing) {
-    ASSERT_NE(py_plugin, nullptr);
+    ASSERT_NE(g_py_plugin, nullptr);
 
     MemoryTracker mem_tracker;
     mem_tracker.start();
@@ -856,9 +902,13 @@ TEST_F(VerlihubIntegrationTest, AsyncDataProcessing) {
     std::cout << "  3. Multiple coroutines run concurrently" << std::endl;
     std::cout << "  4. No blocking or hangs under async load" << std::endl;
 
-    // Create a Python script that uses asyncio
-    std::string script_path = "/tmp/vh_async_test_" + std::to_string(getpid()) + ".py";
-    std::ofstream script_file(script_path);
+    // Create a Python script that uses asyncio (in build dir, not /tmp)
+    const ::testing::TestInfo* const test_info =
+        ::testing::UnitTest::GetInstance()->current_test_info();
+    std::string async_script_path = std::string(BUILD_DIR) + "/test_" + 
+                                    test_info->name() + "_" + 
+                                    std::to_string(getpid()) + ".py";
+    std::ofstream script_file(async_script_path);
     ASSERT_TRUE(script_file.is_open());
 
     script_file << R"PYCODE(#!/usr/bin/env python3
@@ -1020,15 +1070,15 @@ def stop_event_loop():
     script_file.close();
 
     // Load the script
-    std::cout << "\nLoading async script: " << script_path << std::endl;
+    std::cout << "\nLoading async script: " << async_script_path << std::endl;
     
     // Create and register interpreter (same as fixture SetUp)
-    cPythonInterpreter* async_interp = new cPythonInterpreter(script_path);
-    py_plugin->AddData(async_interp);
+    cPythonInterpreter* async_interp = new cPythonInterpreter(async_script_path);
+    g_py_plugin->AddData(async_interp);
     ASSERT_TRUE(async_interp->Init());
     
     // Register callbacks so Python hooks are invoked
-    py_plugin->RegisterAll();
+    g_py_plugin->RegisterAll();
 
     // Give event loop time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -1062,11 +1112,11 @@ def stop_event_loop():
     std::cout << "\nStarting async processing tasks..." << std::endl;
     
     // Start async processing (use async_interp we just created)
-    w_Targs *result = py_plugin->CallPythonFunction(async_interp->id, "start_async_processing", nullptr);
+    w_Targs *result = g_py_plugin->CallPythonFunction(async_interp->id, "start_async_processing", nullptr);
     ASSERT_NE(result, nullptr);
 
     char *async_result_json = nullptr;
-    ASSERT_TRUE(py_plugin->lib_unpack(result, "s", &async_result_json));
+    ASSERT_TRUE(g_py_plugin->lib_unpack(result, "s", &async_result_json));
     ASSERT_NE(async_result_json, nullptr);
 
     std::cout << "\nAsync Processing Result:" << std::endl;
@@ -1081,11 +1131,11 @@ def stop_event_loop():
 
     // Get final statistics
     std::cout << "\nRetrieving final statistics..." << std::endl;
-    result = py_plugin->CallPythonFunction(async_interp->id, "get_stats", nullptr);
+    result = g_py_plugin->CallPythonFunction(async_interp->id, "get_stats", nullptr);
     ASSERT_NE(result, nullptr);
 
     char *stats_json = nullptr;
-    ASSERT_TRUE(py_plugin->lib_unpack(result, "s", &stats_json));
+    ASSERT_TRUE(g_py_plugin->lib_unpack(result, "s", &stats_json));
     ASSERT_NE(stats_json, nullptr);
 
     std::cout << "\nPython Asyncio Statistics:" << std::endl;
@@ -1101,11 +1151,11 @@ def stop_event_loop():
 
     // Stop event loop
     std::cout << "\nStopping asyncio event loop..." << std::endl;
-    result = py_plugin->CallPythonFunction(async_interp->id, "stop_event_loop", nullptr);
+    result = g_py_plugin->CallPythonFunction(async_interp->id, "stop_event_loop", nullptr);
     
     long cleanup_success = 0;
     if (result) {
-        py_plugin->lib_unpack(result, "l", &cleanup_success);
+        g_py_plugin->lib_unpack(result, "l", &cleanup_success);
         w_free_args(result);
     }
     
@@ -1116,11 +1166,13 @@ def stop_event_loop():
         std::cout << "✓ Event loop thread terminated successfully" << std::endl;
     }
     
-    // NOTE: We intentionally do NOT call py_plugin->RemoveByName() here
-    // to avoid Python sub-interpreter cleanup issues with asyncio event loops.
-    // The interpreter will be cleaned up during test environment teardown.
-    // Just delete the temp file.
-    std::remove(script_path.c_str());
+    // Clean up the async script's interpreter
+    // This is safe now because w_Unload detects asyncio and skips Py_EndInterpreter
+    std::cout << "\nCleaning up async interpreter..." << std::endl;
+    g_py_plugin->RemoveByName(async_script_path);
+    
+    // Delete the temp file
+    std::remove(async_script_path.c_str());
 
     std::cout << "\n=== Asyncio Test Results ===" << std::endl;
     std::cout << "✓ Asyncio event loop successfully initialized" << std::endl;

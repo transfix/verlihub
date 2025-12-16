@@ -1531,15 +1531,15 @@ w_Targs *_GetUserClass(int id, w_Targs *args)
 
 w_Targs *_GetNickList(int id, w_Targs *args)
 {
-	std::vector<std::string> nicks;
+	string list;
+	cpiPython::me->server->mUserList.GetNickList(list);
 	
-	// Return nicknames in hub encoding (no conversion)
-	// Python will handle encoding conversion as needed
-	for (cUserCollection::iterator it = cpiPython::me->server->mUserList.begin();
-		 it != cpiPython::me->server->mUserList.end(); ++it) {
-		if (*it && (*it)->mNick.size() > 0) {
-			nicks.push_back((*it)->mNick);
-		}
+	// Convert space-separated string to JSON array
+	std::vector<std::string> nicks;
+	std::istringstream iss(list);
+	std::string nick;
+	while (iss >> nick) {
+		nicks.push_back(nick);
 	}
 	
 	std::string json = stringListToJson(nicks);
@@ -1548,14 +1548,15 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 
 w_Targs *_GetOpList(int id, w_Targs *args)
 {
-	std::vector<std::string> nicks;
+	string list;
+	cpiPython::me->server->mOpList.GetNickList(list);
 	
-	// Return nicknames in hub encoding (no conversion)
-	for (cUserCollection::iterator it = cpiPython::me->server->mOpList.begin();
-	     it != cpiPython::me->server->mOpList.end(); ++it) {
-		if (*it && (*it)->mNick.size() > 0) {
-			nicks.push_back((*it)->mNick);
-		}
+	// Convert space-separated string to JSON array
+	std::vector<std::string> nicks;
+	std::istringstream iss(list);
+	std::string nick;
+	while (iss >> nick) {
+		nicks.push_back(nick);
 	}
 	
 	std::string json = stringListToJson(nicks);
@@ -1564,14 +1565,15 @@ w_Targs *_GetOpList(int id, w_Targs *args)
 
 w_Targs *_GetBotList(int id, w_Targs *args)
 {
-	std::vector<std::string> nicks;
+	string list;
+	cpiPython::me->server->mRobotList.GetNickList(list);
 	
-	// Return nicknames in hub encoding (no conversion)
-	for (cUserCollection::iterator it = cpiPython::me->server->mRobotList.begin();
-	     it != cpiPython::me->server->mRobotList.end(); ++it) {
-		if (*it && (*it)->mNick.size() > 0) {
-			nicks.push_back((*it)->mNick);
-		}
+	// Convert space-separated string to JSON array
+	std::vector<std::string> nicks;
+	std::istringstream iss(list);
+	std::string nick;
+	while (iss >> nick) {
+		nicks.push_back(nick);
 	}
 	
 	std::string json = stringListToJson(nicks);

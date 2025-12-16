@@ -1866,12 +1866,18 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		return NULL;
 	}
 	
+#ifndef PYTHON_SINGLE_INTERPRETER
+	// Sub-interpreter mode: need to swap to script's interpreter state
+	// In single-interpreter mode, all scripts share the same state, so no swap needed
 	PyThreadState *old_state = PyThreadState_Get();
 	PyThreadState_Swap(script->state);
+#endif
 
 	const char *name = w_HookName(num);
 	if (!name) {
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -1880,7 +1886,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	PyObject *module = script->module;
 	Py_XINCREF(module);
 	if (!module) {
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -1889,7 +1897,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	if (!func || !PyCallable_Check(func)) {
 		Py_XDECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -1899,7 +1909,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	if (!args) {
 		Py_DECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -1922,7 +1934,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_DECREF(args);
 					Py_DECREF(func);
 					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+#endif
 					PyGILState_Release(gstate);
 					return NULL;
 				}
@@ -1942,7 +1956,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 						Py_DECREF(args);
 						Py_DECREF(func);
 						Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 						PyThreadState_Swap(old_state);
+#endif
 						PyGILState_Release(gstate);
 						return NULL;
 					}
@@ -1963,7 +1979,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_DECREF(args);
 					Py_DECREF(func);
 					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+#endif
 					PyGILState_Release(gstate);
 					return NULL;
 				}
@@ -1980,7 +1998,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_DECREF(args);
 					Py_DECREF(func);
 					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+#endif
 					PyGILState_Release(gstate);
 					return NULL;
 				}
@@ -1991,7 +2011,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 				Py_DECREF(args);
 				Py_DECREF(func);
 				Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 				PyThreadState_Swap(old_state);
+#endif
 				PyGILState_Release(gstate);
 				return NULL;
 		}
@@ -2008,7 +2030,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 			Py_DECREF(args);
 			Py_DECREF(func);
 			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2022,7 +2046,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_DECREF(args);
 		Py_DECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2034,7 +2060,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_DECREF(args);
 		Py_DECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2053,7 +2081,11 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	if (!res) {
 		if (PyErr_Occurred()) PyErr_Print();
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2079,7 +2111,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		if (!ret) {
 			Py_DECREF(res);
 			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2105,7 +2139,9 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 
 	Py_DECREF(res);
 	Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 	PyThreadState_Swap(old_state);
+#endif
 	PyGILState_Release(gstate);
 	return ret;
 }
@@ -2141,7 +2177,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	PyObject *module = script->module;
 	Py_XINCREF(module);
 	if (!module) {
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2151,7 +2189,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		log("PY: w_CallFunction - function '%s' not found in script\n", func_name);
 		PyErr_Clear();
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2160,7 +2200,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		log("PY: w_CallFunction - '%s' is not callable\n", func_name);
 		Py_DECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2171,7 +2213,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		log("PY: w_CallFunction - failed to create argument tuple\n");
 		Py_DECREF(func);
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2282,7 +2326,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 			Py_DECREF(args);
 			Py_DECREF(func);
 			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2296,7 +2342,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		log("PY: w_CallFunction - call to '%s' failed:\n", func_name);
 		if (PyErr_Occurred()) PyErr_Print();
 		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2372,7 +2420,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		if (!ret) {
 			Py_DECREF(res);
 			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2415,7 +2465,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		if (!ret) {
 			Py_DECREF(res);
 			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2443,7 +2495,9 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	log2("PY: Function '%s' returned successfully\n", func_name);
 	Py_DECREF(res);
 	Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 	PyThreadState_Swap(old_state);
+#endif
 	PyGILState_Release(gstate);
 	return ret;
 }

@@ -1,4 +1,5 @@
 # test_simple.py - Minimal test script without I/O
+# This script has no print statements to isolate where crashes occur
 
 def OnNewConn(*args):
     return 1

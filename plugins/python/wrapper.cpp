@@ -1777,9 +1777,19 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 			case 's': {
 				const char *s = params->args[i].s;
 #if PY_MAJOR_VERSION >= 3
-				PyTuple_SetItem(args, i, s ? PyUnicode_FromString(s) : Py_None);
+				if (s) {
+					PyTuple_SetItem(args, i, PyUnicode_FromString(s));
+				} else {
+					Py_INCREF(Py_None);
+					PyTuple_SetItem(args, i, Py_None);
+				}
 #else
-				PyTuple_SetItem(args, i, s ? PyString_FromString(s) : Py_None);
+				if (s) {
+					PyTuple_SetItem(args, i, PyString_FromString(s));
+				} else {
+					Py_INCREF(Py_None);
+					PyTuple_SetItem(args, i, Py_None);
+				}
 #endif
 				break;
 			}
@@ -1982,9 +1992,19 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 			case 's': {
 				const char *s = params->args[i].s;
 #if PY_MAJOR_VERSION >= 3
-				PyTuple_SetItem(args, i, s ? PyUnicode_FromString(s) : Py_None);
+				if (s) {
+					PyTuple_SetItem(args, i, PyUnicode_FromString(s));
+				} else {
+					Py_INCREF(Py_None);
+					PyTuple_SetItem(args, i, Py_None);
+				}
 #else
-				PyTuple_SetItem(args, i, s ? PyString_FromString(s) : Py_None);
+				if (s) {
+					PyTuple_SetItem(args, i, PyString_FromString(s));
+				} else {
+					Py_INCREF(Py_None);
+					PyTuple_SetItem(args, i, Py_None);
+				}
 #endif
 				break;
 			}

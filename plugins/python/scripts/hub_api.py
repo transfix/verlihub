@@ -201,26 +201,22 @@ def _get_user_info_unsafe(nick: str) -> Optional[Dict[str, Any]]:
         tag = ""
         email = ""
         
-        if myinfo:
-            # $MyINFO format: $ALL nick desc<tag>$ $conn$email$sharesize$
-            parts = myinfo.split('$')
-            if len(parts) >= 4:
-                # Extract description and tag
-                info_part = parts[2] if len(parts) > 2 else ""
-                if '<' in info_part and '>' in info_part:
-                    desc = info_part[:info_part.index('<')]
-                    tag = info_part[info_part.index('<')+1:info_part.index('>')]
-                else:
-                    desc = info_part
-                
-                # Extract email and share
-                if len(parts) >= 5:
-                    email = parts[3]
-                if len(parts) >= 6:
-                    try:
-                        share = int(parts[4])
-                    except ValueError:
-                        pass
+        # Debug logging
+        print(f"[Hub API DEBUG] GetMyINFO({nick}) returned: {myinfo!r}")
+        
+        if myinfo and isinstance(myinfo, tuple) and len(myinfo) >= 6:
+            # Tuple format: (nick, desc, tag, speed, email, sharesize)
+            _, desc, tag, speed, email, size_str = myinfo[:6]
+            print(f"[Hub API DEBUG] Parsed for {nick}: desc='{desc}', tag='{tag}', email='{email}', size_str='{size_str}'")
+            try:
+                # Share size is in bytes as a string
+                share = int(size_str) if size_str else 0
+                print(f"[Hub API DEBUG] Converted share for {nick}: {share}")
+            except (ValueError, TypeError):
+                print(f"[Hub API] Warning: Failed to parse share size for {nick}: '{size_str}'")
+                share = 0
+        else:
+            print(f"[Hub API DEBUG] GetMyINFO for {nick} failed validation: myinfo={myinfo!r}, is_tuple={isinstance(myinfo, tuple)}, len={len(myinfo) if myinfo else 'N/A'}")
         
         return {
             "nick": nick,

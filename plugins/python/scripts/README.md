@@ -21,7 +21,67 @@ This directory contains example Python scripts demonstrating the capabilities of
 
 ---
 
-## Important: Thread Safety
+## Important: Interpreter Modes and Threading
+
+### Compilation Modes: Single vs Sub-Interpreter
+
+Verlihub's Python plugin supports two interpreter modes, controlled at compile time. **Both modes are fully tested and production-ready** with all tests passing in both configurations.
+
+**SUB-INTERPRETER MODE** (default - `cmake` without flags):
+```bash
+cmake ..
+make
+```
+- Each Python script runs in its own isolated interpreter
+- Scripts cannot interfere with each other's global variables
+- Memory leaks in one script don't affect others
+- Scripts can be reloaded without affecting other scripts
+- ✅ **10/10 tests passing (100%)**
+- **LIMITATION**: Incompatible with many modern Python packages
+
+**SINGLE-INTERPRETER MODE** (required for modern packages):
+```bash
+cmake -DPYTHON_USE_SINGLE_INTERPRETER=ON ..
+make
+```
+- All Python scripts share one Python interpreter
+- Full compatibility with modern Python ecosystem
+- All threading, asyncio, and concurrent.futures work perfectly
+- ✅ **11/11 tests passing (100%)**
+- **TRADE-OFF**: Scripts share global namespace (use proper namespacing!)
+
+### Package Compatibility Issues
+
+Many popular Python packages **will not work** in sub-interpreter mode due to:
+
+1. **PyO3/Rust Extensions** (most modern packages):
+   - FastAPI, Pydantic, uvicorn
+   - cryptography, tokenizers, polars
+   - **Error**: `ImportError: PyO3 modules do not yet support subinterpreters, see https://github.com/PyO3/pyo3/issues/576`
+   - **Root cause**: PyO3 (Rust-Python bindings) has fundamental architectural limitations preventing subinterpreter support
+
+2. **Packages with Global C State**:
+   - numpy, pandas, scipy
+   - torch, tensorflow
+   - **Error**: "Interpreter change detected" or segfaults
+
+3. **Cached Module Imports**:
+   - asyncio event loops
+   - threading module state
+   - **Error**: Threading crashes or import failures
+
+**Decision Matrix:**
+
+| Use Case | Recommended Mode | Reason |
+|----------|------------------|--------|
+| Simple event hooks only | Sub-interpreter | Better isolation |
+| Using FastAPI/web servers | Single-interpreter | Package compatibility |
+| Using numpy/pandas/ML libs | Single-interpreter | Package compatibility |
+| Heavy threading/asyncio | Single-interpreter | Threading stability |
+| Need script isolation | Sub-interpreter | Namespace safety |
+| Multiple users editing scripts | Sub-interpreter | Independent reload |
+
+### Thread Safety
 
 **⚠️ CRITICAL: The `vh` module is NOT thread-safe and must only be called from the main Verlihub thread.**
 

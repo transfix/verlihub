@@ -98,6 +98,8 @@ static std::string HubToUtf8(const std::string& hub_str) {
 		return hub_str; // Return as-is if no converter available
 	
 	std::string hub_enc = cpiPython::me->server->mC.hub_encoding;
+	log3("PY: HubToUtf8: hub_encoding='%s', input_len=%zu\n", hub_enc.c_str(), hub_str.length());
+	
 	if (hub_enc.empty() || hub_enc == "UTF-8" || hub_enc == "utf-8")
 		return hub_str; // Already UTF-8
 	
@@ -958,23 +960,23 @@ static PyObject* vh_CallBool(int func, PyObject *args, const char *in_format)
 	if (!vh_ParseArgs(func, args, in_format, &a))
 		return NULL;
 	
-	// Free allocated strings from vh_ParseArgs
-	for (int i = 0; a->format && a->format[i]; i++) {
-		if (a->format[i] == 's' && a->args[i].s) {
-			free(a->args[i].s);
-		}
-	}
-	
 	// Release GIL while calling C++
 	PyThreadState *state = PyThreadState_Get();
 	PyEval_ReleaseThread(state);
 	
 	w_Targs *res = w_Python->callbacks[func](func, a);
 	
+	PyEval_AcquireThread(state);
+	
+	// Free allocated strings from vh_ParseArgs AFTER callback returns
+	for (int i = 0; a->format && a->format[i]; i++) {
+		if (a->format[i] == 's' && a->args[i].s) {
+			free(a->args[i].s);
+		}
+	}
+	
 	free((char*)a->format);
 	free(a);
-	
-	PyEval_AcquireThread(state);
 	
 	if (!res) {
 		Py_RETURN_FALSE;
@@ -982,7 +984,7 @@ static PyObject* vh_CallBool(int func, PyObject *args, const char *in_format)
 	
 	long ret = 0;
 	w_unpack(res, "l", &ret);
-	free(res);
+	w_free_args(res);
 	
 	if (ret) {
 		Py_RETURN_TRUE;
@@ -997,22 +999,22 @@ static PyObject* vh_CallString(int func, PyObject *args, const char *in_format)
 	if (!vh_ParseArgs(func, args, in_format, &a))
 		return NULL;
 	
-	// Free allocated strings from vh_ParseArgs
+	PyThreadState *state = PyThreadState_Get();
+	PyEval_ReleaseThread(state);
+	
+	w_Targs *res = w_Python->callbacks[func](func, a);
+	
+	PyEval_AcquireThread(state);
+	
+	// Free allocated strings from vh_ParseArgs AFTER callback returns
 	for (int i = 0; a->format && a->format[i]; i++) {
 		if (a->format[i] == 's' && a->args[i].s) {
 			free(a->args[i].s);
 		}
 	}
 	
-	PyThreadState *state = PyThreadState_Get();
-	PyEval_ReleaseThread(state);
-	
-	w_Targs *res = w_Python->callbacks[func](func, a);
-	
 	free((char*)a->format);
 	free(a);
-	
-	PyEval_AcquireThread(state);
 	
 	if (!res) {
 		Py_RETURN_NONE;
@@ -1024,14 +1026,16 @@ static PyObject* vh_CallString(int func, PyObject *args, const char *in_format)
 	PyObject *py_ret;
 	if (ret && ret[0]) {
 		// Convert from hub encoding to UTF-8 for Python
-		std::string utf8_str = HubToUtf8(ret);
+		// Make a copy since w_free_args will free ret
+		std::string ret_copy(ret);
+		std::string utf8_str = HubToUtf8(ret_copy);
 		py_ret = PyUnicode_FromString(utf8_str.c_str());
 	} else {
 		Py_INCREF(Py_None);
 		py_ret = Py_None;
 	}
 	
-	free(res);
+	w_free_args(res);  // Changed from free(res) to properly free strings
 	return py_ret;
 }
 
@@ -1042,22 +1046,22 @@ static PyObject* vh_CallLong(int func, PyObject *args, const char *in_format)
 	if (!vh_ParseArgs(func, args, in_format, &a))
 		return NULL;
 	
-	// Free allocated strings from vh_ParseArgs
+	PyThreadState *state = PyThreadState_Get();
+	PyEval_ReleaseThread(state);
+	
+	w_Targs *res = w_Python->callbacks[func](func, a);
+	
+	PyEval_AcquireThread(state);
+	
+	// Free allocated strings from vh_ParseArgs AFTER callback returns
 	for (int i = 0; a->format && a->format[i]; i++) {
 		if (a->format[i] == 's' && a->args[i].s) {
 			free(a->args[i].s);
 		}
 	}
 	
-	PyThreadState *state = PyThreadState_Get();
-	PyEval_ReleaseThread(state);
-	
-	w_Targs *res = w_Python->callbacks[func](func, a);
-	
 	free((char*)a->format);
 	free(a);
-	
-	PyEval_AcquireThread(state);
 	
 	if (!res) {
 		Py_RETURN_NONE;
@@ -1065,7 +1069,7 @@ static PyObject* vh_CallLong(int func, PyObject *args, const char *in_format)
 	
 	long ret = 0;
 	w_unpack(res, "l", &ret);
-	free(res);
+	w_free_args(res);
 	
 	return PyLong_FromLong(ret);
 }
@@ -1126,7 +1130,7 @@ static PyObject* vh_GetMyINFO(PyObject *self, PyObject *args)
 	// Create Python tuple
 	PyObject *tuple = PyTuple_New(6);
 	if (!tuple) {
-		free(res);
+		w_free_args(res);
 		return NULL;
 	}
 	
@@ -1136,7 +1140,7 @@ static PyObject* vh_GetMyINFO(PyObject *self, PyObject *args)
 		PyObject *py_str = PyUnicode_FromString(utf8_str.c_str()); \
 		if (!py_str) { \
 			Py_DECREF(tuple); \
-			free(res); \
+			w_free_args(res); \
 			return NULL; \
 		} \
 		PyTuple_SetItem(tuple, index, py_str); \
@@ -1151,7 +1155,7 @@ static PyObject* vh_GetMyINFO(PyObject *self, PyObject *args)
 	
 	#undef SET_TUPLE_STRING
 	
-	free(res);
+	w_free_args(res);
 	return tuple;
 }
 
@@ -1232,7 +1236,8 @@ static PyObject* vh_GetNickList(PyObject *self, PyObject *args)
 	}
 #endif
 	
-	free(res);
+	// Free res AFTER using json_str (which points into res)
+	w_free_args(res);
 	return py_list;
 }
 
@@ -1269,7 +1274,7 @@ static PyObject* vh_GetOpList(PyObject *self, PyObject *args)
 	}
 #endif
 	
-	free(res);
+	w_free_args(res);
 	return py_list;
 }
 
@@ -1306,7 +1311,7 @@ static PyObject* vh_GetBotList(PyObject *self, PyObject *args)
 	}
 #endif
 	
-	free(res);
+	w_free_args(res);
 	return py_list;
 }
 
@@ -1340,6 +1345,11 @@ static PyObject* vh_UserRestrictions(PyObject *self, PyObject *args, PyObject *k
 	
 	w_Targs *res = w_Python->callbacks[W_UserRestrictions](W_UserRestrictions, packed);
 	
+	// NOTE: Use free(packed) here instead of w_free_args(packed) because the strings
+	// in 'packed' are pointers to C++ std::string buffers (.c_str()) that are
+	// stack-managed and will be automatically destroyed when they go out of scope.
+	// w_free_args() should only be used for w_Targs containing heap-allocated strings
+	// (e.g., from strdup() or callback return values).
 	free(packed);
 	PyEval_AcquireThread(state);
 	
@@ -1347,7 +1357,7 @@ static PyObject* vh_UserRestrictions(PyObject *self, PyObject *args, PyObject *k
 	
 	long ret = 0;
 	w_unpack(res, "l", &ret);
-	free(res);
+	w_free_args(res);
 	
 	if (ret) Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
@@ -2322,8 +2332,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 			PyThreadState_Swap(old_state);
 			PyGILState_Release(gstate);
 			return NULL;
-		}
-		ret->format = "tab";
+		}et->format = "tab";
 		for (int i = 0; i < len; i++) {
 			PyObject *item = PyTuple_GetItem(res, i);
 			if (PyInt_Check(item) || PyLong_Check(item)) {
@@ -2348,6 +2357,13 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	Py_DECREF(res);
 	PyThreadState_Swap(old_state);
 	PyGILState_Release(gstate);
+	
+	// NOTE: We do NOT free params here because:
+	// 1. The caller might be passing C++ .c_str() pointers that shouldn't be freed
+	// 2. The caller should manage the lifetime of params
+	// 3. If params contains heap-allocated strings (from strdup), caller must free them
+	// This is different from callbacks which return owned w_Targs* that must be freed
+	
 	return ret;
 }
 

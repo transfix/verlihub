@@ -140,7 +140,7 @@ def update_data_cache():
         hub_info = _get_hub_info_unsafe()
         users = _get_all_users_unsafe()
         geo_stats = _get_geographic_stats_unsafe()
-        share_stats = _get_share_stats_unsafe()
+        share_stats = _get_share_stats_unsafe(users)
         
         # Update cache atomically
         with data_cache_lock:
@@ -201,22 +201,14 @@ def _get_user_info_unsafe(nick: str) -> Optional[Dict[str, Any]]:
         tag = ""
         email = ""
         
-        # Debug logging
-        print(f"[Hub API DEBUG] GetMyINFO({nick}) returned: {myinfo!r}")
-        
         if myinfo and isinstance(myinfo, tuple) and len(myinfo) >= 6:
             # Tuple format: (nick, desc, tag, speed, email, sharesize)
             _, desc, tag, speed, email, size_str = myinfo[:6]
-            print(f"[Hub API DEBUG] Parsed for {nick}: desc='{desc}', tag='{tag}', email='{email}', size_str='{size_str}'")
             try:
                 # Share size is in bytes as a string
                 share = int(size_str) if size_str else 0
-                print(f"[Hub API DEBUG] Converted share for {nick}: {share}")
             except (ValueError, TypeError):
-                print(f"[Hub API] Warning: Failed to parse share size for {nick}: '{size_str}'")
                 share = 0
-        else:
-            print(f"[Hub API DEBUG] GetMyINFO for {nick} failed validation: myinfo={myinfo!r}, is_tuple={isinstance(myinfo, tuple)}, len={len(myinfo) if myinfo else 'N/A'}")
         
         return {
             "nick": nick,
@@ -262,6 +254,9 @@ def _get_all_users_unsafe() -> List[Dict[str, Any]]:
     """Get list of all users with their information (UNSAFE - call only from main thread)"""
     users = []
     nick_list = vh.GetNickList()
+    
+    if not isinstance(nick_list, list):
+        return users
     
     for nick in nick_list:
         user_info = _get_user_info_unsafe(nick)
@@ -425,7 +420,6 @@ def run_server(port: int):
     global server_running
     
     try:
-        server_running = True
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
@@ -484,23 +478,54 @@ def is_api_running() -> bool:
 def OnTimer(msec=0):
     """Update data cache periodically (runs in main thread)"""
     # Only update if API server is running
+    if not server_running:
+        return 1
+    
+    # Throttle updates - only update every CACHE_UPDATE_INTERVAL seconds
+    current_time = time.time()
+    if current_time - last_cache_update < CACHE_UPDATE_INTERVAL:
+        return 1
+    
+    last_cache_update = current_time
+    update_data_cache()
+    return 1
+
+def OnUserLogin(nick):
+    """Update cache when user logs in (runs in main thread)"""
+    if server_running:
+        update_data_cache()
+    return 1
+
+def OnUserLogout(nick):
+    """Update cache when user logs out (runs in main thread)"""
     if server_running:
         update_data_cache()
     return 1
 
 def OnHubCommand(nick, command, user_class, in_pm, prefix):
-    """Handle hub commands"""
+    """Handle hub commands
+    
+    IMPORTANT: Return value logic (Python -> C++ -> Verlihub core):
+    - return 1 → C++ returns true → Command is ALLOWED (passes through)
+    - return 0 → C++ returns false → Command is BLOCKED (consumed/handled)
+    
+    So: return 1 for commands we DON'T handle, return 0 for commands we DO handle
+    """
     parts = command.split()
     
     if not parts or parts[0] != "api":
-        return 1
+        return 1  # Not our command, allow it (true in C++)
     
     # Check permissions (operators only)
     if user_class < 3:
-        vh.pm(nick, "Permission denied. Operators only.")
-        return 0
+        return 0  # Block this command (false in C++)
     
-    write = vh.pm if in_pm else vh.usermc
+    # Helper function to send messages (handles the correct vh.pm/vh.usermc signature)
+    def send_message(msg):
+        if in_pm:
+            vh.pm(msg, nick)  # pm(message, destination_nick, [from_nick], [bot_nick])
+        else:
+            vh.usermc(msg, nick)  # usermc(message, destination_nick, [bot_nick])
     
     if len(parts) < 2:
         write(nick, "Usage: !api [start|stop|status|help] [port]")

@@ -1433,15 +1433,9 @@ w_Targs *_GetMyINFO(int id, w_Targs *args)
 	if (!cpiPython::lib_unpack(args, "s", &nick)) return NULL;
 	if (!nick) return NULL;
 	
-	printf("PY: _GetMyINFO called for nick='%s'\n", nick);
-	fflush(stdout);
-	
 	cUser *u = cpiPython::me->server->mUserList.GetUserByNick(nick);
-	if (!u) {
-		printf("PY: _GetMyINFO - user '%s' NOT FOUND in mUserList\n", nick);
-		fflush(stdout);
+	if (!u)
 		return NULL;
-	}
 	
 	printf("PY: _GetMyINFO - user '%s' found, mMyINFO.length()=%zu, mFakeMyINFO.length()=%zu, mShare=%lld\n",
 		nick, u->mMyINFO.length(), u->mFakeMyINFO.length(), u->mShare);
@@ -1464,39 +1458,12 @@ w_Targs *_GetMyINFO(int id, w_Targs *args)
 			strdup(""),                     // email (not available without MyINFO)
 			strdup(share_str.str().c_str()) // share from mShare field
 		);
-		log1("PY: GetMyINFO for %s - both MyINFO strings empty, using mShare=%lld\n", nick, u->mShare);
 		return res;
 	}
-	
-	log1("PY: GetMyINFO for %s - mMyINFO.empty()=%d, using %s, value: %.200s\n", 
-		nick, u->mMyINFO.empty() ? 1 : 0, 
-		u->mMyINFO.empty() ? "mFakeMyINFO" : "mMyINFO",
-		myinfo_str.c_str());
 	
 	char *n, *desc, *tag, *speed, *mail, *size;
-	if (!cpiPython::me->SplitMyINFO(myinfo_str.c_str(), &n, &desc, &tag, &speed, &mail, &size)) {
-		log1("PY: Call GetMyINFO   malformed myinfo message: %s\n", myinfo_str.c_str());
+	if (!cpiPython::me->SplitMyINFO(myinfo_str.c_str(), &n, &desc, &tag, &speed, &mail, &size))
 		return NULL;
-	
-	// Use real MyINFO (mMyINFO) which has the actual client data
-	// Fall back to mFakeMyINFO only if mMyINFO is empty (e.g., for bots)
-	const string& myinfo_str = u->mMyINFO.empty() ? u->mFakeMyINFO : u->mMyINFO;
-	
-	// If both MyINFO strings are empty, construct from user object fields
-	if (myinfo_str.empty()) {
-		ostringstream share_str;
-		share_str << u->mShare;
-		
-		w_Targs *res = cpiPython::lib_pack("ssssss", 
-			strdup(u->mNick.c_str()),     // nick
-			strdup(""),                     // desc (not available without MyINFO)
-			strdup(""),                     // tag (not available without MyINFO)
-			strdup(""),                     // speed (not available without MyINFO) 
-			strdup(""),                     // email (not available without MyINFO)
-			strdup(share_str.str().c_str()) // share from mShare field
-		);
-		return res;
-	}
 	
 	log1("PY: GetMyINFO parsed - desc='%.50s', tag='%.50s', email='%.50s', size='%s'\n",
 		desc ? desc : "(null)", tag ? tag : "(null)", mail ? mail : "(null)", size ? size : "(null)");
@@ -1596,10 +1563,7 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 		}
 	}
 	
-	log1("PY: _GetNickList returning %zu nicks\n", nicks.size());
-	
 	std::string json = stringListToJson(nicks);
-	log1("PY: _GetNickList JSON length: %zu, first 100 chars: %.100s\n", json.length(), json.c_str());
 	return cpiPython::lib_pack("D", strdup(json.c_str()));
 }
 

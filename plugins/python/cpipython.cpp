@@ -191,6 +191,7 @@ void cpiPython::OnLoad(cServerDC *server)
 	callbacklist[W_GetUserCC]          = &_GetUserCC;
 	callbacklist[W_GetIPCC]            = &_GetIPCC;
 	callbacklist[W_GetIPCN]            = &_GetIPCN;
+	callbacklist[W_GetIPCity]          = &_GetIPCity;
 	callbacklist[W_GetIPASN]           = &_GetIPASN;
 	callbacklist[W_GetGeoIP]           = &_GetGeoIP;
 	callbacklist[W_AddRegUser]         = &_AddRegUser;
@@ -1535,8 +1536,6 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 {
 	std::vector<std::string> nicks;
 	
-	log("PY: _GetNickList called, user count=%d\n", cpiPython::me->server->mUserList.Size());
-	
 	// Return nicknames in hub encoding (no conversion)
 	// Python will handle encoding conversion as needed
 	for (cUserCollection::iterator it = cpiPython::me->server->mUserList.begin();
@@ -1545,8 +1544,6 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 			nicks.push_back((*it)->mNick);
 		}
 	}
-	
-	log("PY: _GetNickList returning %zu nicks\n", nicks.size());
 	
 	std::string json = stringListToJson(nicks);
 	return cpiPython::lib_pack("D", strdup(json.c_str()));
@@ -1758,6 +1755,23 @@ w_Targs *_GetIPCN(int id, w_Targs *args)
 
 	string cnstr = GetIPCN(ip); // use script api, it has new optimizations
 	return cpiPython::lib_pack("s", strdup(cnstr.c_str()));
+}
+
+w_Targs *_GetIPCity(int id, w_Targs *args)
+{
+	const char *ip, *db;
+
+	if (!cpiPython::lib_unpack(args, "ss", &ip, &db))
+		return NULL;
+
+	if (!ip)
+		return NULL;
+
+	if (!db)
+		db = "";
+
+	string citystr = GetIPCity(ip, db);
+	return cpiPython::lib_pack("s", strdup(citystr.c_str()));
 }
 
 w_Targs *_GetIPASN(int id, w_Targs *args)

@@ -492,6 +492,7 @@ void w_free_args(w_Targs *a)
 				// Other types (l, d, p, O) don't need cleanup
 			}
 		}
+		free((char*)a->format);
 	}
 	free(a);
 }
@@ -873,8 +874,9 @@ static int vh_ParseArgs(int func, PyObject *args, const char *in_format, w_Targs
 		return 0;
 	}
 	
-	// Allocate w_Targs
-	w_Targs *a = (w_Targs*)calloc(len + 1, sizeof(w_Telement));
+	// Allocate w_Targs with flexible array member
+	// Need sizeof(w_Targs) for the header + space for 'len' elements
+	w_Targs *a = (w_Targs*)calloc(1, sizeof(w_Targs) + len * sizeof(w_Telement));
 	if (!a) {
 		free(pack_format);
 		PyErr_SetString(PyExc_MemoryError, "Failed to allocate argument structure");
@@ -1190,8 +1192,8 @@ static PyObject* vh_GetUserCC(PyObject *self, PyObject *args)          { return 
 static PyObject* vh_GetIPCC(PyObject *self, PyObject *args)            { return vh_CallString(W_GetIPCC, args, "s"); }
 static PyObject* vh_GetIPCN(PyObject *self, PyObject *args)            { return vh_CallString(W_GetIPCN, args, "s"); }
 static PyObject* vh_GetIPCity(PyObject *self, PyObject *args)          { return vh_CallString(W_GetIPCity, args, "ss"); }
-static PyObject* vh_GetIPASN(PyObject *self, PyObject *args)           { return vh_CallString(W_GetIPASN, args, "s"); }
-static PyObject* vh_GetGeoIP(PyObject *self, PyObject *args)           { return vh_CallString(W_GetGeoIP, args, "s"); }
+static PyObject* vh_GetIPASN(PyObject *self, PyObject *args)           { return vh_CallString(W_GetIPASN, args, "ss"); }
+static PyObject* vh_GetGeoIP(PyObject *self, PyObject *args)           { return vh_CallString(W_GetGeoIP, args, "ss"); }
 static PyObject* vh_AddRegUser(PyObject *self, PyObject *args)         { return vh_CallBool(W_AddRegUser, args, "sl|ss"); }
 static PyObject* vh_DelRegUser(PyObject *self, PyObject *args)         { return vh_CallBool(W_DelRegUser, args, "s"); }
 static PyObject* vh_SetRegClass(PyObject *self, PyObject *args)        { return vh_CallBool(W_SetRegClass, args, "sl"); }

@@ -1541,13 +1541,18 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 	string list;
 	cpiPython::me->server->mUserList.GetNickList(list);
 	
-	// Convert space-separated string to JSON array
-	std::vector<std::string> nicks;
-	std::istringstream iss(list);
-	std::string nick;
-	while (iss >> nick) {
-		nicks.push_back(nick);
+	log("PY: _GetNickList called, user count=%d\n", cpiPython::me->server->mUserList.Size());
+	
+	// Return nicknames in hub encoding (no conversion)
+	// Python will handle encoding conversion as needed
+	for (cUserCollection::iterator it = cpiPython::me->server->mUserList.begin();
+		 it != cpiPython::me->server->mUserList.end(); ++it) {
+		if (*it && (*it)->mNick.size() > 0) {
+			nicks.push_back((*it)->mNick);
+		}
 	}
+	
+	log("PY: _GetNickList returning %zu nicks\n", nicks.size());
 	
 	std::string json = stringListToJson(nicks);
 	return cpiPython::lib_pack("D", strdup(json.c_str()));
@@ -1558,12 +1563,12 @@ w_Targs *_GetOpList(int id, w_Targs *args)
 	string list;
 	cpiPython::me->server->mOpList.GetNickList(list);
 	
-	// Convert space-separated string to JSON array
-	std::vector<std::string> nicks;
-	std::istringstream iss(list);
-	std::string nick;
-	while (iss >> nick) {
-		nicks.push_back(nick);
+	// Return nicknames in hub encoding (no conversion)
+	for (cUserCollection::iterator it = cpiPython::me->server->mOpList.begin();
+	     it != cpiPython::me->server->mOpList.end(); ++it) {
+		if (*it && (*it)->mNick.size() > 0) {
+			nicks.push_back((*it)->mNick);
+		}
 	}
 	
 	std::string json = stringListToJson(nicks);
@@ -1575,12 +1580,12 @@ w_Targs *_GetBotList(int id, w_Targs *args)
 	string list;
 	cpiPython::me->server->mRobotList.GetNickList(list);
 	
-	// Convert space-separated string to JSON array
-	std::vector<std::string> nicks;
-	std::istringstream iss(list);
-	std::string nick;
-	while (iss >> nick) {
-		nicks.push_back(nick);
+	// Return nicknames in hub encoding (no conversion)
+	for (cUserCollection::iterator it = cpiPython::me->server->mRobotList.begin();
+	     it != cpiPython::me->server->mRobotList.end(); ++it) {
+		if (*it && (*it)->mNick.size() > 0) {
+			nicks.push_back((*it)->mNick);
+		}
 	}
 	
 	std::string json = stringListToJson(nicks);
@@ -1776,8 +1781,12 @@ w_Targs *_GetIPCity(int id, w_Targs *args)
 	if (!db)
 		db = "";
 
-	string citystr = GetIPCity(ip, db);
-	return cpiPython::lib_pack("s", strdup(citystr.c_str()));
+	string s_ip(ip), s_db(db), city_name;
+
+	if (!cpiPython::me->server->mMaxMindDB->GetCity(city_name, s_ip, s_db))
+		return NULL;
+
+	return cpiPython::lib_pack("s", strdup(city_name.c_str()));
 }
 
 w_Targs *_GetIPASN(int id, w_Targs *args)

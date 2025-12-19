@@ -230,6 +230,10 @@ PyObject *w_GetHook(int hook);
 const char *w_HookName(int hook);
 const char *w_CallName(int callback);
 
+// Encoding conversion helpers (Hub encoding <-> UTF-8 for Python)
+std::string HubToUtf8(const std::string& hub_str);
+std::string Utf8ToHub(const std::string& utf8_str);
+
 // Dynamic function registration
 // Register a C++ function that can be called from Python scripts
 int w_RegisterFunction(int script_id, const char *func_name, w_Tcallback callback);

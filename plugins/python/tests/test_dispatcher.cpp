@@ -22,6 +22,7 @@
 #include "cprotocol.h"
 #include "test_utils.h"
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -68,7 +69,7 @@ public:
         
         // Create config directory
         std::string cmd = "mkdir -p " + config_dir;
-        system(cmd.c_str());
+        [[maybe_unused]] int sys_result = system(cmd.c_str());
         
         // Create dbconfig file
         std::string dbconfig_path = config_dir + "/dbconfig";
@@ -104,8 +105,7 @@ public:
         ASSERT_NE(g_py_plugin, nullptr) << "Failed to create Python plugin";
         
         // Load plugin
-        int load_result = g_py_plugin->OnLoad(g_server);
-        ASSERT_TRUE(load_result) << "Failed to load Python plugin";
+        g_py_plugin->OnLoad(g_server);
         
         std::cout << "=== Verlihub Environment Ready ===" << std::endl;
     }
@@ -114,7 +114,6 @@ public:
         std::cout << "\n=== Cleaning up Verlihub Environment ===" << std::endl;
         
         if (g_py_plugin) {
-            g_py_plugin->OnClose();
             delete g_py_plugin;
             g_py_plugin = nullptr;
         }
@@ -143,8 +142,13 @@ protected:
         dispatcher_path = std::string(SOURCE_DIR) + "/plugins/python/scripts/dispatcher.py";
         
         std::cout << "\n--- Loading dispatcher: " << dispatcher_path << std::endl;
-        dispatcher_interp = g_py_plugin->LoadScript(dispatcher_path);
-        ASSERT_NE(dispatcher_interp, nullptr) << "Failed to load dispatcher script";
+        std::ostringstream load_output;
+        bool load_result = g_py_plugin->LoadScript(dispatcher_path, load_output);
+        ASSERT_TRUE(load_result) << "Failed to load dispatcher script: " << load_output.str();
+        
+        // Find the loaded interpreter (it's the most recent one)
+        dispatcher_interp = g_py_plugin->Size() > 0 ? (*g_py_plugin)[g_py_plugin->Size() - 1] : nullptr;
+        ASSERT_NE(dispatcher_interp, nullptr) << "Dispatcher interpreter not found after load";
         
         // Give dispatcher time to initialize
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -154,14 +158,14 @@ protected:
         // Unload all test scripts
         for (auto* interp : test_scripts) {
             if (interp) {
-                g_py_plugin->UnloadScript(interp->id);
+                g_py_plugin->UnLoadScript(interp->mScriptName);
             }
         }
         test_scripts.clear();
         
         // Unload dispatcher
         if (dispatcher_interp) {
-            g_py_plugin->UnloadScript(dispatcher_interp->id);
+            g_py_plugin->UnLoadScript(dispatcher_interp->mScriptName);
             dispatcher_interp = nullptr;
         }
     }
@@ -200,8 +204,11 @@ protected:
         script.close();
         
         std::cout << "--- Loading test script: " << script_path << std::endl;
-        cPythonInterpreter* interp = g_py_plugin->LoadScript(script_path);
-        if (interp) {
+        std::ostringstream load_out;
+        bool loaded = g_py_plugin->LoadScript(script_path, load_out);
+        cPythonInterpreter* interp = nullptr;
+        if (loaded && g_py_plugin->Size() > 0) {
+            interp = (*g_py_plugin)[g_py_plugin->Size() - 1];
             test_scripts.push_back(interp);
         }
         
@@ -221,8 +228,8 @@ protected:
     // Helper: Send hub command
     bool SendHubCommand(cConnDC* conn, const std::string& command, bool in_pm = false) {
         std::string cmd_str = command.substr(1); // Remove !
-        int result = g_py_plugin->OnHubCommand(conn->mpUser->mNick, cmd_str, conn->mpUser->mClass, in_pm ? 1 : 0, "!");
-        return result == 0; // 0 means command was handled
+        bool result = g_py_plugin->OnHubCommand(conn, &cmd_str, 1, in_pm ? 1 : 0);
+        return !result; // false means command was handled (blocked)
     }
 };
 
@@ -362,15 +369,27 @@ HOOKS = {'OnParsedMsgChat': my_chat_handler}
     ASSERT_NE(stopper, nullptr);
     ASSERT_NE(follower, nullptr);
     
+    // Create mock connection
+    cConnDC* conn = CreateMockConnection("TestUser");
+    
     // Message without STOP - both should execute
     std::cout << "\n--- Sending chat without STOP ---" << std::endl;
-    g_py_plugin->OnParsedMsgChat("TestUser", "Hello everyone");
+    cMessageDC msg1;
+    msg1.mType = eDC_CHAT;
+    msg1.mStr = "<TestUser> Hello everyone|";
+    g_py_plugin->OnParsedMsgChat(conn, &msg1);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     
     // Message with STOP - only stopper should execute
     std::cout << "--- Sending chat with STOP ---" << std::endl;
-    g_py_plugin->OnParsedMsgChat("TestUser", "STOP this message");
+    cMessageDC msg2;
+    msg2.mType = eDC_CHAT;
+    msg2.mStr = "<TestUser> STOP this message|";
+    g_py_plugin->OnParsedMsgChat(conn, &msg2);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    delete conn->mpUser;
+    delete conn;
 }
 
 // Test 6: Admin command - list scripts
@@ -515,17 +534,27 @@ HOOKS = {
     
     std::cout << "\n--- Triggering multiple hook types ---" << std::endl;
     
+    // Create test objects
+    cConnDC* conn = CreateMockConnection("User1");
+    cUser* user = conn->mpUser;
+    
     g_py_plugin->OnTimer(0);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
-    g_py_plugin->OnParsedMsgChat("User1", "Hello");
+    cMessageDC msg;
+    msg.mType = eDC_CHAT;
+    msg.mStr = "<User1> Hello|";
+    g_py_plugin->OnParsedMsgChat(conn, &msg);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
-    g_py_plugin->OnUserLogin("User1");
+    g_py_plugin->OnUserLogin(user);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
-    g_py_plugin->OnUserLogout("User1");
+    g_py_plugin->OnUserLogout(user);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    delete user;
+    delete conn;
 }
 
 // Test 10: Concurrent hook invocations (stress test)
@@ -566,7 +595,13 @@ HOOKS = {'OnTimer': timer_handler}
     std::thread chat_thread([&]() {
         int count = 0;
         while (!stop_flag) {
-            g_py_plugin->OnParsedMsgChat("User", "Message " + std::to_string(count++));
+            cConnDC* tconn = CreateMockConnection("User");
+            cMessageDC tmsg;
+            tmsg.mType = eDC_CHAT;
+            tmsg.mStr = "<User> Message " + std::to_string(count++) + "|";
+            g_py_plugin->OnParsedMsgChat(tconn, &tmsg);
+            delete tconn->mpUser;
+            delete tconn;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
@@ -609,7 +644,7 @@ HOOKS = {'OnTimer': timer_handler}
     
     // Unload script
     std::cout << "--- Unloading script (should call cleanup) ---" << std::endl;
-    g_py_plugin->UnloadScript(script->id);
+    g_py_plugin->UnLoadScript(script->mScriptName);
     
     // Remove from our tracking
     auto it = std::find(test_scripts.begin(), test_scripts.end(), script);
@@ -842,16 +877,20 @@ HOOKS = {
     
     std::cout << "\n--- Simulating user login/logout ---" << std::endl;
     
-    for (int i = 0; i < 5; i++) {
-        std::string nick = "User" + std::to_string(i);
-        g_py_plugin->OnUserLogin(nick);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
+    std::vector<cUser*> test_users;
     
     for (int i = 0; i < 5; i++) {
         std::string nick = "User" + std::to_string(i);
-        g_py_plugin->OnUserLogout(nick);
+        cUser* user = new cUser(nick);
+        test_users.push_back(user);
+        g_py_plugin->OnUserLogin(user);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    
+    for (auto* user : test_users) {
+        g_py_plugin->OnUserLogout(user);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        delete user;
     }
 }
 
@@ -880,15 +919,30 @@ HOOKS = {'OnParsedMsgChat': chat_handler}
     
     std::cout << "\n--- Testing chat filtering ---" << std::endl;
     
+    // Create connections
+    cConnDC* alice_conn = CreateMockConnection("Alice");
+    cConnDC* spammer_conn = CreateMockConnection("Spammer");
+    
     // Normal message - both should see it
     std::cout << "--- Normal message ---" << std::endl;
-    g_py_plugin->OnParsedMsgChat("Alice", "Hello everyone!");
+    cMessageDC msg1;
+    msg1.mType = eDC_CHAT;
+    msg1.mStr = "<Alice> Hello everyone!|";
+    g_py_plugin->OnParsedMsgChat(alice_conn, &msg1);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // Spam message - only filter should see it
     std::cout << "--- Spam message (Logger should NOT see this) ---" << std::endl;
-    g_py_plugin->OnParsedMsgChat("Spammer", "BUY SPAM NOW!");
+    cMessageDC msg2;
+    msg2.mType = eDC_CHAT;
+    msg2.mStr = "<Spammer> BUY SPAM NOW!|";
+    g_py_plugin->OnParsedMsgChat(spammer_conn, &msg2);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    delete alice_conn->mpUser;
+    delete alice_conn;
+    delete spammer_conn->mpUser;
+    delete spammer_conn;
 }
 
 // Test 20: Dispatcher help command

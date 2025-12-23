@@ -34,10 +34,20 @@ import vh
 import sys
 import os
 import asyncio
-import threading
+threading
 import time
+import traceback
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+
+# Try to import dispatcher for single-interpreter mode
+try:
+    from dispatcher import register_script, unregister_script
+    USING_DISPATCHER = True
+except ImportError:
+    USING_DISPATCHER = False
+
+SCRIPT_ID = None
 
 # Try to find and add venv site-packages to path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -587,7 +597,48 @@ def is_api_running() -> bool:
 # Verlihub Event Hooks
 # =============================================================================
 
-def OnTimer(msec=0):
+def hub_api_supports_handler(ip, msg, back):
+    """Called when user sends $Supports message
+    
+    Args:
+        ip: User IP address
+        msg: The full $Supports message string
+        back: Response string (unused)
+    
+    Returns:
+        1 to allow the message to be processed normally
+    """
+    try:
+        # Extract nick from connection by IP (use GetNickList to find user)
+        nick_list = vh.GetNickList()
+        user_nick = None
+        
+        # Find the user with this IP
+        for nick in nick_list:
+            if vh.GetUserIP(nick) == ip:
+                user_nick = nick
+                break
+        
+        if user_nick:
+            # Parse support flags from message
+            # $Supports format: "$Supports FLAG1 FLAG2 FLAG3 ..."
+            if msg.startswith("$Supports "):
+                flags_str = msg[10:]  # Skip "$Supports "
+                flags = [f.strip() for f in flags_str.split() if f.strip()]
+                
+                # Store in cache
+                with support_flags_lock:
+                    support_flags_cache[user_nick] = flags
+                
+                print(f"[Hub API] Captured {len(flags)} support flags for {user_nick}: {flags}")
+    except Exception as e:
+        print(f"[Hub API] Error in OnParsedMsgSupports: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return 1  # Allow message to be processed
+
+def hub_api_timer_handler(msec):
     """Update data cache periodically (runs in main thread)"""
     # Only update if API server is running
     if not server_running:
@@ -602,19 +653,22 @@ def OnTimer(msec=0):
     update_data_cache()
     return 1
 
-def OnUserLogin(nick):
-    """Update cache when user logs in (runs in main thread)"""
+def hub_api_login_handler(nick):
+    """Update cache when user logs in (runs in main thread)
+    
+    Also proactively schedules network diagnostics for the user's IP
+    """
     if server_running:
         update_data_cache()
     return 1
 
-def OnUserLogout(nick):
+def hub_api_logout_handler(nick):
     """Update cache when user logs out (runs in main thread)"""
     if server_running:
         update_data_cache()
     return 1
 
-def OnHubCommand(nick, command, user_class, in_pm, prefix):
+def hub_api_command_handler(nick, command, user_class, in_pm, prefix):
     """Handle hub commands
     
     IMPORTANT: Return value logic (Python -> C++ -> Verlihub core):
@@ -716,7 +770,7 @@ Requirements:
     
     return 0  # Command handled
 
-def UnLoad():
+def hub_api_cleanup():
     """Cleanup when script unloads"""
     global server_running
     
@@ -726,6 +780,40 @@ def UnLoad():
         server_running = False
     
     print("Hub API script unloaded")
+
+# =============================================================================
+# Hook Registration
+# =============================================================================
+
+HOOKS = {
+    'OnTimer': hub_api_timer_handler,
+    'OnParsedMsgSupports': hub_api_supports_handler,
+    'OnUserLogin': hub_api_login_handler,
+    'OnUserLogout': hub_api_logout_handler,
+    'OnHubCommand': hub_api_command_handler
+}
+
+if USING_DISPATCHER:
+    SCRIPT_ID = register_script(
+        script_name="HubAPI",
+        hooks=HOOKS,
+        cleanup=hub_api_cleanup,
+        priority=100
+    )
+    print(f"[Hub API] Registered with dispatcher, ID={SCRIPT_ID}")
+else:
+    # Sub-interpreter mode: assign hooks globally
+    OnTimer = hub_api_timer_handler
+    OnParsedMsgSupports = hub_api_supports_handler
+    OnUserLogin = hub_api_login_handler
+    OnUserLogout = hub_api_logout_handler
+    OnHubCommand = hub_api_command_handler
+
+def UnLoad():
+    """Cleanup on script unload"""
+    if USING_DISPATCHER and SCRIPT_ID is not None:
+        unregister_script(SCRIPT_ID)
+    hub_api_cleanup()
 
 # =============================================================================
 # Initialization

@@ -6,7 +6,16 @@ This directory contains example Python scripts demonstrating the capabilities of
 
 - [Important: Thread Safety](#important-thread-safety)
 - [Scripts](#scripts)
+  - [dispatcher.py - Hook Dispatcher](#dispatcherpy---hook-dispatcher)
   - [hub_api.py - REST API Server](#hub_apipy---rest-api-server)
+  - [matterbridge.py - Chat Bridge Connector](#matterbridgepy---chat-bridge-connector)
+  - [email_digest.py - Email Digest Reporter](#email_digestpy---email-digest-reporter)
+- [Loading Multiple Scripts](#loading-multiple-scripts)
+  - [Quick Start](#quick-start)
+  - [How It Works](#how-it-works)
+  - [Integration Guide](#integration-guide)
+  - [Admin Commands](#admin-commands)
+  - [Troubleshooting](#troubleshooting-dispatcher)
 - [Installation](#installation)
   - [Using Virtual Environment (Recommended)](#using-virtual-environment-recommended)
   - [System-wide Installation](#system-wide-installation)
@@ -78,6 +87,57 @@ Many popular Python packages **will not work** in sub-interpreter mode due to:
 | Heavy threading/asyncio | Single-interpreter | Threading stability |
 | Need script isolation | Sub-interpreter | Namespace safety |
 | Multiple users editing scripts | Sub-interpreter | Independent reload |
+| **Loading multiple scripts** | **Single-interpreter + Dispatcher** | **Avoid hook collisions** |
+
+### Loading Multiple Scripts in Single-Interpreter Mode
+
+When running multiple scripts in single-interpreter mode, **hook function collisions** occur because all scripts share the same global namespace. If both `hub_api.py` and `matterbridge.py` define `OnTimer()`, the last loaded script's function overwrites the previous one.
+
+**Solution: Use the Hook Dispatcher**
+
+The `verlihub_hook_dispatcher.py` script provides a centralized hook registration system:
+
+1. **Load dispatcher first**: `!pyload verlihub_hook_dispatcher.py`
+2. **Scripts register their hooks** instead of defining global `OnTimer`, `OnParsedMsgChat`, etc.
+3. **Dispatcher calls all registered handlers** when events occur
+
+**Quick Integration Pattern:**
+```python
+# At top of your script
+try:
+    from verlihub_hook_dispatcher import register_script, unregister_script
+    USING_DISPATCHER = True
+except ImportError:
+    USING_DISPATCHER = False
+
+SCRIPT_ID = None
+
+# Use unique function names (not OnTimer, OnParsedMsgChat, etc.)
+def my_script_timer_handler(msec=0):
+    # Your timer logic
+    return 1
+
+# Register at module load time
+if USING_DISPATCHER:
+    SCRIPT_ID = register_script(
+        script_name="MyScript",
+        hooks={"OnTimer": my_script_timer_handler},
+        cleanup=my_cleanup_function
+    )
+else:
+    OnTimer = my_script_timer_handler  # Sub-interpreter mode
+
+def UnLoad():
+    if USING_DISPATCHER:
+        unregister_script(SCRIPT_ID)
+```
+
+**See `DISPATCHER_USAGE.md` for complete documentation** including:
+- Step-by-step integration guide
+- Real-world examples (hub_api.py, matterbridge.py, email_digest.py)
+- Priority system for execution order
+- Admin commands (!dispatcher list, !dispatcher stats)
+- Troubleshooting common pitfalls
 
 ### Thread Safety
 
@@ -101,9 +161,9 @@ The Verlihub C++ API was not designed with thread-safety in mind. When Python sc
 
 ### Safe Patterns
 
-The hub_api.py example script demonstrates thread-safe patterns to work around this limitation:
+Both example scripts demonstrate thread-safe patterns to work around this limitation:
 
-#### Pattern 1: Queue-Based Message Passing
+#### Pattern 1: Queue-Based Message Passing (matterbridge.py)
 
 ```python
 from queue import Queue
@@ -259,6 +319,49 @@ The thread safety limitation (vh module not callable from background threads) ex
 
 ## Scripts
 
+### dispatcher.py - Hook Dispatcher
+
+**Purpose**: Enables multiple Python scripts to coexist in single-interpreter mode by providing centralized hook registration and dispatching.
+
+**The Problem**: In single-interpreter mode, all scripts share the same global namespace. If multiple scripts define `OnTimer()`, `OnParsedMsgChat()`, etc., the last loaded script's functions overwrite the previous ones - only the final script's hooks actually execute.
+
+**The Solution**: The dispatcher owns the global hook definitions and dispatches events to all registered scripts based on their registered handlers.
+
+**Key Features**:
+- Central hook registration system for multiple scripts
+- Priority-based execution ordering (lower numbers run first)
+- Enable/disable scripts at runtime without unloading
+- Statistics tracking (total calls, failed calls per hook)
+- Admin commands for monitoring and control
+- Thread-safe operation with locks
+- Backward compatible with sub-interpreter mode
+
+**Supported Hooks**:
+- `OnTimer`, `OnParsedMsgChat`, `OnParsedMsgPM`, `OnParsedMsgSearch`
+- `OnParsedMsgSR`, `OnParsedMsgMyINFO`, `OnParsedMsgValidateNick`
+- `OnParsedMsgConnectToMe`, `OnParsedMsgRevConnectToMe`, `OnParsedMsgSupports`
+- `OnUserLogin`, `OnUserLogout`, `OnUserDisconnected`
+- `OnNewConn`, `OnCloseConn`, `OnHubCommand`, `OnOperatorCommand`
+- `OnOperatorKicks`, `OnOperatorDrops`, `OnValidateTag`
+- `OnUserInList`, `OnUnknownMsg`, `OnFlood`
+
+**Admin Commands**:
+```bash
+!dispatcher list                 # Show all registered scripts
+!dispatcher stats                # Show hook statistics
+!dispatcher enable <id>          # Enable a script
+!dispatcher disable <id>         # Disable a script
+!dispatcher help                 # Show help
+```
+
+**Integration**: All example scripts (hub_api.py, matterbridge.py, email_digest.py) automatically detect and use the dispatcher when available. See [Loading Multiple Scripts](#loading-multiple-scripts) section below.
+
+**When to Use**:
+- ✅ Running multiple scripts in single-interpreter mode
+- ✅ Need execution order control (priority system)
+- ✅ Want runtime enable/disable without reloading
+- ❌ Sub-interpreter mode (not needed - each script isolated)
+
 ### hub_api.py - REST API Server
 
 A comprehensive FastAPI-based HTTP REST API server that exposes Verlihub hub information through HTTP endpoints with advanced network diagnostics capabilities.
@@ -344,12 +447,7 @@ The API automatically configures CORS (Cross-Origin Resource Sharing) to allow r
 
 **HTML/JavaScript Dashboard:**
 
-Two dashboard versions are included:
-
-- **`verlihub_client.html`** - Standalone HTML file that can be opened directly in a browser
-- **`verlihub_client_embed.html`** - Embeddable version that can be pasted into a webpage or web application without requiring an iframe. Works exactly the same as the standalone version.
-
-Both provide a full-featured interface for monitoring your hub through a web browser.
+A complete web-based dashboard is included as `verlihub_client.html`. This provides a full-featured interface for monitoring your hub through a web browser.
 
 **Dashboard Features:**
 - **Overview Tab**: Hub stats, user count, share size, uptime
@@ -367,14 +465,11 @@ Both provide a full-featured interface for monitoring your hub through a web bro
 
 1. **Configure API_BASE in the HTML file:**
 
-   Edit the dashboard file and update the `API_BASE` (or `VH_API_BASE` for embed version) constant to point to your API endpoint:
+   Edit `verlihub_client.html` and update the `API_BASE` constant to point to your API endpoint:
 
    ```javascript
-   // In verlihub_client.html (line ~112)
+   // Line ~112 in verlihub_client.html
    const API_BASE = 'http://localhost:8000';  // Change this!
-   
-   // In verlihub_client_embed.html (line ~119)
-   const VH_API_BASE = '/verlihub-api';  // Change this!
    ```
 
    Examples:
@@ -398,21 +493,13 @@ Both provide a full-featured interface for monitoring your hub through a web bro
 
 3. **Open the dashboard in your browser:**
 
-   **Standalone version (`verlihub_client.html`):**
    ```
-   # Open directly from filesystem
    file:///path/to/verlihub_client.html
-   
-   # Or serve via web server
-   http://yourhub.com/verlihub_client.html
    ```
    
-   **Embeddable version (`verlihub_client_embed.html`):**
-   ```html
-   <!-- Paste the entire contents into your webpage -->
-   <div id="hub-dashboard-container">
-     <!-- Paste verlihub_client_embed.html contents here -->
-   </div>
+   Or serve it via web server:
+   ```
+   http://yourhub.com/verlihub_client.html
    ```
 
 **Using a Reverse Proxy (Recommended for Production):**
@@ -959,6 +1046,462 @@ def robust_decode(text, primary_encoding='cp1251'):
 
 ---
 
+### matterbridge.py - Chat Bridge Connector
+
+Bidirectional chat bridge connecting Verlihub with Matterbridge, enabling integration with Mattermost, Slack, IRC, Discord, Telegram, Matrix, and many other platforms.
+
+**Features:**
+- Bidirectional message relay (Hub ↔ Matterbridge)
+- Thread-safe queue-based message passing
+- HTTP streaming for real-time updates
+- Automatic reconnection with exponential backoff
+- User class filtering (only relay messages from certain user levels)
+- Nickname filtering (ignore messages from specific users)
+- Configurable message formats
+
+**Supported Platforms (via Matterbridge):**
+- Mattermost
+- Slack
+- Discord
+- IRC
+- Telegram
+- Matrix
+- Microsoft Teams
+- Rocket.Chat
+- Gitter
+- XMPP
+- Zulip
+- And many more...
+
+**Admin Commands:**
+```
+!bridge start              - Start Matterbridge connection
+!bridge stop               - Stop Matterbridge connection
+!bridge status             - Check connection status
+!bridge config <url>       - Set Matterbridge API URL
+!bridge token <token>      - Set API authentication token
+!bridge gateway <name>     - Set gateway name
+!bridge channel <name>     - Set channel name
+!bridge help               - Show help with config examples
+```
+
+**Requirements:**
+```bash
+pip install requests
+```
+
+**Matterbridge Configuration:**
+
+Add to your `matterbridge.toml`:
+
+```toml
+[api.verlihub]
+BindAddress="127.0.0.1:4242"
+Buffer=1000
+RemoteNickFormat="{NICK}"
+# Optional: Token="your_secret_token"
+
+[[gateway]]
+name="verlihub"
+enable=true
+
+[[gateway.inout]]
+account="api.verlihub"
+channel="api"
+```
+
+**Usage:**
+```bash
+# Load the script
+!pyload /path/to/scripts/matterbridge.py
+
+# Configure connection
+!bridge config http://localhost:4242/api/messages
+!bridge gateway verlihub
+!bridge channel api
+
+# Start bridging
+!bridge start
+```
+
+**Script Configuration:**
+
+The script has a `CONFIG` dictionary at the top that you can customize:
+
+```python
+CONFIG = {
+    "api_url": "http://localhost:4242",        # Matterbridge API URL
+    "api_token": "",                            # Optional authentication
+    "gateway": "verlihub",                      # Gateway name
+    "channel": "#general",                      # Channel name
+    "bot_nick": "[Bridge]",                     # Bot display name
+    "hub_to_bridge_format": "<{nick}> {message}",
+    "bridge_to_hub_format": "[{protocol}] <{username}> {text}",
+    "poll_interval": 0.5,                       # Polling frequency
+    "retry_interval": 5,                        # Retry delay
+    "max_retries": 10,                          # Max reconnection attempts
+    "ignore_nicks": [],                         # Nicks to filter
+    "min_class_to_send": 0,                     # Min user class (0=all)
+}
+```
+
+---
+
+### email_digest.py - Email Digest Reporter
+
+Sends periodic email digests containing chat logs and client connection statistics. Perfect for hub administrators who want to monitor activity without being online 24/7.
+
+**Features:**
+- **Chat Digest**: Buffer chat messages and email after inactivity period
+- **Client Statistics**: Track joins/quits and send periodic reports  
+- **Dual Digest System**: Separate recipient lists for chat vs stats
+- **Inactivity-based Sending**: Only emails chat logs after configurable quiet period
+- **Activity-based Sending**: Only emails stats if there was client activity
+- **Thread-safe Buffering**: Safe concurrent access to message buffers
+- **HTML Email Formatting**: Professional formatted reports
+- **SMTP Authentication**: Supports TLS and authentication
+- **Admin Commands**: Manual trigger, status checks, and configuration
+
+**Chat Digest Behavior:**
+- Buffers all main chat messages with timestamps and nicknames
+- After N minutes of inactivity (no new messages), sends email digest
+- Clears buffer after sending
+- If buffer is empty, doesn't send anything
+- Configurable message limit to prevent memory issues
+
+**Client Statistics Behavior:**
+- Tracks every user join and quit event
+- Counts multiple joins/quits per user
+- Collects geographic information (country codes)
+- Records client software versions
+- Tracks share sizes (total and average)
+- Optionally includes IP addresses
+- After N minutes, sends statistics email and resets counters
+- Only sends if there was activity (joins or quits)
+- Shows last seen timestamp for each client
+- Aggregates data: unique countries, client versions, total share
+
+**Admin Commands:**
+```
+!digest status             - Show current buffer status
+!digest chat send          - Immediately send chat digest
+!digest chat clear         - Clear chat buffer without sending
+!digest stats send         - Immediately send client statistics
+!digest stats clear        - Clear client statistics
+!digest config             - Show SMTP and timing configuration
+!digest test <email>       - Send test email to verify setup
+```
+
+**Requirements:**
+```bash
+# Built-in Python modules only (smtplib, email.mime)
+# No additional dependencies needed
+```
+
+**Configuration:**
+
+Edit the `CONFIG` dictionary at the top of the script:
+
+```python
+CONFIG = {
+    # Email server settings
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "smtp_use_tls": True,
+    "smtp_username": "your-email@gmail.com",
+    "smtp_password": "your-app-password",      # Use app password for Gmail
+    "from_address": "your-email@gmail.com",
+    
+    # Recipients
+    "chat_recipients": ["admin@example.com", "moderator@example.com"],
+    "stats_recipients": ["admin@example.com"],
+    
+    # Chat digest settings
+    "chat_inactivity_minutes": 15,   # Email after 15 min of quiet chat
+    "chat_max_messages": 1000,       # Buffer size limit
+    
+    # Client stats settings
+    "stats_interval_minutes": 60,    # Email stats every 60 minutes
+    "stats_include_ips": False,      # Include IP addresses in report
+    "stats_include_geo": True,       # Include country codes
+    "stats_include_clients": True,   # Include client software versions
+    "stats_include_share": True,     # Include share size information
+    "stats_detailed": False,         # Show all data vs just latest values
+    
+    # General settings
+    "hub_name": "My Verlihub Hub",
+    "timezone": "UTC",
+}
+```
+
+**Gmail Setup:**
+
+For Gmail SMTP, you need an "App Password" (not your regular password):
+
+1. Enable 2-factor authentication on your Google account
+2. Go to: https://myaccount.google.com/apppasswords
+3. Generate an app password for "Mail"
+4. Use this password in the `smtp_password` field
+
+**Usage:**
+```bash
+# Load the script
+!pyload /path/to/scripts/email_digest.py
+
+# Check status
+!digest status
+
+# Test email delivery (replace with your actual email)
+!digest test your-email@example.com
+
+# Manually trigger digests
+!digest chat send
+!digest stats send
+```
+
+**Troubleshooting:**
+
+If commands don't work:
+1. Check you have operator privileges (class 10+): `!myinfo`
+2. Check the script loaded: `!pylist`
+3. Look for debug output in hub console showing command received
+4. Verify command prefix matches hub config (usually `!` or `+`)
+5. Try reloading: `!pyreload email_digest`
+
+**Example Chat Digest Email:**
+```
+Subject: [My Hub] Chat Digest - 45 messages
+
+Chat Digest for My Hub
+Period: 2025-12-15 10:00:00 to 2025-12-15 10:14:30
+Messages: 45
+
+================================================================================
+
+[2025-12-15 10:00:15] <Alice> Hey everyone!
+[2025-12-15 10:00:42] <Bob> Hi Alice, how's it going?
+[2025-12-15 10:01:05] <Alice> Great! Just sharing some files
+...
+```
+
+**Example Client Statistics Email:**
+```
+Subject: [My Hub] Client Statistics - 12 clients
+
+Client Statistics for My Hub  
+Period: 2025-12-15 09:00:00 to 2025-12-15 10:00:00
+Duration: 60.0 minutes
+
+Total Joins: 18
+Total Quits: 15
+Unique Clients: 12
+Countries: 5 (DE, FR, GB, NL, US)
+Client Software: 8 different versions
+Total Share: 15.3 TB
+Average Share: 1.28 TB
+
+================================================================================
+
+Client               Joins   Quits   Country  Share        Client Version                 Last Seen           
+----------------------------------------------------------------------------------------------------------------------------
+Alice                3       2       US       2.5 TB       DC++ 0.868                     2025-12-15 09:55:23
+Bob                  2       2       GB       1.8 TB       AirDC++ 4.21                   2025-12-15 09:48:10
+Charlie              1       1       DE       850 GB       EiskaltDC++ 2.4.2              2025-12-15 09:30:45
+...
+```
+
+---
+
+## Loading Multiple Scripts
+
+### Quick Start
+
+All example scripts (hub_api.py, matterbridge.py, email_digest.py) automatically detect and use the dispatcher when available, allowing them to run simultaneously in single-interpreter mode.
+
+#### Step 1: Load the Dispatcher First
+
+```bash
+!pyload /path/to/dispatcher.py
+```
+
+**Important**: The dispatcher MUST be loaded before any other scripts that use it.
+
+#### Step 2: Load Your Scripts (Any Order)
+
+```bash
+!pyload /path/to/hub_api.py
+!pyload /path/to/matterbridge.py
+!pyload /path/to/email_digest.py
+```
+
+#### Step 3: Verify Registration
+
+```bash
+!dispatcher list
+```
+
+Expected output:
+```
+=== Registered Scripts ===
+ID=1: HubAPI (enabled) - 5 hooks, priority=100
+ID=2: Matterbridge (enabled) - 3 hooks, priority=100
+ID=3: EmailDigest (enabled) - 5 hooks, priority=100
+```
+
+### How It Works
+
+The dispatcher pattern allows multiple scripts to coexist by:
+
+1. **Central Hook Ownership**: Dispatcher defines global `OnTimer()`, `OnParsedMsgChat()`, etc.
+2. **Script Registration**: Each script registers its handlers with unique names (e.g., `hub_api_timer_handler`)
+3. **Event Dispatching**: When Verlihub calls `OnTimer()`, dispatcher calls all registered handlers
+4. **Automatic Detection**: Scripts detect dispatcher presence and adapt accordingly
+
+**Compatibility**: The same script code works in **both modes**:
+- ✅ **Single-interpreter + dispatcher**: Multiple scripts coexist without conflicts
+- ✅ **Sub-interpreter mode**: Each script isolated (dispatcher not needed)
+
+### Integration Guide
+
+If you're writing a custom script that needs to work with the dispatcher:
+
+```python
+#!/usr/bin/env python3
+"""Your Script"""
+import vh
+import threading
+
+# Try to import dispatcher for single-interpreter mode
+try:
+    from dispatcher import register_script, unregister_script
+    USING_DISPATCHER = True
+except ImportError:
+    USING_DISPATCHER = False
+
+SCRIPT_ID = None
+
+# Define hook handlers with unique names (not OnTimer, OnParsedMsgChat, etc.)
+def my_script_timer_handler(msec=0):
+    """Timer handler for my script"""
+    # Your timer logic here
+    return 1
+
+def my_script_chat_handler(nick, message):
+    """Chat handler for my script"""
+    # Your chat logic here
+    return 1
+
+# Define cleanup function
+def cleanup():
+    """Cleanup when script unloads"""
+    # Stop threads, close files, etc.
+    pass
+
+# Register hooks or use globals based on dispatcher availability
+HOOKS = {
+    'OnTimer': my_script_timer_handler,
+    'OnParsedMsgChat': my_script_chat_handler,
+    # Add all hooks your script needs
+}
+
+if USING_DISPATCHER:
+    # Single-interpreter mode - register with dispatcher
+    SCRIPT_ID = register_script(
+        script_name="MyScript",
+        hooks=HOOKS,
+        cleanup=cleanup,
+        priority=100  # Optional: lower numbers run first
+    )
+    print(f"[MyScript] Registered with dispatcher (ID={SCRIPT_ID})")
+else:
+    # Sub-interpreter mode - use global hook names
+    OnTimer = my_script_timer_handler
+    OnParsedMsgChat = my_script_chat_handler
+    print("[MyScript] Running in sub-interpreter mode")
+
+# Verlihub UnLoad hook
+def UnLoad():
+    """Called when Verlihub unloads the script"""
+    if USING_DISPATCHER:
+        unregister_script(SCRIPT_ID)
+    else:
+        cleanup()
+```
+
+### Admin Commands
+
+Once the dispatcher is loaded:
+
+```bash
+!dispatcher list                 # Show all registered scripts
+!dispatcher stats                # Show hook call statistics
+!dispatcher enable <id>          # Enable a disabled script
+!dispatcher disable <id>         # Disable a script temporarily
+!dispatcher help                 # Show all commands
+```
+
+### Priority System
+
+Control execution order with the priority parameter (default=100):
+
+- **Lower numbers execute FIRST** (e.g., priority=10 runs before priority=100)
+- Useful when order matters (e.g., cache updater before message relays)
+
+```python
+SCRIPT_ID = register_script(
+    script_name="CriticalScript",
+    hooks=HOOKS,
+    priority=10  # Runs before default (100)
+)
+```
+
+### Hook Return Values
+
+Follow Verlihub conventions:
+- **return 1**: Allow/pass the event to other scripts
+- **return 0**: Block/consume the event (stops further processing)
+
+If any script returns 0, the dispatcher stops calling remaining handlers and returns 0 to Verlihub.
+
+### <a name="troubleshooting-dispatcher"></a>Troubleshooting
+
+**Problem**: Scripts not receiving hooks
+
+**Solution**: Dispatcher must be loaded FIRST
+```bash
+!pylist  # Check load order
+# If dispatcher is not first, reload:
+!pyunload hub_api.py
+!pyload /path/to/dispatcher.py
+!pyload /path/to/hub_api.py
+```
+
+**Problem**: `ImportError: No module named 'dispatcher'`
+
+**Solution**: Dispatcher must be in Python's import path:
+1. Load it first (Verlihub adds loaded scripts to sys.path)
+2. Or put it in the same directory as your scripts
+
+**Problem**: Hook collisions still occur
+
+**Symptoms**:
+- Only last loaded script's hooks execute
+- Other scripts silently ignored
+- No error messages
+
+**Verification**:
+```bash
+!dispatcher list  # Should show all scripts
+!dispatcher stats # Should show calls incrementing
+```
+
+**Solution**: Make sure:
+1. Dispatcher loaded first: `!pylist` should show dispatcher.py at top
+2. Scripts detect dispatcher: Look for "Registered with dispatcher" in output
+3. Using single-interpreter mode: `grep PYTHON_SINGLE_INTERPRETER build/config.h`
+
+---
+
 ## Installation
 
 ### Using Virtual Environment (Recommended)
@@ -973,11 +1516,8 @@ python3 -m venv venv
 # Activate virtual environment
 source venv/bin/activate
 
-# Install dependencies for hub_api.py
-pip install fastapi uvicorn
-
-# Optional: Install network diagnostics dependencies
-pip install gufo-traceroute python-nmap icmplib
+# Install dependencies
+pip install fastapi uvicorn requests
 
 # Deactivate when done
 deactivate
@@ -988,10 +1528,7 @@ The scripts automatically detect and use the virtual environment if present.
 ### System-wide Installation
 
 ```bash
-pip install fastapi uvicorn
-
-# Optional: Install network diagnostics dependencies
-pip install gufo-traceroute python-nmap icmplib
+pip install fastapi uvicorn requests
 ```
 
 ## Development
@@ -1076,6 +1613,7 @@ When creating new Python scripts for Verlihub:
 
 For complete Python plugin documentation, see:
 - [Main README](../README.md) - Full Python plugin documentation
+- [Verlihub Wiki](https://github.com/42wim/matterbridge/wiki) - Matterbridge documentation
 - [FastAPI Docs](https://fastapi.tiangolo.com/) - FastAPI documentation
 
 ## Contributing

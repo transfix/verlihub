@@ -1613,7 +1613,7 @@ When creating new Python scripts for Verlihub:
 
 For complete Python plugin documentation, see:
 - [Main README](../README.md) - Full Python plugin documentation
-- [Verlihub Wiki](https://github.com/42wim/matterbridge/wiki) - Matterbridge documentation
+- [Matterbridge Wiki](https://github.com/42wim/matterbridge/wiki) - Matterbridge documentation
 - [FastAPI Docs](https://fastapi.tiangolo.com/) - FastAPI documentation
 
 ## Contributing

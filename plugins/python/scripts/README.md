@@ -139,6 +139,100 @@ def UnLoad():
 - Admin commands (!dispatcher list, !dispatcher stats)
 - Troubleshooting common pitfalls
 
+#### ⚠️ Critical: Global Function Collisions in Single-Interpreter Mode
+
+**The Problem**: When you load multiple scripts that use the dispatcher in single-interpreter mode, you MUST NOT define global hook functions (`OnTimer`, `OnParsedMsgChat`, `OnLoad`, `UnLoad`, etc.) in your scripts. These will overwrite the dispatcher's own global hook functions, breaking the entire dispatching system.
+
+**What Breaks:**
+
+```python
+# ❌ WRONG - This overwrites dispatcher's OnTimer!
+def OnTimer(msec=0):
+    return my_script_timer_handler(msec)
+
+# ❌ WRONG - This overwrites dispatcher's UnLoad!
+def UnLoad():
+    cleanup()
+```
+
+**Why It Happens**: In single-interpreter mode, all scripts share the same global namespace (`globals()`). When your script defines `OnTimer()`, it replaces the dispatcher's `OnTimer()` function. Now Verlihub calls YOUR OnTimer instead of the dispatcher's, and none of the registered scripts receive timer events anymore.
+
+**The Correct Pattern:**
+
+```python
+# ✅ CORRECT - Use unique function names
+def my_script_timer_handler(msec=0):
+    # Your timer logic
+    return 1
+
+# ✅ CORRECT - Register with dispatcher (no global hooks)
+if USING_DISPATCHER:
+    SCRIPT_ID = register_script(
+        script_name="MyScript",
+        hooks={"OnTimer": my_script_timer_handler},
+        cleanup=my_cleanup_function  # Cleanup passed as parameter
+    )
+    # DO NOT define global UnLoad() - dispatcher handles it
+else:
+    # Only in sub-interpreter mode (no dispatcher)
+    OnTimer = my_script_timer_handler
+    def UnLoad():
+        my_cleanup_function()
+```
+
+**Special Case - UnLoad() Function:**
+
+The `UnLoad()` function deserves special attention because it's tempting to define it globally for cleanup:
+
+```python
+# ❌ WRONG - Overwrites dispatcher's UnLoad!
+def UnLoad():
+    if USING_DISPATCHER:
+        unregister_script(SCRIPT_ID)
+    my_cleanup_function()
+
+# ✅ CORRECT - Only define UnLoad in sub-interpreter mode
+if not USING_DISPATCHER:
+    def UnLoad():
+        my_cleanup_function()
+# In dispatcher mode, cleanup happens via the cleanup parameter passed to register_script()
+```
+
+**What Happens If You Get This Wrong:**
+
+1. **Symptom**: Only one script receives hooks, others are silent
+2. **Symptom**: Dispatcher commands stop working (`!dispatcher list` shows nothing)
+3. **Symptom**: All registered scripts disappear when one script unloads
+4. **Root cause**: Your script's global `OnTimer`/`UnLoad`/etc. replaced the dispatcher's functions
+
+**How to Avoid:**
+
+- ✅ Use unique function names for ALL hook handlers
+- ✅ Pass cleanup function as parameter to `register_script()`
+- ✅ Only define global hooks in the `else` branch (sub-interpreter mode)
+- ✅ Test with `!dispatcher list` after loading - should show all scripts
+- ❌ NEVER define global `OnTimer`, `OnParsedMsgChat`, `OnLoad`, `UnLoad`, etc. when using dispatcher
+
+**Testing Your Script:**
+
+```bash
+# Load dispatcher first
+!pyload dispatcher.py
+
+# Load your script
+!pyload my_script.py
+
+# Verify registration succeeded
+!dispatcher list
+# Should show: "ID=1: MyScript (enabled) - X hooks, priority=100"
+
+# Verify hooks work
+!dispatcher stats
+# After some events, should show increasing call counts
+```
+
+If `!dispatcher list` shows nothing or only your script (not the dispatcher), you've overwritten the dispatcher's global functions - fix your script to follow the correct pattern above.
+
 ### Thread Safety
 
 **⚠️ CRITICAL: The `vh` module is NOT thread-safe and must only be called from the main Verlihub thread.**

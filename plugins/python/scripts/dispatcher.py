@@ -98,6 +98,16 @@ import traceback
 from typing import Dict, Callable, Any, Optional, Set
 from collections import defaultdict
 
+# Import vh module (available when loaded by Verlihub)
+try:
+    import vh
+except ImportError:
+    # When testing standalone, create a mock
+    class MockVH:
+        def pm(self, msg, nick): 
+            print(f"[PM to {nick}] {msg}")
+    vh = MockVH()
+
 # =============================================================================
 # Global Registry
 # =============================================================================
@@ -405,10 +415,6 @@ def OnCloseConn(ip):
     """Connection closed"""
     return _dispatch_hook("OnCloseConn", ip)
 
-def OnHubCommand(nick, command, user_class, in_pm, prefix):
-    """Hub command received"""
-    return _dispatch_hook("OnHubCommand", nick, command, user_class, in_pm, prefix)
-
 def OnOperatorCommand(nick, command, user_class, in_pm):
     """Operator command received"""
     return _dispatch_hook("OnOperatorCommand", nick, command, user_class, in_pm)
@@ -443,99 +449,101 @@ def OnFlood(nick, message):
 
 def OnHubCommand(nick, command, user_class, in_pm, prefix):
     """Handle dispatcher admin commands"""
-    # First dispatch to registered scripts
-    result = _dispatch_hook("OnHubCommand", nick, command, user_class, in_pm, prefix)
-    if result == 0:
-        return 0  # Command was handled by a script
-    
     # Handle dispatcher-specific commands
     parts = command.split()
-    if not parts or parts[0] != "dispatcher":
-        return 1  # Not our command
+    if parts and parts[0] == "dispatcher":
+        # Check permissions
+        if user_class < 10:  # Master only
+            try:
+                vh.pm("Permission denied. Master class required.", nick)
+            except:
+                pass
+            return 0
+        
+        if len(parts) < 2:
+            try:
+                vh.pm("Usage: !dispatcher [list|stats|enable|disable|help]", nick)
+            except:
+                pass
+            return 0
+        
+        subcmd = parts[1].lower()
+        
+        if subcmd == "list":
+            scripts = list_scripts()
+            try:
+                vh.pm(f"Registered Scripts ({len(scripts)}):", nick)
+                for sid, info in scripts.items():
+                    status = "✓" if info["enabled"] else "✗"
+                    vh.pm(f"  [{status}] ID={sid}: {info['name']} ({len(info['hooks'])} hooks, priority={info['priority']})", nick)
+            except:
+                pass
+        
+        elif subcmd == "stats":
+            stats = get_stats()
+            try:
+                vh.pm("Dispatcher Statistics:", nick)
+                vh.pm(f"  Total scripts: {stats['total_scripts']}", nick)
+                vh.pm(f"  Active scripts: {stats['active_scripts']}", nick)
+                vh.pm(f"  Disabled scripts: {stats['disabled_scripts']}", nick)
+                vh.pm(f"  Hook calls:", nick)
+                for hook, count in sorted(stats['total_calls'].items()):
+                    failed = stats['failed_calls'].get(hook, 0)
+                    vh.pm(f"    {hook}: {count} calls ({failed} failed)", nick)
+            except:
+                pass
+        
+        elif subcmd == "enable" and len(parts) > 2:
+            try:
+                script_id = int(parts[2])
+                if enable_script(script_id):
+                    vh.pm(f"Script ID {script_id} enabled", nick)
+                else:
+                    vh.pm(f"Script ID {script_id} not found", nick)
+            except ValueError:
+                vh.pm("Invalid script ID", nick)
+            except:
+                pass
+        
+        elif subcmd == "disable" and len(parts) > 2:
+            try:
+                script_id = int(parts[2])
+                if disable_script(script_id):
+                    vh.pm(f"Script ID {script_id} disabled", nick)
+                else:
+                    vh.pm(f"Script ID {script_id} not found", nick)
+            except ValueError:
+                vh.pm("Invalid script ID", nick)
+            except:
+                pass
+        
+        elif subcmd == "help":
+            try:
+                vh.pm("Dispatcher Commands:", nick)
+                vh.pm("  !dispatcher list           - List all registered scripts", nick)
+                vh.pm("  !dispatcher stats          - Show dispatcher statistics", nick)
+                vh.pm("  !dispatcher enable <id>    - Enable a script", nick)
+                vh.pm("  !dispatcher disable <id>   - Disable a script", nick)
+                vh.pm("  !dispatcher help           - Show this help", nick)
+            except:
+                pass
+        
+        else:
+            try:
+                vh.pm(f"Unknown subcommand: {subcmd}", nick)
+            except:
+                pass
+        
+        return 0  # Dispatcher command handled
     
-    # Check permissions
-    if user_class < 10:  # Master only
-        try:
-            vh.pm("Permission denied. Master class required.", nick)
-        except:
-            pass
-        return 0
-    
-    if len(parts) < 2:
-        try:
-            vh.pm("Usage: !dispatcher [list|stats|enable|disable|help]", nick)
-        except:
-            pass
-        return 0
-    
-    subcmd = parts[1].lower()
-    
-    if subcmd == "list":
-        scripts = list_scripts()
-        try:
-            vh.pm(f"Registered Scripts ({len(scripts)}):", nick)
-            for sid, info in scripts.items():
-                status = "✓" if info["enabled"] else "✗"
-                vh.pm(f"  [{status}] ID={sid}: {info['name']} ({len(info['hooks'])} hooks, priority={info['priority']})", nick)
-        except:
-            pass
-    
-    elif subcmd == "stats":
-        stats = get_stats()
-        try:
-            vh.pm("Dispatcher Statistics:", nick)
-            vh.pm(f"  Total scripts: {stats['total_scripts']}", nick)
-            vh.pm(f"  Active scripts: {stats['active_scripts']}", nick)
-            vh.pm(f"  Disabled scripts: {stats['disabled_scripts']}", nick)
-            vh.pm(f"  Hook calls:", nick)
-            for hook, count in sorted(stats['total_calls'].items()):
-                failed = stats['failed_calls'].get(hook, 0)
-                vh.pm(f"    {hook}: {count} calls ({failed} failed)", nick)
-        except:
-            pass
-    
-    elif subcmd == "enable" and len(parts) > 2:
-        try:
-            script_id = int(parts[2])
-            if enable_script(script_id):
-                vh.pm(f"Script ID {script_id} enabled", nick)
-            else:
-                vh.pm(f"Script ID {script_id} not found", nick)
-        except ValueError:
-            vh.pm("Invalid script ID", nick)
-        except:
-            pass
-    
-    elif subcmd == "disable" and len(parts) > 2:
-        try:
-            script_id = int(parts[2])
-            if disable_script(script_id):
-                vh.pm(f"Script ID {script_id} disabled", nick)
-            else:
-                vh.pm(f"Script ID {script_id} not found", nick)
-        except ValueError:
-            vh.pm("Invalid script ID", nick)
-        except:
-            pass
-    
-    elif subcmd == "help":
-        try:
-            vh.pm("Dispatcher Commands:", nick)
-            vh.pm("  !dispatcher list           - List all registered scripts", nick)
-            vh.pm("  !dispatcher stats          - Show dispatcher statistics", nick)
-            vh.pm("  !dispatcher enable <id>    - Enable a script", nick)
-            vh.pm("  !dispatcher disable <id>   - Disable a script", nick)
-            vh.pm("  !dispatcher help           - Show this help", nick)
-        except:
-            pass
-    
-    else:
-        try:
-            vh.pm(f"Unknown subcommand: {subcmd}", nick)
-        except:
-            pass
-    
-    return 0  # Command handled
+    # Not a dispatcher command, dispatch to registered scripts
+    return _dispatch_hook("OnHubCommand", nick, command, user_class, in_pm, prefix)
+
+def OnLoad(config_dir):
+    """Initialize the dispatcher when loaded"""
+    print("[Dispatcher] Loading hook dispatcher...")
+    print("[Dispatcher] Hook dispatcher ready")
+    return 1  # Success
 
 def UnLoad():
     """Cleanup when dispatcher unloads"""

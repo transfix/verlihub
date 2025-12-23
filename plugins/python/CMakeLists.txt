@@ -189,6 +189,12 @@ if(BUILD_PYTHON_TESTS)
             message(STATUS "[ !! ] libcurl not found; skipping hub_api stress test (install libcurl4-openssl-dev)")
         endif()
 
+        # Dispatcher test - validates hook dispatcher for multiple scripts
+        add_executable(test_dispatcher tests/test_dispatcher.cpp)
+        target_link_libraries(test_dispatcher test_utils GTest::gtest GTest::gtest_main pthread libverlihub_so vhapi_so libpython_pi_core libvh_python_wrapper)
+        target_compile_definitions(test_dispatcher PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}" SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+        add_test(NAME DispatcherTests COMMAND test_dispatcher)
+
         # Single interpreter mode tests (only built when option is enabled)
         if(PYTHON_USE_SINGLE_INTERPRETER)
             add_executable(test_single_interpreter tests/test_single_interpreter.cpp)
@@ -198,26 +204,42 @@ if(BUILD_PYTHON_TESTS)
         endif()
 
         # Add tests to CTest (enable_testing is called in root CMakeLists.txt)
-        add_test(NAME PythonWrapperTests COMMAND test_python_wrapper)
-        add_test(NAME PythonWrapperStressTests COMMAND test_python_wrapper_stress)
-        # Integration test exercises full TreatMsg pathway through Python plugin
-        add_test(NAME PythonPluginIntegrationTests COMMAND test_python_plugin_integration)
-        # Advanced types test exercises list/dict marshaling
-        add_test(NAME PythonAdvancedTypesTests COMMAND test_python_advanced_types)
-        # vh Module test - validates restored bidirectional API
-        add_test(NAME VHModuleTests COMMAND test_vh_module)
-        # Dynamic registration test - validates runtime function registration
-        add_test(NAME DynamicRegistrationTests COMMAND test_dynamic_registration)
-        # JSON marshaling test - validates RapidJSON integration
-        add_test(NAME JsonMarshalTests COMMAND test_json_marshal)
-        # JSON integration test - validates complex nested structures
-        add_test(NAME JsonIntegrationTests COMMAND test_json_integration)
-        # Sets and tuples test - validates Python set/tuple marshaling
-        add_test(NAME SetsTuplesTests COMMAND test_sets_tuples)
         
-        # Hub API stress test - validates concurrent API calls with message processing
+        # === UNIT TESTS ===
+        add_test(NAME PythonWrapperTests COMMAND test_python_wrapper)
+        set_tests_properties(PythonWrapperTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME PythonWrapperStressTests COMMAND test_python_wrapper_stress)
+        set_tests_properties(PythonWrapperStressTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME PythonAdvancedTypesTests COMMAND test_python_advanced_types)
+        set_tests_properties(PythonAdvancedTypesTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME VHModuleTests COMMAND test_vh_module)
+        set_tests_properties(VHModuleTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME DynamicRegistrationTests COMMAND test_dynamic_registration)
+        set_tests_properties(DynamicRegistrationTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME JsonMarshalTests COMMAND test_json_marshal)
+        set_tests_properties(JsonMarshalTests PROPERTIES LABELS "unit")
+        
+        add_test(NAME SetsTuplesTests COMMAND test_sets_tuples)
+        set_tests_properties(SetsTuplesTests PROPERTIES LABELS "unit")
+        
+        # === INTEGRATION TESTS ===
+        add_test(NAME JsonIntegrationTests COMMAND test_json_integration)
+        set_tests_properties(JsonIntegrationTests PROPERTIES LABELS "integration")
+
+        add_test(NAME PythonPluginIntegrationTests COMMAND test_python_plugin_integration)
+        set_tests_properties(PythonPluginIntegrationTests PROPERTIES LABELS "integration")
+        
+        add_test(NAME DispatcherTests COMMAND test_dispatcher)
+        set_tests_properties(DispatcherTests PROPERTIES LABELS "integration")
+        
         if(CURL_FOUND)
             add_test(NAME HubApiStressTests COMMAND test_hub_api_stress)
+            set_tests_properties(HubApiStressTests PROPERTIES LABELS "integration")
         endif()
         
         message(STATUS "[ OK ] GTest and GMock found, building Python plugin tests")

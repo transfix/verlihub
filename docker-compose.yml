@@ -1,0 +1,85 @@
+# Verlihub Docker Compose Configuration
+# For development, testing, and integration testing with MySQL
+
+services:
+  # MySQL database
+  mysql:
+    image: mysql:8.0
+    container_name: verlihub-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: verlihub
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    ports:
+      - "3307:3306"  # Use 3307 to avoid conflicts with host MySQL
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - verlihub-net
+
+  # Verlihub server
+  verlihub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: verlihub-server
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub
+      VH_HUB_NAME: "Docker Test Hub"
+      VH_HUB_PORT: "4111"
+      VERLIHUB_PYTHON_VENV: /opt/verlihub-venv
+    ports:
+      - "4111:4111"   # DC++ hub port
+      - "8000:8000"   # FastAPI port
+    volumes:
+      - verlihub-config:/etc/verlihub
+      - verlihub-scripts:/usr/local/share/verlihub/scripts
+    networks:
+      - verlihub-net
+    restart: unless-stopped
+
+  # Integration test runner
+  test-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: builder  # Use builder stage with test tools
+    container_name: verlihub-tests
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub_test
+      CTEST_OUTPUT_ON_FAILURE: 1
+    volumes:
+      - ./:/src:ro
+    command: ["bash", "-c", "cd /src/build && ctest --output-on-failure"]
+    networks:
+      - verlihub-net
+    profiles:
+      - test  # Only run with: docker compose --profile test up
+
+volumes:
+  mysql-data:
+  verlihub-config:
+  verlihub-scripts:
+
+networks:
+  verlihub-net:
+    driver: bridge

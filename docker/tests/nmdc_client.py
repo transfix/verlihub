@@ -170,9 +170,9 @@ class NMDCClient:
         key = []
         for i in range(len(lock)):
             if i == 0:
-                key.append(lock[0] ^ lock[-1] ^ lock[-2] ^ 5)
+                key.append(ord(lock[0]) ^ ord(lock[-1]) ^ ord(lock[-2]) ^ 5)
             else:
-                key.append(lock[i] ^ lock[i-1])
+                key.append(ord(lock[i]) ^ ord(lock[i-1]))
         
         # Escape special characters
         result = ""

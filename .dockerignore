@@ -1,0 +1,25 @@
+# Docker ignore file for Verlihub
+# Exclude build artifacts and development files
+
+# Build directories
+build/
+cmake-build-*/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git files
+.git/
+.gitignore
+
+# Test output
+*.log
+test_results.json
+
+# OS files
+.DS_Store
+Thumbs.db

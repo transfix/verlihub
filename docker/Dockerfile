@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu-dev \
     zlib1g-dev \
     gettext \
+    libasprintf-dev \
+    rapidjson-dev \
     lua5.4 \
     liblua5.4-dev \
     python3-dev \
@@ -55,12 +57,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu74 \
     zlib1g \
     liblua5.4-0 \
+    libasprintf0v5 \
     python3 \
     python3-pip \
     python3-venv \
+    libpython3-dev \
     gettext \
     mysql-client \
     curl \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed files from builder
@@ -87,7 +92,7 @@ WORKDIR /etc/verlihub
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 4111 8000
+EXPOSE 4111 8000 30000
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["verlihub"]

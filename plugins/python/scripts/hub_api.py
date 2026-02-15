@@ -121,10 +121,10 @@ try:
     import uvicorn
     print("[Hub API] uvicorn imported successfully!")
     FASTAPI_AVAILABLE = True
-    print("[Hub API] ✓ All dependencies loaded")
+    print("[Hub API] [OK] All dependencies loaded")
 except ImportError as e:
     FASTAPI_AVAILABLE = False
-    print(f"[Hub API] ✗ ImportError: {e}")
+    print(f"[Hub API] [FAIL] ImportError: {e}")
     print(f"[Hub API] sys.path when import failed: {sys.path[:5]}")
     import traceback
     traceback.print_exc()
@@ -137,7 +137,7 @@ try:
     TRACEROUTE_AVAILABLE = True
 except ImportError as e:
     TRACEROUTE_AVAILABLE = False
-    print(f"[Hub API] ✗ gufo.traceroute not available: {e}")
+    print(f"[Hub API] [WARN] gufo.traceroute not available: {e}")
     print("[Hub API] Install with: pip install gufo-traceroute")
 
 # Try to import python-nmap for OS detection
@@ -148,7 +148,7 @@ try:
     NMAP_AVAILABLE = True
 except ImportError as e:
     NMAP_AVAILABLE = False
-    print(f"[Hub API] ✗ python-nmap not available: {e}")
+    print(f"[Hub API] [WARN] python-nmap not available: {e}")
     print("[Hub API] Install with: pip install python-nmap")
     print("[Hub API] Note: Also requires nmap system package (apt install nmap)")
 
@@ -160,7 +160,7 @@ try:
     ICMPLIB_AVAILABLE = True
 except ImportError as e:
     ICMPLIB_AVAILABLE = False
-    print(f"[Hub API] ✗ icmplib not available: {e}")
+    print(f"[Hub API] [WARN] icmplib not available: {e}")
     print("[Hub API] Install with: pip install icmplib")
     print("[Hub API] Note: ICMP ping requires root privileges")
 

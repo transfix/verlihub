@@ -179,3 +179,64 @@ docker compose build verlihub 2>&1 | less
 - `entrypoint.sh` - Container initialization script
 - `mysql-init/01-init.sql` - MySQL database setup
 - `../docker-compose.yml` - Main compose file
+- `tests/` - Integration test suite
+
+## Apache/Nginx Proxy Configuration
+
+To expose the dashboard via Apache with SSL:
+
+### Apache Configuration
+
+```apache
+<VirtualHost *:443>
+    ServerName dashboard.yourhub.com
+    
+    SSLEngine on
+    SSLCertificateFile /path/to/cert.pem
+    SSLCertificateKeyFile /path/to/key.pem
+    
+    # Proxy all API endpoints
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:30000/
+    ProxyPassReverse / http://localhost:30000/
+    
+    # WebSocket support (if needed)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/?(.*) "ws://localhost:30000/$1" [P,L]
+</VirtualHost>
+```
+
+### Nginx Configuration
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name dashboard.yourhub.com;
+    
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    
+    location / {
+        proxy_pass http://localhost:30000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Starting the API for Proxy Use
+
+When starting the API, include your domain in the CORS origins:
+
+```
+!api start 30000 https://dashboard.yourhub.com https://www.yourhub.com
+```
+
+This enables:
+- Dashboard accessible at `https://dashboard.yourhub.com/dashboard`
+- API endpoints at `https://dashboard.yourhub.com/hub`, `/users`, etc.
+- Proper CORS headers for cross-origin requests

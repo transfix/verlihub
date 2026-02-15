@@ -44,6 +44,20 @@ create_database() {
 
 # Initialize verlihub configuration if needed
 init_config() {
+    # Set up plugin symlinks (always, even if config exists)
+    mkdir -p /etc/verlihub/plugins
+    if [ -f /usr/local/lib/libpython_pi.so ] && [ ! -f /etc/verlihub/plugins/libpython_pi.so ]; then
+        echo "[entrypoint] Setting up Python plugin symlink..."
+        ln -sf /usr/local/lib/libpython_pi.so /etc/verlihub/plugins/libpython_pi.so
+    fi
+    
+    # Set up scripts symlinks for Python plugin
+    if [ -d /usr/local/share/verlihub/scripts ]; then
+        echo "[entrypoint] Setting up scripts symlinks..."
+        mkdir -p /etc/verlihub/scripts
+        ln -sf /usr/local/share/verlihub/scripts/* /etc/verlihub/scripts/ 2>/dev/null || true
+    fi
+    
     if [ ! -f /etc/verlihub/dbconfig ]; then
         echo "[entrypoint] Creating initial configuration..."
         
@@ -58,11 +72,42 @@ locale = en_US.UTF-8
 config = /etc/verlihub
 EOF
         
-        # Run verlihub to create tables
-        echo "[entrypoint] Initializing database tables..."
-        timeout 10 verlihub --init 2>/dev/null || true
+        # Run verlihub briefly to create tables (it creates them when fully started)
+        echo "[entrypoint] Starting verlihub to create tables..."
+        verlihub -d /etc/verlihub &
+        VH_PID=$!
+        
+        # Wait for verlihub to start listening (tables are created when it opens port)
+        echo "[entrypoint] Waiting for verlihub to start..."
+        for i in $(seq 1 60); do
+            if nc -z 127.0.0.1 "$VH_HUB_PORT" 2>/dev/null; then
+                echo "[entrypoint] Verlihub is listening on port $VH_HUB_PORT"
+                sleep 2  # Give it a moment to complete table creation
+                break
+            fi
+            echo "[entrypoint] Waiting for port $VH_HUB_PORT... ($i/60)"
+            sleep 1
+        done
+        
+        # Verify tables exist before proceeding
+        echo "[entrypoint] Verifying database tables..."
+        for i in $(seq 1 30); do
+            if mysql -h"$VH_DB_HOST" -u"$VH_DB_USER" -p"$VH_DB_PASS" "$VH_DB_NAME" -e "SELECT 1 FROM reglist LIMIT 1" &>/dev/null; then
+                echo "[entrypoint] Tables verified successfully"
+                break
+            fi
+            echo "[entrypoint] Waiting for tables... ($i/30)"
+            sleep 1
+        done
+        
+        # Stop the temporary verlihub instance
+        echo "[entrypoint] Stopping temporary verlihub..."
+        kill $VH_PID 2>/dev/null || true
+        wait $VH_PID 2>/dev/null || true
+        sleep 2
         
         # Configure basic hub settings and register admin user
+        echo "[entrypoint] Configuring hub and creating admin user..."
         mysql -h"$VH_DB_HOST" -u"$VH_DB_USER" -p"$VH_DB_PASS" "$VH_DB_NAME" << EOF || true
 -- Hub configuration
 INSERT INTO SetupList (file, var, val) VALUES 
@@ -71,10 +116,10 @@ INSERT INTO SetupList (file, var, val) VALUES
     ('config', 'listen_port', '$VH_HUB_PORT')
 ON DUPLICATE KEY UPDATE val = VALUES(val);
 
--- Register admin user (class 10 = master)
-INSERT INTO reglist (nick, class, class_protect, class_hidekick, hide_kick, hide_keys, show_keys, reg_date, reg_op, pwd_change, pwd_crypt, login_pwd, login_last, logout_last, login_cnt, login_ip, error_last, error_cnt, error_ip, enabled, email, note_op, note_usr, alternate_ip, auth_ip, fake_ip, flags) VALUES 
-    ('$VH_ADMIN_NICK', 10, 10, 10, 0, 0, 0, UNIX_TIMESTAMP(), 'docker', 0, 1, '$VH_ADMIN_PASS', 0, 0, 0, '', 0, 0, '', 1, 'admin@localhost', 'Docker auto-created', '', '', '', '', 0)
-ON DUPLICATE KEY UPDATE login_pwd = VALUES(login_pwd), class = 10;
+-- Register admin user (class 10 = master, pwd_crypt=0 for plaintext password)
+INSERT INTO reglist (nick, class, class_protect, class_hidekick, hide_kick, hide_keys, show_keys, reg_date, reg_op, pwd_change, pwd_crypt, login_pwd, login_last, logout_last, login_cnt, login_ip, error_last, error_cnt, error_ip, enabled, note_op, note_usr, alternate_ip, auth_ip, fake_ip) VALUES 
+    ('$VH_ADMIN_NICK', 10, 10, 10, 0, 0, 0, UNIX_TIMESTAMP(), 'docker', 0, 0, '$VH_ADMIN_PASS', 0, 0, 0, '', 0, 0, '', 1, 'Docker auto-created', '', '', '', '')
+ON DUPLICATE KEY UPDATE login_pwd = VALUES(login_pwd), pwd_crypt = 0, class = 10;
 
 -- Enable Python plugin
 INSERT INTO pi_plug (nick, path, dest, detail, autoload) VALUES

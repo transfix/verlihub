@@ -87,8 +87,8 @@ class cMySQL: public cObj
 	private:
 		string mDBName, mDBHost, mDBUser, mDBPass, mDBChar;
 		MYSQL *mDBHandle;
-			unsigned int mReconnect;
-			std::mutex mMutex;
+		unsigned int mReconnect;
+		std::mutex mMutex;
 };
 
 	}; // namespace nMySQL

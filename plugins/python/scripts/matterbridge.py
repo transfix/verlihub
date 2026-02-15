@@ -53,6 +53,18 @@ except ImportError:
     REQUESTS_AVAILABLE = False
     print("WARNING: requests library not installed. Run: pip install requests")
 
+# Try to import dispatcher for single-interpreter mode
+try:
+    from dispatcher import register_script, unregister_script
+    USING_DISPATCHER = True
+except ImportError:
+    USING_DISPATCHER = False
+    register_script = None
+    unregister_script = None
+
+# Script registration ID (for dispatcher mode)
+SCRIPT_ID = None
+
 # =============================================================================
 # Configuration
 # =============================================================================

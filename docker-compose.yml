@@ -1,5 +1,17 @@
 # Verlihub Docker Compose Configuration
 # For development, testing, and integration testing with MySQL
+#
+# Python Plugin Modes:
+#   - Single Interpreter (default): Scripts share namespace, uses dispatcher
+#     Supports FastAPI, threading, complex packages
+#   - Multi Interpreter: Script isolation, no namespace sharing
+#     Better security but no FastAPI/threading support
+#
+# Usage:
+#   docker compose up verlihub              # Single interpreter mode (default)
+#   docker compose --profile multi up verlihub-multi  # Multi interpreter mode
+#   docker compose --profile integration up integration-tests
+#   docker compose --profile integration-multi up integration-tests-multi
 
 services:
   # MySQL database
@@ -24,11 +36,14 @@ services:
     networks:
       - verlihub-net
 
-  # Verlihub server
+  # Verlihub server - Single Interpreter Mode (default)
+  # Uses dispatcher for multiple scripts, supports FastAPI
   verlihub:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        PYTHON_MODE: single
     container_name: verlihub-server
     depends_on:
       mysql:
@@ -38,11 +53,12 @@ services:
       VH_DB_USER: verlihub
       VH_DB_PASS: verlihub
       VH_DB_NAME: verlihub
-      VH_HUB_NAME: "Docker Test Hub"
+      VH_HUB_NAME: "Docker Test Hub (Single Interpreter)"
       VH_HUB_PORT: "4111"
       VH_ADMIN_NICK: admin
       VH_ADMIN_PASS: admin
       VERLIHUB_PYTHON_VENV: /opt/verlihub-venv
+      PYTHON_MODE: single
     ports:
       - "4111:4111"   # DC++ hub port
       - "30000:30000" # FastAPI port for integration tests
@@ -51,6 +67,40 @@ services:
       - ./plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
     networks:
       - verlihub-net
+    restart: unless-stopped
+
+  # Verlihub server - Multi Interpreter Mode (script isolation)
+  # Each script has its own isolated interpreter
+  verlihub-multi:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        PYTHON_MODE: multi
+    container_name: verlihub-server-multi
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub
+      VH_HUB_NAME: "Docker Test Hub (Multi Interpreter)"
+      VH_HUB_PORT: "4111"
+      VH_ADMIN_NICK: admin
+      VH_ADMIN_PASS: admin
+      VERLIHUB_PYTHON_VENV: /opt/verlihub-venv
+      PYTHON_MODE: multi
+    ports:
+      - "4112:4111"   # Different port to avoid conflict
+    volumes:
+      - verlihub-config-multi:/etc/verlihub
+      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
+    networks:
+      - verlihub-net
+    profiles:
+      - multi
     restart: unless-stopped
 
   # Unit test runner (C++ tests)
@@ -77,7 +127,8 @@ services:
     profiles:
       - test
 
-  # API Integration test runner (standalone mode)
+  # API Integration test runner for Single Interpreter mode
+  # Tests FastAPI endpoints and NMDC connection
   integration-tests:
     image: python:3.11-slim
     container_name: verlihub-integration-tests
@@ -91,8 +142,10 @@ services:
       ADMIN_PASS: admin
       CORS_ORIGINS: "https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net"
       DOCKER_INTEGRATION_TEST: "1"
+      PYTHON_MODE: single
     volumes:
       - ./docker/tests:/tests:ro
+      - ./plugins/python/scripts:/scripts:ro
     working_dir: /tests
     command: ["bash", "-c", "pip install requests uvicorn fastapi --quiet && sleep 10 && python3 standalone_integration_test.py --hub-host verlihub --hub-port 4111 --api-port 30000 --admin-nick admin --admin-pass admin --cors-origins https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net --output /tmp/results.json"]
     networks:
@@ -100,9 +153,46 @@ services:
     profiles:
       - integration
 
+  # Integration tests for Multi Interpreter mode
+  # Tests script isolation (no FastAPI support in this mode)
+  integration-tests-multi:
+    image: python:3.11-slim
+    container_name: verlihub-integration-tests-multi
+    depends_on:
+      - verlihub-multi
+    environment:
+      HUB_HOST: verlihub-multi
+      HUB_PORT: "4111"
+      ADMIN_NICK: admin
+      ADMIN_PASS: admin
+      DOCKER_INTEGRATION_TEST: "1"
+      PYTHON_MODE: multi
+    volumes:
+      - ./docker/tests:/tests:ro
+      - ./plugins/python/scripts:/scripts:ro
+    working_dir: /tests
+    command: ["bash", "-c", "pip install requests --quiet && sleep 30 && python3 multi_interpreter_test.py --hub-host verlihub-multi --hub-port 4111 --admin-nick admin --admin-pass admin --output /tmp/results.json"]
+    networks:
+      - verlihub-net
+    profiles:
+      - integration-multi
+
+  # Standalone dispatcher tests (no hub required)
+  dispatcher-tests:
+    image: python:3.11-slim
+    container_name: verlihub-dispatcher-tests
+    volumes:
+      - ./docker/tests:/tests:ro
+      - ./plugins/python/scripts:/scripts:ro
+    working_dir: /tests
+    command: ["python3", "test_dispatcher.py"]
+    profiles:
+      - dispatcher-test
+
 volumes:
   mysql-data:
   verlihub-config:
+  verlihub-config-multi:
   verlihub-scripts:
 
 networks:

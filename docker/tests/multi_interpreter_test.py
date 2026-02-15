@@ -25,9 +25,9 @@ import time
 import requests
 from typing import Optional
 
-# Try to import official NMDC client
+# Try to import NMDC client
 try:
-    from verlihub.client.nmdc import NMDCClient
+    from nmdc_client import NMDCClient
 except ImportError:
     NMDCClient = None
 
@@ -90,10 +90,13 @@ class MultiInterpreterTestRunner:
         )
         
         try:
-            client.connect(timeout=30)
-            print(f"  Connected as: {self.admin_nick}")
-            client.close()
-            return True
+            if client.connect(timeout=30):
+                print(f"  Connected as: {self.admin_nick}")
+                client.close()
+                return True
+            else:
+                print("  Connection failed")
+                return False
         except Exception as e:
             print(f"  Connection error: {e}")
             return False
@@ -175,7 +178,9 @@ class MultiInterpreterTestRunner:
         )
         
         try:
-            client.connect(timeout=30)
+            if not client.connect(timeout=30):
+                print("  Connection failed")
+                return False
             
             # Try to list Python scripts
             responses = client.execute_command("!pylist", wait_time=3.0)

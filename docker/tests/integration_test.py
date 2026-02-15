@@ -14,16 +14,11 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 import time
 import requests
 from typing import Optional
-try:
-    from verlihub.client.nmdc import NMDCClient
-except ImportError:
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'python'))
-    from verlihub.client.nmdc import NMDCClient
+from nmdc_client import NMDCClient
 
 
 class IntegrationTestRunner:
@@ -51,13 +46,13 @@ class IntegrationTestRunner:
             nick=self.admin_nick,
             password=self.admin_pass
         )
+        self.client.debug = True
         
-        try:
-            self.client.connect(timeout=30)
+        if self.client.connect(timeout=30):
             print("[TEST] ✓ Connected to hub")
             return True
-        except Exception as e:
-            print(f"[TEST] ✗ Failed to connect to hub: {e}")
+        else:
+            print("[TEST] ✗ Failed to connect to hub")
             return False
     
     def enable_python_plugin(self) -> bool:
@@ -86,15 +81,14 @@ class IntegrationTestRunner:
         command = " ".join(cmd_parts)
         
         print(f"[TEST] Command: {command}")
-        responses = self.client.execute_command(command, wait_time=10.0)
+        responses = self.client.execute_command(command, wait_time=5.0)
         
-        print(f"[TEST] Got {len(responses)} responses:")
         for msg in responses:
-            print(f"[TEST] Response: {msg[:200]}")
+            print(f"[TEST] Response: {msg[:150]}")
         
         # Wait for server to start
         print("[TEST] Waiting for API server to start...")
-        time.sleep(5)
+        time.sleep(3)
         
         return True
     

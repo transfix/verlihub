@@ -96,7 +96,8 @@ print(f"[Hub API] Current sys.path: {sys.path[:3]}...")  # First 3 entries
 try:
     print("[Hub API] Attempting to import FastAPI...")
     from fastapi import FastAPI, HTTPException
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
+    from fastapi.middleware.cors import CORSMiddleware
     print("[Hub API] FastAPI imported successfully!")
     print("[Hub API] Attempting to import uvicorn...")
     import uvicorn
@@ -428,13 +429,24 @@ if FASTAPI_AVAILABLE:
         return {
             "service": "Verlihub REST API",
             "version": "1.0.0",
+            "dashboard": "/dashboard",
+            "dashboard_embed": "/dashboard/embed",
             "endpoints": {
-                "hub_info": "/api/hub",
-                "statistics": "/api/stats",
-                "users": "/api/users",
-                "user_detail": "/api/user/{nick}",
-                "geography": "/api/geo",
-                "share": "/api/share"
+                "hub_info": "/hub",
+                "statistics": "/stats",
+                "users": "/users",
+                "operators": "/ops",
+                "bots": "/bots",
+                "user_detail": "/user/{nick}",
+                "geography": "/geo",
+                "share": "/share",
+                "health": "/health",
+                "traceroute": "/traceroute/{ip}",
+                "traceroutes": "/traceroutes",
+                "os_detection": "/os/{ip}",
+                "os_detections": "/os-detections",
+                "ping": "/ping/{ip}",
+                "pings": "/pings"
             }
         }
 
@@ -532,6 +544,55 @@ if FASTAPI_AVAILABLE:
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat()
         }
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard():
+        """Serve the Verlihub dashboard as a single-page application"""
+        try:
+            # Find the HTML file in the same directory as this script
+            html_path = os.path.join(script_dir, 'verlihub_client.html')
+            
+            if not os.path.exists(html_path):
+                raise HTTPException(status_code=404, detail="Dashboard HTML file not found")
+            
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # Modify API_BASE to use root path since we're serving from same origin
+            html_content = html_content.replace(
+                "const API_BASE = '/verlihub-api';",
+                "const API_BASE = '';"  # Use root - API endpoints are at /hub, /users, etc.
+            )
+            
+            return HTMLResponse(content=html_content)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error loading dashboard: {str(e)}")
+
+    @app.get("/dashboard/embed", response_class=HTMLResponse)
+    async def dashboard_embed():
+        """Serve the embeddable version of the dashboard"""
+        try:
+            html_path = os.path.join(script_dir, 'verlihub_client_embed.html')
+            
+            if not os.path.exists(html_path):
+                raise HTTPException(status_code=404, detail="Embedded dashboard HTML file not found")
+            
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # Modify API_BASE for same-origin serving
+            html_content = html_content.replace(
+                "const API_BASE = '/verlihub-api';",
+                "const API_BASE = '';"
+            )
+            
+            return HTMLResponse(content=html_content)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error loading embedded dashboard: {str(e)}")
 
 # =============================================================================
 # Server Management

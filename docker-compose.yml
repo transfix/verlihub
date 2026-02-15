@@ -77,7 +77,7 @@ services:
     profiles:
       - test
 
-  # API Integration test runner
+  # API Integration test runner (standalone mode)
   integration-tests:
     image: python:3.11-slim
     container_name: verlihub-integration-tests
@@ -94,19 +94,7 @@ services:
     volumes:
       - ./docker/tests:/tests:ro
     working_dir: /tests
-    command: >
-      bash -c "
-        pip install requests --quiet &&
-        sleep 10 &&
-        python3 integration_test.py 
-          --hub-host verlihub 
-          --hub-port 4111 
-          --api-port 30000 
-          --admin-nick admin 
-          --admin-pass admin 
-          --cors-origins https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net
-          --output /tests/results.json
-      "
+    command: ["bash", "-c", "pip install requests uvicorn fastapi --quiet && sleep 10 && python3 standalone_integration_test.py --hub-host verlihub --hub-port 4111 --api-port 30000 --admin-nick admin --admin-pass admin --cors-origins https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net --output /tmp/results.json"]
     networks:
       - verlihub-net
     profiles:

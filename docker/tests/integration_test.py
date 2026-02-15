@@ -81,15 +81,14 @@ class IntegrationTestRunner:
         command = " ".join(cmd_parts)
         
         print(f"[TEST] Command: {command}")
-        responses = self.client.execute_command(command, wait_time=10.0)
+        responses = self.client.execute_command(command, wait_time=5.0)
         
-        print(f"[TEST] Got {len(responses)} responses:")
         for msg in responses:
-            print(f"[TEST] Response: {msg[:200]}")
+            print(f"[TEST] Response: {msg[:150]}")
         
         # Wait for server to start
         print("[TEST] Waiting for API server to start...")
-        time.sleep(5)
+        time.sleep(3)
         
         return True
     

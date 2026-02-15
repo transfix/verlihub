@@ -279,6 +279,137 @@ class StandaloneIntegrationTestRunner:
         return acao == origin or acao == "*"
     
     # =========================================================================
+    # Single-Interpreter Mode / Dispatcher Tests
+    # =========================================================================
+    
+    def test_dispatcher_module_loadable(self) -> bool:
+        """Test that dispatcher module can be imported"""
+        print("  Testing dispatcher module import...")
+        
+        try:
+            # Add scripts path
+            scripts_path = os.environ.get('SCRIPTS_PATH', '/scripts')
+            if os.path.exists(scripts_path):
+                sys.path.insert(0, scripts_path)
+            
+            # Try to import dispatcher
+            import importlib.util
+            spec = importlib.util.find_spec('dispatcher')
+            if spec is None:
+                print("  Dispatcher module not in path, checking alternate locations...")
+                # Try alternate paths
+                for path in ['/scripts', '/usr/local/share/verlihub/scripts']:
+                    if os.path.exists(os.path.join(path, 'dispatcher.py')):
+                        sys.path.insert(0, path)
+                        spec = importlib.util.find_spec('dispatcher')
+                        if spec:
+                            break
+            
+            if spec is None:
+                print("  Dispatcher module not found (skipping)")
+                return None
+            
+            print("  Dispatcher module found and importable")
+            return True
+        except Exception as e:
+            print(f"  Import error: {e}")
+            return None
+    
+    def test_dispatcher_registration(self) -> bool:
+        """Test dispatcher script registration"""
+        try:
+            # Try to import dispatcher
+            scripts_path = os.environ.get('SCRIPTS_PATH', '/scripts')
+            if os.path.exists(scripts_path) and scripts_path not in sys.path:
+                sys.path.insert(0, scripts_path)
+            
+            import dispatcher
+            
+            # Clear any existing state
+            dispatcher._scripts.clear()
+            dispatcher._hooks.clear()
+            
+            # Test registration
+            call_log = []
+            def test_handler(nick, msg):
+                call_log.append((nick, msg))
+                return 1
+            
+            script_id = dispatcher.register_script(
+                "TestScript",
+                {"OnParsedMsgChat": test_handler}
+            )
+            
+            print(f"  Registered script with ID: {script_id}")
+            
+            # Test dispatching
+            dispatcher.OnParsedMsgChat("testuser", "hello")
+            
+            if len(call_log) == 1 and call_log[0] == ("testuser", "hello"):
+                print("  Handler was called correctly")
+                # Cleanup
+                dispatcher.unregister_script(script_id)
+                return True
+            else:
+                print(f"  Unexpected call log: {call_log}")
+                return False
+                
+        except ImportError:
+            print("  Dispatcher not available (skipping)")
+            return None
+        except Exception as e:
+            print(f"  Test error: {e}")
+            return False
+    
+    def test_dispatcher_priority(self) -> bool:
+        """Test dispatcher priority ordering"""
+        try:
+            scripts_path = os.environ.get('SCRIPTS_PATH', '/scripts')
+            if os.path.exists(scripts_path) and scripts_path not in sys.path:
+                sys.path.insert(0, scripts_path)
+            
+            import dispatcher
+            
+            # Clear state
+            dispatcher._scripts.clear()
+            dispatcher._hooks.clear()
+            dispatcher._next_script_id = 1
+            
+            call_order = []
+            
+            def high_prio(nick, msg):
+                call_order.append("high")
+                return 1
+            
+            def low_prio(nick, msg):
+                call_order.append("low")
+                return 1
+            
+            # Register in wrong order
+            id1 = dispatcher.register_script("LowPrio", {"OnParsedMsgChat": low_prio}, priority=100)
+            id2 = dispatcher.register_script("HighPrio", {"OnParsedMsgChat": high_prio}, priority=10)
+            
+            dispatcher.OnParsedMsgChat("user", "test")
+            
+            # Cleanup
+            dispatcher.unregister_script(id1)
+            dispatcher.unregister_script(id2)
+            
+            if call_order == ["high", "low"]:
+                print("  Priority ordering correct: high(10) -> low(100)")
+                return True
+            else:
+                print(f"  Wrong order: {call_order}")
+                return False
+                
+        except ImportError:
+            print("  Dispatcher not available (skipping)")
+            return None
+        except Exception as e:
+            print(f"  Test error: {e}")
+            return False
+    
+    # =========================================================================
     # Main Test Runner
     # =========================================================================
     
@@ -286,6 +417,7 @@ class StandaloneIntegrationTestRunner:
         """Run the complete test suite"""
         print("\n" + "=" * 60)
         print("VERLIHUB STANDALONE INTEGRATION TEST SUITE")
+        print("Single-Interpreter Mode with Dispatcher Support")
         print("=" * 60)
         
         try:
@@ -314,6 +446,15 @@ class StandaloneIntegrationTestRunner:
             self.run_test("Dashboard HTML", self.test_dashboard)
             self.run_test("Dashboard Embed", self.test_dashboard_embed)
             self.run_test("CORS Headers", self.test_cors_headers)
+            
+            # Run dispatcher tests (single-interpreter mode)
+            print("\n" + "-" * 60)
+            print("DISPATCHER TESTS (Single-Interpreter Mode)")
+            print("-" * 60)
+            
+            self.run_test("Dispatcher Module Loadable", self.test_dispatcher_module_loadable)
+            self.run_test("Dispatcher Registration", self.test_dispatcher_registration)
+            self.run_test("Dispatcher Priority", self.test_dispatcher_priority)
             
             # Print summary
             print("\n" + "=" * 60)

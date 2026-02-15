@@ -31,6 +31,7 @@ typedef unsigned int SOCKET;
 
 #include <mysql/mysql.h>
 #include <mysql/errmsg.h>
+#include <mutex>
 
 #include "cobj.h"
 
@@ -70,10 +71,23 @@ class cMySQL: public cObj
 			*/
 			bool Error(int level, const string& text);
 
+			/*
+				Ping the MySQL server to keep connection alive
+				Should be called periodically (e.g., every few minutes)
+				Returns true if connection is alive, false otherwise
+			*/
+			bool Ping();
+
+			/*
+				Get mutex for thread-safe operations
+			*/
+			std::mutex& GetMutex() { return mMutex; }
+
 	private:
 		string mDBName, mDBHost, mDBUser, mDBPass, mDBChar;
 		MYSQL *mDBHandle;
 		unsigned int mReconnect;
+		std::mutex mMutex;
 };
 
 	}; // namespace nMySQL

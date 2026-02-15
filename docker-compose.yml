@@ -1,0 +1,110 @@
+# Verlihub Docker Compose Configuration
+# For development, testing, and integration testing with MySQL
+
+services:
+  # MySQL database
+  mysql:
+    image: mysql:8.0
+    container_name: verlihub-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: verlihub
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    ports:
+      - "3307:3306"  # Use 3307 to avoid conflicts with host MySQL
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - verlihub-net
+
+  # Verlihub server
+  verlihub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: verlihub-server
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub
+      VH_HUB_NAME: "Docker Test Hub"
+      VH_HUB_PORT: "4111"
+      VH_ADMIN_NICK: admin
+      VH_ADMIN_PASS: admin
+      VERLIHUB_PYTHON_VENV: /opt/verlihub-venv
+    ports:
+      - "4111:4111"   # DC++ hub port
+      - "30000:30000" # FastAPI port for integration tests
+    volumes:
+      - verlihub-config:/etc/verlihub
+      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
+    networks:
+      - verlihub-net
+    restart: unless-stopped
+
+  # Unit test runner (C++ tests)
+  test-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: builder
+    container_name: verlihub-unit-tests
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub_test
+      CTEST_OUTPUT_ON_FAILURE: 1
+    volumes:
+      - ./:/src:ro
+    command: ["bash", "-c", "cd /src/build && ctest --output-on-failure"]
+    networks:
+      - verlihub-net
+    profiles:
+      - test
+
+  # API Integration test runner (standalone mode)
+  integration-tests:
+    image: python:3.11-slim
+    container_name: verlihub-integration-tests
+    depends_on:
+      - verlihub
+    environment:
+      HUB_HOST: verlihub
+      HUB_PORT: "4111"
+      API_PORT: "30000"
+      ADMIN_NICK: admin
+      ADMIN_PASS: admin
+      CORS_ORIGINS: "https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net"
+      DOCKER_INTEGRATION_TEST: "1"
+    volumes:
+      - ./docker/tests:/tests:ro
+    working_dir: /tests
+    command: ["bash", "-c", "pip install requests uvicorn fastapi --quiet && sleep 10 && python3 standalone_integration_test.py --hub-host verlihub --hub-port 4111 --api-port 30000 --admin-nick admin --admin-pass admin --cors-origins https://sublevels.net https://www.sublevels.net https://wintermute.sublevels.net --output /tmp/results.json"]
+    networks:
+      - verlihub-net
+    profiles:
+      - integration
+
+volumes:
+  mysql-data:
+  verlihub-config:
+  verlihub-scripts:
+
+networks:
+  verlihub-net:
+    driver: bridge

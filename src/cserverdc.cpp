@@ -104,6 +104,7 @@ cServerDC::cServerDC(string CfgBase, const string &ExecPath):
 	mHublistTimer(0.0, 0.0, mTime),
 	mUpdateTimer(0.0, 0.0, mTime),
 	mReloadcfgTimer(0.0, 0.0,mTime),
+	mMySQLPingTimer(300.0, 0.0, mTime), // Ping MySQL every 5 minutes to keep connection alive
 	mPluginManager(this, CfgBase + "/plugins"),
 	mCallBacks(&mPluginManager)
 {
@@ -1898,6 +1899,11 @@ int cServerDC::OnTimer(const cTime &now)
 
 		if (Log(2))
 			LogStream() << "Socket counter: " << cAsyncConn::sSocketCounter << endl;
+	}
+
+	// MySQL keepalive ping - prevents "MySQL server has gone away" errors during idle periods
+	if (bool(mMySQLPingTimer.mMinDelay) && (mMySQLPingTimer.Check(mTime, 1) == 0)) {
+		mMySQL.Ping();
 	}
 
 	if (mC.mmdb_cache && mC.mmdb_cache_mins && ((mTime.Sec() - mMaxMindDB->mClean.Sec()) >= 60)) // clean mmdb cache every minute

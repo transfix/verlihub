@@ -843,6 +843,8 @@ public:
 	cTimeOut mUpdateTimer; // update check timer
 	// Timer that reloads hub configuration
 	cTimeOut mReloadcfgTimer;
+	// Timer for MySQL keepalive ping (every 5 minutes)
+	cTimeOut mMySQLPingTimer;
 	// Plugin manager
 	cVHPluginMgr mPluginManager;
 

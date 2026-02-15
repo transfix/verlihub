@@ -125,8 +125,10 @@ bool cMySQL::Error(int level, const string &text)
 		Close();
 		Init();
 
-		if (Connect(mDBHost, mDBUser, mDBPass, mDBName, mDBChar)) // success
+		if (Connect(mDBHost, mDBUser, mDBPass, mDBName, mDBChar)) { // success
+			mReconnect = 0; // reset counter on successful reconnection
 			return true;
+		}
 
 		return false;
 	}
@@ -135,6 +137,60 @@ bool cMySQL::Error(int level, const string &text)
 		LogStream() << text << ": " << mysql_error(mDBHandle) << endl;
 
 	return false;
+}
+
+bool cMySQL::Ping()
+{
+	if (!mDBHandle) {
+		if (ErrLog(0))
+			LogStream() << "MySQL Ping: handle is not valid" << endl;
+		return false;
+	}
+
+	std::lock_guard<std::mutex> lock(mMutex);
+
+	if (mysql_ping(mDBHandle) != 0) {
+		// Connection lost, trigger reconnection logic
+		if (ErrLog(0))
+			LogStream() << "MySQL Ping failed, connection lost" << endl;
+
+		// Check for connection gone errors
+		int err = mysql_errno(mDBHandle);
+		if ((err == CR_SERVER_GONE_ERROR) || (err == CR_SERVER_LOST)) {
+			// Try to reconnect
+			if (mReconnect >= 5) {
+				if (ErrLog(0))
+					LogStream() << "MySQL Ping: tried to reconnect " << mReconnect << " times, giving up" << endl;
+				return false;
+			}
+
+			mReconnect++;
+
+			if (ErrLog(0))
+				LogStream() << "MySQL Ping: trying to reconnect: #" << mReconnect << endl;
+
+			Close();
+			Init();
+
+			if (Connect(mDBHost, mDBUser, mDBPass, mDBName, mDBChar)) {
+				mReconnect = 0;
+				if (Log(0))
+					LogStream() << "MySQL Ping: reconnected successfully" << endl;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// Ping successful - reset reconnect counter if it was incremented
+	if (mReconnect > 0) {
+		if (Log(0))
+			LogStream() << "MySQL Ping: connection restored, resetting reconnect counter" << endl;
+		mReconnect = 0;
+	}
+
+	return true;
 }
 
 	}; // namepspace nMySQL

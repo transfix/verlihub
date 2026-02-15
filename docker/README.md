@@ -19,12 +19,34 @@ docker compose down
 
 The hub will be available at:
 - **DC++ Port**: `localhost:4111`
-- **FastAPI REST API**: `http://localhost:8000`
+- **FastAPI REST API**: `http://localhost:30000`
+- **Dashboard**: `http://localhost:30000/dashboard`
 
-### Running Tests
+### Running Integration Tests
+
+The integration tests verify the full stack including NMDC protocol, Python plugin, and FastAPI:
 
 ```bash
-# Run integration tests
+# Run full integration test suite
+docker compose --profile integration up integration-tests
+
+# Or run locally against a running hub
+cd docker/tests
+./run_integration_tests.sh
+```
+
+Integration tests will:
+1. Connect to the hub using NMDC protocol
+2. Authenticate as admin
+3. Enable the Python plugin (`!onplugin python`)
+4. Start the FastAPI server (`!api start 30000 <cors-origins>`)
+5. Run API endpoint tests
+6. Verify dashboard HTML serving
+
+### Running Unit Tests
+
+```bash
+# Run C++ unit tests
 docker compose --profile test up test-runner
 
 # Or run specific tests

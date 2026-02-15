@@ -62,16 +62,27 @@ EOF
         echo "[entrypoint] Initializing database tables..."
         timeout 10 verlihub --init 2>/dev/null || true
         
-        # Configure basic hub settings
+        # Configure basic hub settings and register admin user
         mysql -h"$VH_DB_HOST" -u"$VH_DB_USER" -p"$VH_DB_PASS" "$VH_DB_NAME" << EOF || true
+-- Hub configuration
 INSERT INTO SetupList (file, var, val) VALUES 
     ('config', 'hub_host', '0.0.0.0'),
     ('config', 'hub_name', '$VH_HUB_NAME'),
     ('config', 'listen_port', '$VH_HUB_PORT')
 ON DUPLICATE KEY UPDATE val = VALUES(val);
+
+-- Register admin user (class 10 = master)
+INSERT INTO reglist (nick, class, class_protect, class_hidekick, hide_kick, hide_keys, show_keys, reg_date, reg_op, pwd_change, pwd_crypt, login_pwd, login_last, logout_last, login_cnt, login_ip, error_last, error_cnt, error_ip, enabled, email, note_op, note_usr, alternate_ip, auth_ip, fake_ip, flags) VALUES 
+    ('$VH_ADMIN_NICK', 10, 10, 10, 0, 0, 0, UNIX_TIMESTAMP(), 'docker', 0, 1, '$VH_ADMIN_PASS', 0, 0, 0, '', 0, 0, '', 1, 'admin@localhost', 'Docker auto-created', '', '', '', '', 0)
+ON DUPLICATE KEY UPDATE login_pwd = VALUES(login_pwd), class = 10;
+
+-- Enable Python plugin
+INSERT INTO pi_plug (nick, path, dest, detail, autoload) VALUES
+    ('python', 'libpython_pi.so', '', 'Python scripting plugin', 1)
+ON DUPLICATE KEY UPDATE autoload = 1;
 EOF
         
-        echo "[entrypoint] Configuration initialized"
+        echo "[entrypoint] Configuration initialized with admin user: $VH_ADMIN_NICK"
     else
         echo "[entrypoint] Configuration already exists"
     fi

@@ -2,7 +2,7 @@
 Database connection and session management for Verlihub.
 
 Uses SQLModel with async support for FastAPI integration.
-Supports both MySQL (production) and SQLite (testing).
+Supports SQLite (default), MySQL, and PostgreSQL with async drivers.
 """
 from __future__ import annotations
 
@@ -17,35 +17,75 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 
-# Default database settings (can be overridden via environment)
+# Default database settings
+DEFAULT_DB_TYPE = "sqlite"
 DEFAULT_DB_HOST = "localhost"
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_NAME = "verlihub"
 
 
 class DatabaseConfig:
-    """Database configuration loader."""
+    """
+    Database configuration loader.
+    
+    Supports:
+    - SQLite (default): Uses aiosqlite driver
+    - MySQL: Uses asyncmy driver
+    - PostgreSQL: Uses asyncpg driver
+    
+    Can be configured via:
+    - Direct URL (must be async-compatible)
+    - Individual parameters
+    - Environment variables
+    """
     
     def __init__(
         self,
         host: Optional[str] = None,
         port: Optional[int] = None,
         database: Optional[str] = None,
-        username: Optional[str] = None,
+        user: Optional[str] = None,
         password: Optional[str] = None,
         *,
+        driver: Optional[str] = None,
+        db_type: Optional[str] = None,
+        url: Optional[str] = None,
         use_sqlite: bool = False,
         sqlite_path: Optional[str] = None,  # None = in-memory
+        config_dir: Optional[str] = None,  # For SQLite default path
     ) -> None:
+        # Direct URL override
+        self._url = url or os.getenv("VH_DB_URL", "")
+        
+        # Database type detection
+        self._db_type = db_type or os.getenv("VH_DB_TYPE", "")
+        if use_sqlite or os.getenv("VH_USE_SQLITE", "").lower() in ("1", "true", "yes"):
+            self._db_type = "sqlite"
+        
+        # Connection parameters
         self.host = host or os.getenv("VH_DB_HOST", DEFAULT_DB_HOST)
         self.port = port or int(os.getenv("VH_DB_PORT", str(DEFAULT_DB_PORT)))
         self.database = database or os.getenv("VH_DB_NAME", DEFAULT_DB_NAME)
-        self.username = username or os.getenv("VH_DB_USER", "")
+        self.user = user or os.getenv("VH_DB_USER", "")
         self.password = password or os.getenv("VH_DB_PASS", "")
         
+        # Driver override
+        self._driver = driver
+        
         # SQLite options
-        self.use_sqlite = use_sqlite or os.getenv("VH_USE_SQLITE", "").lower() in ("1", "true", "yes")
-        self.sqlite_path = sqlite_path  # None means in-memory ":memory:"
+        self.use_sqlite = self._db_type == "sqlite"
+        self.sqlite_path = sqlite_path or os.getenv("VH_DB_PATH", "")
+        self.config_dir = config_dir
+        
+        # Auto-detect type from driver if specified
+        if self._driver:
+            if "sqlite" in self._driver:
+                self.use_sqlite = True
+                self._db_type = "sqlite"
+            elif "mysql" in self._driver or "asyncmy" in self._driver:
+                self._db_type = "mysql"
+            elif "postgres" in self._driver or "asyncpg" in self._driver:
+                self._db_type = "postgresql"
     
     @classmethod
     def from_dbconfig(cls, config_dir: str | Path) -> "DatabaseConfig":
@@ -62,23 +102,25 @@ class DatabaseConfig:
         
         dbconfig_path = Path(config_dir) / "dbconfig.xml"
         if not dbconfig_path.exists():
-            raise FileNotFoundError(f"dbconfig.xml not found in {config_dir}")
+            # Default to SQLite if no dbconfig.xml
+            return cls(use_sqlite=True, config_dir=str(config_dir))
         
         tree = ET.parse(dbconfig_path)
         root = tree.getroot()
         
         # Parse XML structure
-        # Expected format:
-        # <mysql>
-        #   <host>localhost</host>
-        #   <user>username</user>
-        #   <pass>password</pass>
-        #   <db>verlihub</db>
-        # </mysql>
-        
         mysql = root.find("mysql")
         if mysql is None:
-            raise ValueError("No <mysql> section in dbconfig.xml")
+            # Try SQLite config
+            sqlite = root.find("sqlite")
+            if sqlite is not None:
+                path_elem = sqlite.find("path")
+                return cls(
+                    use_sqlite=True,
+                    sqlite_path=path_elem.text if path_elem is not None else None,
+                    config_dir=str(config_dir),
+                )
+            raise ValueError("No <mysql> or <sqlite> section in dbconfig.xml")
         
         host_elem = mysql.find("host")
         user_elem = mysql.find("user")
@@ -87,18 +129,55 @@ class DatabaseConfig:
         
         return cls(
             host=host_elem.text if host_elem is not None else None,
-            username=user_elem.text if user_elem is not None else None,
+            user=user_elem.text if user_elem is not None else None,
             password=pass_elem.text if pass_elem is not None else None,
             database=db_elem.text if db_elem is not None else None,
+            db_type="mysql",
+        )
+    
+    @classmethod
+    def from_config(cls, config: "DatabaseConfig") -> "DatabaseConfig":
+        """
+        Create from verlihub.config.DatabaseConfig.
+        
+        Args:
+            config: Config from YAML loader
+            
+        Returns:
+            DatabaseConfig instance for database connection
+        """
+        # Handle the config module's DatabaseConfig
+        db_type = getattr(config, "type", "sqlite")
+        url = getattr(config, "url", "")
+        
+        if url:
+            return cls(url=url)
+        
+        return cls(
+            db_type=db_type,
+            host=getattr(config, "host", DEFAULT_DB_HOST),
+            port=getattr(config, "port", DEFAULT_DB_PORT),
+            database=getattr(config, "name", DEFAULT_DB_NAME),
+            user=getattr(config, "user", ""),
+            password=getattr(config, "password", ""),
+            sqlite_path=getattr(config, "path", ""),
         )
     
     @property 
     def url(self) -> str:
         """Generate SQLAlchemy async connection URL."""
+        # Direct URL override
+        if self._url:
+            return self._url
+        
         if self.use_sqlite:
             # Use aiosqlite for async SQLite
             if self.sqlite_path:
                 return f"sqlite+aiosqlite:///{self.sqlite_path}"
+            elif self.config_dir:
+                # Default to verlihub.db in config directory
+                db_path = Path(self.config_dir) / "verlihub.db"
+                return f"sqlite+aiosqlite:///{db_path}"
             else:
                 # In-memory SQLite
                 return "sqlite+aiosqlite:///:memory:"
@@ -106,34 +185,66 @@ class DatabaseConfig:
         # URL-encode password to handle special characters
         password = quote_plus(self.password) if self.password else ""
         
-        if self.username and password:
-            auth = f"{self.username}:{password}@"
-        elif self.username:
-            auth = f"{self.username}@"
+        if self.user and password:
+            auth = f"{self.user}:{password}@"
+        elif self.user:
+            auth = f"{self.user}@"
         else:
             auth = ""
         
-        # Use asyncmy driver for async MySQL
-        return f"mysql+asyncmy://{auth}{self.host}:{self.port}/{self.database}"
+        # PostgreSQL
+        if self._db_type in ("postgresql", "postgres"):
+            driver = self._driver or "postgresql+asyncpg"
+            port = self.port if self.port != 3306 else 5432
+            return f"{driver}://{auth}{self.host}:{port}/{self.database}"
+        
+        # MySQL (default for non-sqlite)
+        driver = self._driver or "mysql+asyncmy"
+        return f"{driver}://{auth}{self.host}:{self.port}/{self.database}"
     
+    @property
+    def db_type(self) -> str:
+        """Database type (sqlite, mysql, postgresql)."""
+        return self._db_type or ("sqlite" if self.use_sqlite else "mysql")
+    
+    @property
+    def driver(self) -> str:
+        """Database driver name."""
+        if self._driver:
+            return self._driver
+        if self.use_sqlite:
+            return "sqlite+aiosqlite"
+        if self._db_type in ("postgresql", "postgres"):
+            return "postgresql+asyncpg"
+        return "mysql+asyncmy"
+
     @property
     def sync_url(self) -> str:
         """Generate SQLAlchemy sync connection URL (for migrations)."""
         if self.use_sqlite:
             if self.sqlite_path:
                 return f"sqlite:///{self.sqlite_path}"
+            elif self.config_dir:
+                db_path = Path(self.config_dir) / "verlihub.db"
+                return f"sqlite:///{db_path}"
             else:
                 return "sqlite:///:memory:"
         
         password = quote_plus(self.password) if self.password else ""
         
-        if self.username and password:
-            auth = f"{self.username}:{password}@"
-        elif self.username:
-            auth = f"{self.username}@"
+        if self.user and password:
+            auth = f"{self.user}:{password}@"
+        elif self.user:
+            auth = f"{self.user}@"
         else:
             auth = ""
         
+        # PostgreSQL
+        if self._db_type in ("postgresql", "postgres"):
+            port = self.port if self.port != 3306 else 5432
+            return f"postgresql+psycopg2://{auth}{self.host}:{port}/{self.database}"
+        
+        # MySQL
         return f"mysql+pymysql://{auth}{self.host}:{self.port}/{self.database}"
 
 

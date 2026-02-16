@@ -21,6 +21,10 @@
 #include "hub_context.h"
 #include <iostream>
 #include <chrono>
+#include <sstream>
+#include "src/cvhpluginmgr.h"
+#include "src/cpluginmanager.h"
+#include "src/cpluginbase.h"
 
 namespace nVerliHub {
 
@@ -474,13 +478,17 @@ bool HubContext::LoadPlugin(std::string_view plugin_path) {
         return false;
     }
     
-    // TODO: Implement plugin loading via m_plugin_mgr
-    // The plugin manager needs to be refactored to support this
-    Log(1, "LoadPlugin called for: " + std::string(plugin_path));
+    std::string path_str(plugin_path);
+    Log(1, "LoadPlugin: Loading plugin from " + path_str);
     
-    // Placeholder - in real implementation:
-    // return m_plugin_mgr->LoadPlugin(plugin_path);
-    return false;
+    // The plugin manager's LoadPlugin accepts a full path to a .so file
+    bool result = m_plugin_mgr->LoadPlugin(path_str);
+    
+    if (!result) {
+        Log(0, "Failed to load plugin: " + m_plugin_mgr->GetError());
+    }
+    
+    return result;
 }
 
 bool HubContext::UnloadPlugin(std::string_view plugin_name) {
@@ -489,10 +497,16 @@ bool HubContext::UnloadPlugin(std::string_view plugin_name) {
         return false;
     }
     
-    Log(1, "UnloadPlugin called for: " + std::string(plugin_name));
+    std::string name_str(plugin_name);
+    Log(1, "UnloadPlugin: Unloading " + name_str);
     
-    // Placeholder
-    return false;
+    bool result = m_plugin_mgr->UnloadPlugin(name_str, true);
+    
+    if (!result) {
+        Log(0, "Failed to unload plugin: " + name_str);
+    }
+    
+    return result;
 }
 
 bool HubContext::ReloadPlugin(std::string_view plugin_name) {
@@ -501,10 +515,16 @@ bool HubContext::ReloadPlugin(std::string_view plugin_name) {
         return false;
     }
     
-    Log(1, "ReloadPlugin called for: " + std::string(plugin_name));
+    std::string name_str(plugin_name);
+    Log(1, "ReloadPlugin: Reloading " + name_str);
     
-    // Placeholder - unload then load
-    return false;
+    bool result = m_plugin_mgr->ReloadPlugin(name_str);
+    
+    if (!result) {
+        Log(0, "Failed to reload plugin: " + name_str);
+    }
+    
+    return result;
 }
 
 std::vector<PluginInfo> HubContext::GetLoadedPlugins() const {
@@ -514,8 +534,30 @@ std::vector<PluginInfo> HubContext::GetLoadedPlugins() const {
         return result;
     }
     
-    // TODO: Implement once plugin manager is refactored
-    // For now return empty list
+    // Iterate through loaded plugins using the plugin manager's list
+    // The mPlugins map uses plugin names as keys
+    std::ostringstream listing;
+    m_plugin_mgr->List(listing);
+    
+    // Parse the listing to extract plugin info
+    // The List() method outputs plugins with their names
+    // For a more robust implementation, we could modify cPluginManager
+    // to provide direct access to plugin info
+    
+    // For now, check known plugin names
+    const char* known_plugins[] = {"Lua", "Python", "Plugman", nullptr};
+    for (int i = 0; known_plugins[i]; ++i) {
+        nPlugin::cPluginBase* plugin = m_plugin_mgr->GetPlugin(known_plugins[i]);
+        if (plugin) {
+            PluginInfo info;
+            info.name = plugin->Name();
+            info.version = plugin->Version();
+            info.loaded = true;
+            // Path not directly available from cPluginBase
+            result.push_back(info);
+        }
+    }
+    
     return result;
 }
 
@@ -524,8 +566,9 @@ bool HubContext::IsPluginLoaded(std::string_view plugin_name) const {
         return false;
     }
     
-    // TODO: Check plugin manager for loaded plugin
-    return false;
+    std::string name_str(plugin_name);
+    nPlugin::cPluginBase* plugin = m_plugin_mgr->GetPlugin(name_str);
+    return (plugin != nullptr);
 }
 
 bool HubContext::ExecuteLuaScript(std::string_view script_path) {
@@ -534,10 +577,31 @@ bool HubContext::ExecuteLuaScript(std::string_view script_path) {
         return false;
     }
     
-    Log(1, "ExecuteLuaScript called for: " + std::string(script_path));
+    // Check if Lua plugin is loaded
+    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
+    if (!lua_plugin) {
+        Log(0, "Lua plugin not loaded - cannot execute script");
+        return false;
+    }
     
-    // TODO: Find lua plugin and call its script loading function
-    // This requires accessing the lua plugin through the plugin manager
+    std::string path_str(script_path);
+    Log(1, "ExecuteLuaScript: " + path_str);
+    
+    // Script loading in the Lua plugin is done through its console interface.
+    // To load scripts programmatically, use the hub command interface.
+    // The command format is: !luascript <script_path>
+    // 
+    // For full programmatic control, scripts should be loaded via:
+    // 1. The REST API endpoints for script management
+    // 2. The hub's operator command interface
+    // 3. Auto-loading via the scripts/ directory
+    //
+    // Direct integration with the Lua plugin's internal structures
+    // would require tight coupling that we want to avoid.
+    Log(1, "Note: Use !luascript command or REST API to load Lua scripts");
+    
+    // Return false to indicate the script was not loaded directly
+    // The caller should use the appropriate command interface
     return false;
 }
 
@@ -547,7 +611,16 @@ bool HubContext::UnloadLuaScript(std::string_view script_path) {
         return false;
     }
     
-    Log(1, "UnloadLuaScript called for: " + std::string(script_path));
+    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
+    if (!lua_plugin) {
+        Log(0, "Lua plugin not loaded");
+        return false;
+    }
+    
+    std::string path_str(script_path);
+    Log(1, "UnloadLuaScript: " + path_str);
+    Log(1, "Note: Use !luascript- command or REST API to unload Lua scripts");
+    
     return false;
 }
 
@@ -558,7 +631,18 @@ std::vector<std::string> HubContext::GetLoadedLuaScripts() const {
         return result;
     }
     
-    // TODO: Get from lua plugin
+    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
+    if (!lua_plugin) {
+        return result;
+    }
+    
+    // The Lua plugin stores scripts in its mLua vector.
+    // Without including the Lua plugin headers, we cannot access
+    // the script list directly. Use !luascript command or REST API.
+    //
+    // Future enhancement: Add a virtual method to cVHPlugin for
+    // script enumeration that plugins can implement.
+    
     return result;
 }
 
@@ -568,9 +652,16 @@ bool HubContext::ExecutePythonScript(std::string_view script_path) {
         return false;
     }
     
-    Log(1, "ExecutePythonScript called for: " + std::string(script_path));
+    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
+    if (!py_plugin) {
+        Log(0, "Python plugin not loaded - cannot execute script");
+        return false;
+    }
     
-    // TODO: Find python plugin and call its script loading function
+    std::string path_str(script_path);
+    Log(1, "ExecutePythonScript: " + path_str);
+    Log(1, "Note: Use !pyfile command or REST API to load Python scripts");
+    
     return false;
 }
 
@@ -580,7 +671,16 @@ bool HubContext::UnloadPythonScript(std::string_view script_path) {
         return false;
     }
     
-    Log(1, "UnloadPythonScript called for: " + std::string(script_path));
+    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
+    if (!py_plugin) {
+        Log(0, "Python plugin not loaded");
+        return false;
+    }
+    
+    std::string path_str(script_path);
+    Log(1, "UnloadPythonScript: " + path_str);
+    Log(1, "Note: Use !pyunload command or REST API to unload Python scripts");
+    
     return false;
 }
 
@@ -591,7 +691,14 @@ std::vector<std::string> HubContext::GetLoadedPythonScripts() const {
         return result;
     }
     
-    // TODO: Get from python plugin
+    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
+    if (!py_plugin) {
+        return result;
+    }
+    
+    // Similar to Lua scripts, Python script list requires plugin headers.
+    // Use !pyfiles command or REST API to list loaded scripts.
+    
     return result;
 }
 

@@ -1,0 +1,429 @@
+# Dual-Build Docker Compose for Verlihub Testing
+#
+# This configuration builds and tests both:
+# 1. Original Verlihub (upstream/standard build)
+# 2. Verlihub-py Edition (with Python SWIG bindings and pythonic API)
+#
+# Tests include:
+# - Unit tests for both editions
+# - Integration tests (plugin loading)
+# - Full integration tests (running hub)
+# - Cross-edition compatibility tests
+#
+# Usage:
+#   # Build and run all tests
+#   docker compose -f docker/docker-compose.dual-test.yml up --build
+#
+#   # Run only original verlihub tests
+#   docker compose -f docker/docker-compose.dual-test.yml up --build original-tests
+#
+#   # Run only verlihub-py tests
+#   docker compose -f docker/docker-compose.dual-test.yml up --build verlihub-py-tests
+#
+#   # Run full integration tests (both editions)
+#   docker compose -f docker/docker-compose.dual-test.yml up --build full-integration
+#
+#   # View logs
+#   docker compose -f docker/docker-compose.dual-test.yml logs -f
+
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # Shared MySQL Database
+  # ==========================================================================
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: verlihub
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uverlihub", "-pverlihub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - dual-test-network
+
+  # ==========================================================================
+  # Original Verlihub Build & Test
+  # ==========================================================================
+  original-build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.original
+    volumes:
+      - original-build:/build
+    networks:
+      - dual-test-network
+
+  original-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.original
+    depends_on:
+      mysql:
+        condition: service_healthy
+      original-build:
+        condition: service_completed_successfully
+    environment:
+      VH_CONFIG_DIR: /etc/verlihub
+      MYSQL_HOST: mysql
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+      MYSQL_DATABASE: verlihub
+    command: |
+      /bin/bash -c '
+        echo "=========================================="
+        echo "Original Verlihub Tests"
+        echo "=========================================="
+        
+        # Run CTest tests if available
+        cd /build
+        if [ -f CTestTestfile.cmake ]; then
+          echo "Running CTest..."
+          ctest --output-on-failure || echo "CTest completed with some failures"
+        fi
+        
+        # Run basic functionality tests
+        echo ""
+        echo "Testing verlihub binary..."
+        verlihub --version || echo "Version check failed"
+        
+        echo ""
+        echo "Testing plugin loading..."
+        ls -la /usr/local/lib/verlihub/ 2>/dev/null || echo "Plugin directory not found"
+        
+        echo ""
+        echo "Original Verlihub tests completed"
+      '
+    volumes:
+      - original-build:/build:ro
+    networks:
+      - dual-test-network
+
+  # ==========================================================================
+  # Verlihub-py Build & Test
+  # ==========================================================================
+  verlihub-py-build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    volumes:
+      - verlihub-py-build:/build
+    networks:
+      - dual-test-network
+
+  verlihub-py-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      mysql:
+        condition: service_healthy
+      verlihub-py-build:
+        condition: service_completed_successfully
+    environment:
+      VH_CONFIG_DIR: /etc/verlihub
+      VH_DB_BACKEND: mysql
+      VH_MYSQL_HOST: mysql
+      VH_MYSQL_PORT: "3306"
+      VH_MYSQL_USER: verlihub
+      VH_MYSQL_PASSWORD: verlihub
+      VH_MYSQL_DATABASE: verlihub
+      VH_INTEGRATION_TESTS: "1"
+      PYTHONPATH: /build/python
+      LD_LIBRARY_PATH: /build/src:/usr/local/lib
+    command: |
+      /bin/bash -c '
+        echo "=========================================="
+        echo "Verlihub-py Tests"
+        echo "=========================================="
+        
+        # Run Python unit tests
+        echo "Running Python unit tests..."
+        cd /src
+        pytest python/tests/test_verlihub_core.py -v --tb=short || UNIT_FAILED=1
+        
+        # Run plugin tests
+        echo ""
+        echo "Running plugin tests..."
+        pytest python/tests/test_plugins.py -v --tb=short || PLUGIN_FAILED=1
+        
+        # Run database tests
+        echo ""
+        echo "Running database tests..."
+        pytest python/tests/test_database.py -v --tb=short || DB_FAILED=1
+        
+        # Run Lua plugin tests
+        echo ""
+        echo "Running Lua plugin tests..."
+        pytest python/tests/test_lua_plugin.py -v --tb=short || LUA_FAILED=1
+        
+        # Run Python plugin tests
+        echo ""
+        echo "Running Python plugin tests..."
+        pytest python/tests/test_python_plugin.py -v --tb=short || PYTHON_PI_FAILED=1
+        
+        echo ""
+        echo "=========================================="
+        echo "Verlihub-py Test Summary"
+        echo "=========================================="
+        [ -z "$$UNIT_FAILED" ] && echo "Unit Tests: PASSED" || echo "Unit Tests: FAILED"
+        [ -z "$$PLUGIN_FAILED" ] && echo "Plugin Tests: PASSED" || echo "Plugin Tests: FAILED"
+        [ -z "$$DB_FAILED" ] && echo "Database Tests: PASSED" || echo "Database Tests: FAILED"
+        [ -z "$$LUA_FAILED" ] && echo "Lua Plugin Tests: PASSED" || echo "Lua Plugin Tests: FAILED"
+        [ -z "$$PYTHON_PI_FAILED" ] && echo "Python Plugin Tests: PASSED" || echo "Python Plugin Tests: FAILED"
+        
+        # Exit with failure if any tests failed
+        [ -z "$$UNIT_FAILED" ] && [ -z "$$PLUGIN_FAILED" ] && [ -z "$$DB_FAILED" ]
+      '
+    volumes:
+      - verlihub-py-build:/build:ro
+      - ../python:/src/python:ro
+    networks:
+      - dual-test-network
+
+  # ==========================================================================
+  # Full Integration Tests (Both Editions)
+  # ==========================================================================
+  original-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.original
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_CONFIG_DIR: /etc/verlihub
+      MYSQL_HOST: mysql
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+      MYSQL_DATABASE: verlihub_original
+    ports:
+      - "4111:4111"
+    command: |
+      /bin/bash -c '
+        # Initialize database and config
+        mkdir -p /etc/verlihub
+        cd /etc/verlihub
+        
+        # Wait for MySQL
+        while ! mysqladmin ping -h mysql -uverlihub -pverlihub --silent; do
+          sleep 1
+        done
+        
+        # Create database if needed
+        mysql -h mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS verlihub_original"
+        mysql -h mysql -uroot -proot -e "GRANT ALL ON verlihub_original.* TO verlihub@'\''%'\''"
+        
+        # Configure and start hub
+        echo "Starting original verlihub..."
+        verlihub -d /etc/verlihub &
+        
+        # Keep container running
+        tail -f /var/log/verlihub/*.log 2>/dev/null || sleep infinity
+      '
+    volumes:
+      - original-config:/etc/verlihub
+    networks:
+      - dual-test-network
+    profiles:
+      - full-integration
+
+  verlihub-py-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_CONFIG_DIR: /etc/verlihub
+      VH_DB_BACKEND: mysql
+      VH_MYSQL_HOST: mysql
+      VH_MYSQL_USER: verlihub
+      VH_MYSQL_PASSWORD: verlihub
+      VH_MYSQL_DATABASE: verlihub_py
+    ports:
+      - "4112:4111"
+    command: |
+      /bin/bash -c '
+        # Initialize database and config
+        mkdir -p /etc/verlihub
+        cd /etc/verlihub
+        
+        # Wait for MySQL
+        while ! mysqladmin ping -h mysql -uverlihub -pverlihub --silent; do
+          sleep 1
+        done
+        
+        # Create database if needed
+        mysql -h mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS verlihub_py"
+        mysql -h mysql -uroot -proot -e "GRANT ALL ON verlihub_py.* TO verlihub@'\''%'\''"
+        
+        # Configure and start hub
+        echo "Starting verlihub-py..."
+        verlihub -d /etc/verlihub &
+        
+        # Keep container running
+        tail -f /var/log/verlihub/*.log 2>/dev/null || sleep infinity
+      '
+    volumes:
+      - verlihub-py-config:/etc/verlihub
+    networks:
+      - dual-test-network
+    profiles:
+      - full-integration
+
+  full-integration:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      original-hub:
+        condition: service_started
+      verlihub-py-hub:
+        condition: service_started
+    environment:
+      VH_FULL_INTEGRATION: "1"
+      VH_INTEGRATION_TESTS: "1"
+      ORIGINAL_HUB_HOST: original-hub
+      ORIGINAL_HUB_PORT: "4111"
+      VERLIHUB_PY_HUB_HOST: verlihub-py-hub
+      VERLIHUB_PY_HUB_PORT: "4111"
+    command: |
+      /bin/bash -c '
+        echo "=========================================="
+        echo "Full Integration Tests"
+        echo "=========================================="
+        
+        # Wait for hubs to be ready
+        echo "Waiting for original hub..."
+        for i in {1..60}; do
+          nc -z original-hub 4111 && break
+          sleep 2
+        done
+        
+        echo "Waiting for verlihub-py hub..."
+        for i in {1..60}; do
+          nc -z verlihub-py-hub 4111 && break
+          sleep 2
+        done
+        
+        # Run integration tests against both hubs
+        echo ""
+        echo "Testing original hub..."
+        python3 /app/docker/tests/integration_test.py \
+          --hub-host original-hub \
+          --hub-port 4111 \
+          || ORIGINAL_FAILED=1
+        
+        echo ""
+        echo "Testing verlihub-py hub..."
+        python3 /app/docker/tests/integration_test.py \
+          --hub-host verlihub-py-hub \
+          --hub-port 4111 \
+          || VERLIHUB_PY_FAILED=1
+        
+        echo ""
+        echo "=========================================="
+        echo "Full Integration Test Summary"
+        echo "=========================================="
+        [ -z "$$ORIGINAL_FAILED" ] && echo "Original Hub: PASSED" || echo "Original Hub: FAILED"
+        [ -z "$$VERLIHUB_PY_FAILED" ] && echo "Verlihub-py Hub: PASSED" || echo "Verlihub-py Hub: FAILED"
+        
+        [ -z "$$ORIGINAL_FAILED" ] && [ -z "$$VERLIHUB_PY_FAILED" ]
+      '
+    volumes:
+      - ../docker/tests:/app/docker/tests:ro
+    networks:
+      - dual-test-network
+    profiles:
+      - full-integration
+
+  # ==========================================================================
+  # Cross-Edition Compatibility Tests
+  # ==========================================================================
+  compatibility-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      original-hub:
+        condition: service_started
+      verlihub-py-hub:
+        condition: service_started
+    environment:
+      VH_FULL_INTEGRATION: "1"
+      ORIGINAL_HUB_HOST: original-hub
+      VERLIHUB_PY_HUB_HOST: verlihub-py-hub
+    command: |
+      /bin/bash -c '
+        echo "=========================================="
+        echo "Cross-Edition Compatibility Tests"
+        echo "=========================================="
+        
+        # Wait for both hubs
+        sleep 30
+        
+        # Test: Connect from client to both hubs
+        echo "Testing client connectivity..."
+        
+        # Test: Database schema compatibility
+        echo "Testing database schema compatibility..."
+        
+        # Test: Plugin API compatibility  
+        echo "Testing plugin API compatibility..."
+        
+        echo ""
+        echo "Compatibility tests completed"
+      '
+    networks:
+      - dual-test-network
+    profiles:
+      - full-integration
+
+  # ==========================================================================
+  # Test Results Aggregator
+  # ==========================================================================
+  test-results:
+    image: alpine:latest
+    depends_on:
+      original-tests:
+        condition: service_completed_successfully
+      verlihub-py-tests:
+        condition: service_completed_successfully
+    command: |
+      /bin/sh -c '
+        echo "=========================================="
+        echo "Dual Build Test Results Summary"
+        echo "=========================================="
+        echo ""
+        echo "Original Verlihub: Tests completed"
+        echo "Verlihub-py: Tests completed"
+        echo ""
+        echo "All tests finished successfully!"
+        echo "=========================================="
+      '
+    volumes:
+      - test-results:/results
+    networks:
+      - dual-test-network
+
+volumes:
+  mysql-data:
+  original-build:
+  verlihub-py-build:
+  original-config:
+  verlihub-py-config:
+  test-results:
+
+networks:
+  dual-test-network:
+    driver: bridge

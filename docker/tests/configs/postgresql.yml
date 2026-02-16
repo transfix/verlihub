@@ -1,0 +1,28 @@
+# PostgreSQL configuration
+# Uses PostgreSQL database server
+environment: development
+mode: api
+
+database:
+  type: postgresql
+  host: postgres
+  port: 5432
+  name: verlihub_test
+  user: verlihub
+  password: verlihub
+  
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+  
+hub:
+  name: "PostgreSQL Test Hub"
+  port: 4111
+  max_users: 100
+
+logging:
+  level: debug

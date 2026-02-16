@@ -38,7 +38,7 @@ class TestDatabaseConfig:
         config = DatabaseConfig(use_sqlite=True)
         
         assert config.use_sqlite is True
-        assert config.sqlite_path is None
+        assert not config.sqlite_path  # Empty string or None
         assert "sqlite+aiosqlite:///:memory:" in config.url
     
     def test_sqlite_config_with_path(self, tmp_path):
@@ -53,7 +53,8 @@ class TestDatabaseConfig:
     def test_mysql_config_default(self):
         """Test MySQL config with defaults."""
         config = DatabaseConfig(
-            username="user",
+            db_type="mysql",
+            user="user",
             password="pass",
         )
         

@@ -20,22 +20,144 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DatabaseConfig:
-    """Database connection configuration."""
+    """
+    Database connection configuration.
+    
+    Supports SQLite (default), MySQL, and PostgreSQL with async drivers.
+    
+    Configuration priority:
+    1. If `url` is provided, it's used directly (must be async-compatible)
+    2. If `type` is "sqlite" and no path, uses SQLite file in config directory
+    3. Otherwise constructs URL from individual parameters
+    
+    Examples:
+        # SQLite (default) - creates verlihub.db in config directory
+        database:
+          type: sqlite
+          
+        # SQLite with specific path
+        database:
+          type: sqlite
+          path: /var/lib/verlihub/data.db
+          
+        # MySQL
+        database:
+          type: mysql
+          host: localhost
+          port: 3306
+          name: verlihub
+          user: verlihub
+          password: secret
+          
+        # PostgreSQL  
+        database:
+          type: postgresql
+          host: localhost
+          port: 5432
+          name: verlihub
+          user: verlihub
+          password: secret
+          
+        # Direct URL (advanced)
+        database:
+          url: postgresql+asyncpg://user:pass@host:5432/dbname
+    """
+    # Database type: "sqlite", "mysql", "postgresql"
+    type: str = "sqlite"
+    
+    # Direct URL override (must use async driver)
+    url: str = ""
+    
+    # SQLite specific
+    path: str = ""  # Empty = use config_dir/verlihub.db
+    
+    # Traditional connection parameters (for mysql/postgresql)
     host: str = "localhost"
-    port: int = 3306
+    port: int = 3306  # Will be auto-adjusted for postgres
     user: str = "verlihub"
     password: str = ""
     name: str = "verlihub"
     
+    def get_url(self, config_dir: str = "") -> str:
+        """
+        Get async database URL.
+        
+        Args:
+            config_dir: Configuration directory (for SQLite default path)
+            
+        Returns:
+            SQLAlchemy async connection URL
+        """
+        from urllib.parse import quote_plus
+        
+        # Direct URL override
+        if self.url:
+            return self.url
+        
+        # SQLite
+        if self.type == "sqlite":
+            if self.path:
+                db_path = self.path
+            elif config_dir:
+                db_path = str(Path(config_dir) / "verlihub.db")
+            else:
+                # In-memory for testing
+                return "sqlite+aiosqlite:///:memory:"
+            return f"sqlite+aiosqlite:///{db_path}"
+        
+        # Build auth string
+        password = quote_plus(self.password) if self.password else ""
+        if self.user and password:
+            auth = f"{self.user}:{password}@"
+        elif self.user:
+            auth = f"{self.user}@"
+        else:
+            auth = ""
+        
+        # MySQL
+        if self.type == "mysql":
+            port = self.port if self.port != 5432 else 3306
+            return f"mysql+asyncmy://{auth}{self.host}:{port}/{self.name}"
+        
+        # PostgreSQL
+        if self.type in ("postgresql", "postgres"):
+            port = self.port if self.port != 3306 else 5432
+            return f"postgresql+asyncpg://{auth}{self.host}:{port}/{self.name}"
+        
+        raise ValueError(f"Unknown database type: {self.type}")
+    
     def to_env(self) -> dict[str, str]:
         """Export as environment variables."""
         return {
-            "VERLIHUB_DB_HOST": self.host,
-            "VERLIHUB_DB_PORT": str(self.port),
-            "VERLIHUB_DB_USER": self.user,
-            "VERLIHUB_DB_PASSWORD": self.password,
-            "VERLIHUB_DB_NAME": self.name,
+            "VH_DB_TYPE": self.type,
+            "VH_DB_HOST": self.host,
+            "VH_DB_PORT": str(self.port),
+            "VH_DB_USER": self.user,
+            "VH_DB_PASSWORD": self.password,
+            "VH_DB_NAME": self.name,
+            "VH_DB_PATH": self.path,
         }
+    
+    def display_name(self, config_dir: str = "") -> str:
+        """Get human-readable database connection description."""
+        if self.url:
+            # Mask password in URL for display
+            url = self.url
+            if "@" in url:
+                parts = url.split("@", 1)
+                if ":" in parts[0]:
+                    scheme_user = parts[0].rsplit(":", 1)[0]
+                    url = f"{scheme_user}:***@{parts[1]}"
+            return url
+        
+        if self.type == "sqlite":
+            if self.path:
+                return f"sqlite:{self.path}"
+            elif config_dir:
+                return f"sqlite:{config_dir}/verlihub.db"
+            return "sqlite::memory:"
+        
+        return f"{self.type}://{self.host}:{self.port}/{self.name}"
 
 
 @dataclass
@@ -139,6 +261,9 @@ class VerlihubConfig:
     mode: str = "api"  # "api", "hub", "both"
     environment: str = "development"  # "development", "qa", "production"
     
+    # Internal: config directory (set by load_config)
+    _config_dir: str = ""
+    
     @classmethod
     def from_yaml(cls, path: str | Path) -> "VerlihubConfig":
         """
@@ -181,6 +306,9 @@ class VerlihubConfig:
         if "database" in data:
             db = data["database"]
             config.database = DatabaseConfig(
+                type=db.get("type", config.database.type),
+                url=db.get("url", config.database.url),
+                path=db.get("path", config.database.path),
                 host=db.get("host", config.database.host),
                 port=db.get("port", config.database.port),
                 user=db.get("user", config.database.user),
@@ -271,6 +399,8 @@ class VerlihubConfig:
         Load configuration from environment variables.
         
         Environment variable mapping:
+        - VH_DB_TYPE -> database.type (sqlite, mysql, postgresql)
+        - VH_USE_SQLITE -> database.type = sqlite (legacy)
         - VERLIHUB_DB_* -> database.*
         - VH_API_* -> api.*
         - VH_HUB_* -> hub.*
@@ -279,13 +409,21 @@ class VerlihubConfig:
         """
         config = cls()
         
+        # Database type - default to SQLite for easy startup
+        db_type = os.getenv("VH_DB_TYPE", "sqlite")
+        if os.getenv("VH_USE_SQLITE", "").lower() in ("1", "true", "yes"):
+            db_type = "sqlite"
+        
         # Database from environment
         config.database = DatabaseConfig(
+            type=db_type,
             host=os.getenv("VERLIHUB_DB_HOST", config.database.host),
             port=int(os.getenv("VERLIHUB_DB_PORT", str(config.database.port))),
             user=os.getenv("VERLIHUB_DB_USER", config.database.user),
             password=os.getenv("VERLIHUB_DB_PASSWORD", config.database.password),
             name=os.getenv("VERLIHUB_DB_NAME", config.database.name),
+            path=os.getenv("VH_DB_PATH", ""),
+            url=os.getenv("VH_DB_URL", ""),
         )
         
         # API from environment
@@ -416,45 +554,69 @@ def load_config(
     
     Priority:
     1. Explicit config_file path
-    2. config.yml in config_dir
-    3. Environment variables
+    2. config.yml in config_dir (or current dir if not specified)
+    3. Common config file locations
+    4. Sensible defaults (SQLite in config_dir, API on localhost:8000)
+    
+    When no config is found, verlihub-py starts with:
+    - SQLite database in config_dir/verlihub.db
+    - API server on 127.0.0.1:8000
+    - Development mode
     
     Args:
         config_file: Explicit path to YAML config file
-        config_dir: Directory to search for config.yml
+        config_dir: Directory to search for config.yml (defaults to cwd)
         
     Returns:
         VerlihubConfig instance
     """
+    # Default config_dir to current working directory
+    if not config_dir:
+        config_dir = Path.cwd()
+    else:
+        config_dir = Path(config_dir)
+    
     # Try explicit config file
     if config_file:
         path = Path(config_file)
         if path.exists():
             logger.info("Loading configuration from %s", path)
-            return VerlihubConfig.from_yaml(path)
+            config = VerlihubConfig.from_yaml(path)
+            config._config_dir = str(config_dir)
+            return config
         else:
             raise FileNotFoundError(f"Config file not found: {path}")
     
-    # Try config_dir/config.yml
-    if config_dir:
-        path = Path(config_dir) / "config.yml"
+    # Try config_dir/config.yml or verlihub.yml
+    for filename in ["config.yml", "verlihub.yml"]:
+        path = config_dir / filename
         if path.exists():
             logger.info("Loading configuration from %s", path)
-            return VerlihubConfig.from_yaml(path)
+            config = VerlihubConfig.from_yaml(path)
+            config._config_dir = str(config_dir)
+            return config
     
-    # Check common locations
-    search_paths = [
-        Path.cwd() / "config.yml",
-        Path.cwd() / "verlihub.yml",
-        Path.home() / ".verlihub" / "config.yml",
-        Path("/etc/verlihub/config.yml"),
-    ]
+    # Check common locations (only if config_dir is cwd)
+    if config_dir == Path.cwd():
+        search_paths = [
+            Path.home() / ".verlihub" / "config.yml",
+            Path("/etc/verlihub/config.yml"),
+        ]
+        
+        for path in search_paths:
+            if path.exists():
+                logger.info("Loading configuration from %s", path)
+                config = VerlihubConfig.from_yaml(path)
+                config._config_dir = str(path.parent)
+                return config
     
-    for path in search_paths:
-        if path.exists():
-            logger.info("Loading configuration from %s", path)
-            return VerlihubConfig.from_yaml(path)
+    # No config file found - use sensible defaults
+    logger.info("No config file found, using defaults (SQLite in %s)", config_dir)
+    config = VerlihubConfig.from_env()
+    config._config_dir = str(config_dir)
     
-    # Fall back to environment variables
-    logger.info("No config file found, using environment variables")
-    return VerlihubConfig.from_env()
+    # Ensure database uses SQLite in config_dir by default
+    if not config.database.url and config.database.type == "sqlite" and not config.database.path:
+        config.database.path = str(config_dir / "verlihub.db")
+    
+    return config

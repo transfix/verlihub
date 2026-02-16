@@ -1,0 +1,236 @@
+# Docker Compose for verlihub-py Database Backend Testing
+#
+# Tests the verlihub-py package against different database backends:
+# - MySQL 8.0
+# - PostgreSQL 16
+#
+# Usage:
+#   # Run MySQL tests only
+#   docker compose -f docker/docker-compose.test.yml up --build mysql-tests
+#
+#   # Run PostgreSQL tests only  
+#   docker compose -f docker/docker-compose.test.yml up --build postgres-tests
+#
+#   # Run all database tests
+#   docker compose -f docker/docker-compose.test.yml up --build
+#
+#   # Run with verbose output
+#   docker compose -f docker/docker-compose.test.yml run --rm mysql-tests pytest -v
+#
+# Environment variables (optional):
+#   PYTEST_ARGS: Additional pytest arguments (e.g., "-k test_user")
+
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # MySQL Database Service
+  # ==========================================================================
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: verlihub_test
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-test-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uverlihub", "-pverlihub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - test-network
+
+  # ==========================================================================
+  # PostgreSQL Database Service
+  # ==========================================================================
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: verlihub_test
+      POSTGRES_USER: verlihub
+      POSTGRES_PASSWORD: verlihub
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verlihub -d verlihub_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - test-network
+
+  # ==========================================================================
+  # MySQL Test Runner
+  # ==========================================================================
+  mysql-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_BACKEND: mysql
+      VH_MYSQL_HOST: mysql
+      VH_MYSQL_PORT: "3306"
+      VH_MYSQL_USER: verlihub
+      VH_MYSQL_PASSWORD: verlihub
+      VH_MYSQL_DATABASE: verlihub_test
+      VH_INTEGRATION_TESTS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: >
+      pytest python/tests/ 
+        -v 
+        --tb=short 
+        --ignore=python/tests/test_nmdc_stress.py
+        --ignore=python/tests/test_benchmarks.py
+        ${PYTEST_ARGS:-}
+    volumes:
+      - ../python:/app/python:ro
+      - test-results:/app/results
+    networks:
+      - test-network
+
+  # ==========================================================================
+  # PostgreSQL Test Runner  
+  # ==========================================================================
+  postgres-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      VH_DB_BACKEND: postgresql
+      VH_POSTGRES_HOST: postgres
+      VH_POSTGRES_PORT: "5432"
+      VH_POSTGRES_USER: verlihub
+      VH_POSTGRES_PASSWORD: verlihub
+      VH_POSTGRES_DATABASE: verlihub_test
+      VH_INTEGRATION_TESTS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: >
+      pytest python/tests/ 
+        -v 
+        --tb=short 
+        --ignore=python/tests/test_nmdc_stress.py
+        --ignore=python/tests/test_benchmarks.py
+        ${PYTEST_ARGS:-}
+    volumes:
+      - ../python:/app/python:ro
+      - test-results:/app/results
+    networks:
+      - test-network
+
+  # ==========================================================================
+  # All Database Tests (Sequential)
+  # ==========================================================================
+  all-db-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      VH_INTEGRATION_TESTS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "=========================================="
+        echo "Running SQLite tests..."
+        echo "=========================================="
+        VH_DB_BACKEND=sqlite pytest python/tests/ -v --tb=short \
+          --ignore=python/tests/test_nmdc_stress.py \
+          --ignore=python/tests/test_benchmarks.py \
+          --junitxml=/app/results/sqlite-results.xml || SQLITE_FAILED=1
+        
+        echo "=========================================="
+        echo "Running MySQL tests..."
+        echo "=========================================="
+        VH_DB_BACKEND=mysql \
+        VH_MYSQL_HOST=mysql VH_MYSQL_PORT=3306 \
+        VH_MYSQL_USER=verlihub VH_MYSQL_PASSWORD=verlihub \
+        VH_MYSQL_DATABASE=verlihub_test \
+        pytest python/tests/ -v --tb=short \
+          --ignore=python/tests/test_nmdc_stress.py \
+          --ignore=python/tests/test_benchmarks.py \
+          --junitxml=/app/results/mysql-results.xml || MYSQL_FAILED=1
+        
+        echo "=========================================="
+        echo "Running PostgreSQL tests..."
+        echo "=========================================="
+        VH_DB_BACKEND=postgresql \
+        VH_POSTGRES_HOST=postgres VH_POSTGRES_PORT=5432 \
+        VH_POSTGRES_USER=verlihub VH_POSTGRES_PASSWORD=verlihub \
+        VH_POSTGRES_DATABASE=verlihub_test \
+        pytest python/tests/ -v --tb=short \
+          --ignore=python/tests/test_nmdc_stress.py \
+          --ignore=python/tests/test_benchmarks.py \
+          --junitxml=/app/results/postgres-results.xml || POSTGRES_FAILED=1
+        
+        echo "=========================================="
+        echo "Test Summary"
+        echo "=========================================="
+        [ -z "$$SQLITE_FAILED" ] && echo "SQLite: PASSED" || echo "SQLite: FAILED"
+        [ -z "$$MYSQL_FAILED" ] && echo "MySQL: PASSED" || echo "MySQL: FAILED"
+        [ -z "$$POSTGRES_FAILED" ] && echo "PostgreSQL: PASSED" || echo "PostgreSQL: FAILED"
+        
+        # Exit with failure if any tests failed
+        [ -z "$$SQLITE_FAILED" ] && [ -z "$$MYSQL_FAILED" ] && [ -z "$$POSTGRES_FAILED" ]
+    volumes:
+      - ../python:/app/python:ro
+      - test-results:/app/results
+    networks:
+      - test-network
+
+  # ==========================================================================
+  # SQL Semantics Comparison Test
+  # ==========================================================================
+  sql-semantics-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      VH_INTEGRATION_TESTS: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "=========================================="
+        echo "SQL Semantics Comparison Tests"
+        echo "=========================================="
+        echo "Testing SQL behavior across database backends..."
+        python3 /app/python/tests/test_sql_semantics.py
+    volumes:
+      - ../python:/app/python:ro
+      - test-results:/app/results
+    networks:
+      - test-network
+
+volumes:
+  mysql-test-data:
+  postgres-test-data:
+  test-results:
+
+networks:
+  test-network:
+    driver: bridge

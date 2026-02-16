@@ -246,9 +246,14 @@ def main() -> None:
     
     try:
         config_file = args.config or os.getenv("VH_CONFIG_FILE")
-        config_dir = args.config_dir or os.getenv("VH_CONFIG_DIR")
+        # Default config_dir to current working directory if not specified
+        config_dir = args.config_dir or os.getenv("VH_CONFIG_DIR") or str(Path.cwd())
         
         config = load_config(config_file=config_file, config_dir=config_dir)
+        
+        # Store config_dir in config for use by database initialization
+        config._config_dir = config_dir
+        
     except FileNotFoundError as e:
         logger.error("Configuration error: %s", e)
         sys.exit(1)
@@ -295,6 +300,13 @@ def main() -> None:
     # Apply config to environment
     config.apply_to_env()
     
+    # Get database display name
+    config_dir = getattr(config, '_config_dir', str(Path.cwd()))
+    db_display = config.database.display_name(config_dir)
+    # Truncate if too long
+    if len(db_display) > 45:
+        db_display = db_display[:42] + "..."
+    
     # Log startup info
     if not args.quiet:
         print(f"""
@@ -304,7 +316,8 @@ def main() -> None:
 ║  Environment: {config.environment:<47} ║
 ║  Mode:        {config.mode:<47} ║
 ║  API:         {config.api.host}:{config.api.port:<42} ║
-║  Database:    {config.database.host}:{config.database.port}/{config.database.name:<36} ║
+║  Database:    {db_display:<47} ║
+║  Config dir:  {config_dir:<47} ║
 ╚════════════════════════════════════════════════════════════════╝
 """)
     

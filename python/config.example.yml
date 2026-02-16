@@ -23,12 +23,49 @@ environment: development
 # =============================================================================
 # Database Configuration
 # =============================================================================
+# Verlihub-py supports SQLite (default), MySQL, and PostgreSQL.
+#
+# SQLite (default) - No additional setup needed:
+#   database:
+#     type: sqlite
+#     # path: /path/to/verlihub.db  # Optional: defaults to config_dir/verlihub.db
+#
+# MySQL:
+#   database:
+#     type: mysql
+#     host: localhost
+#     port: 3306
+#     user: verlihub
+#     password: secret
+#     name: verlihub
+#
+# PostgreSQL:
+#   database:
+#     type: postgresql
+#     host: localhost
+#     port: 5432
+#     user: verlihub
+#     password: secret
+#     name: verlihub
+#
+# Direct URL (advanced - use async driver):
+#   database:
+#     url: postgresql+asyncpg://user:pass@host:5432/dbname
+#
 database:
-  host: localhost
-  port: 3306
-  user: verlihub
-  password: verlihub  # Change in production!
-  name: verlihub
+  # Database type: sqlite (default), mysql, postgresql
+  type: sqlite
+  
+  # SQLite path (optional - defaults to config_dir/verlihub.db)
+  # path: /var/lib/verlihub/verlihub.db
+  
+  # For MySQL/PostgreSQL:
+  # host: localhost
+  # port: 3306  # MySQL
+  # port: 5432  # PostgreSQL
+  # user: verlihub
+  # password: ""  # Change in production!
+  # name: verlihub
 
 # =============================================================================
 # API Server Configuration

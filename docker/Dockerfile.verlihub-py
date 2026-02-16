@@ -1,0 +1,129 @@
+# Verlihub-py Build Image
+#
+# Builds Verlihub with Python SWIG bindings and the pythonic verlihub-py package.
+# Includes full Python API support and integration with the thin layer architecture.
+
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    g++ \
+    git \
+    libmysqlclient-dev \
+    libssl-dev \
+    libpcre3-dev \
+    libmaxminddb-dev \
+    libicu-dev \
+    zlib1g-dev \
+    gettext \
+    libasprintf-dev \
+    rapidjson-dev \
+    lua5.4 \
+    liblua5.4-dev \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    swig \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy source code
+COPY . .
+
+# Build verlihub with SWIG bindings in single interpreter mode
+RUN mkdir -p build && cd build && \
+    cmake -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -DWITH_PLUGINS=ON \
+          -DWITH_LUA=ON \
+          -DWITH_PYTHON=ON \
+          -DPYTHON_USE_SINGLE_INTERPRETER=ON \
+          -DWITH_SWIG_BINDINGS=ON \
+          .. && \
+    make -j$(nproc) && \
+    make install
+
+# Runtime image
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmysqlclient21 \
+    libssl3 \
+    libpcre3 \
+    libmaxminddb0 \
+    libicu74 \
+    zlib1g \
+    liblua5.4-0 \
+    libasprintf0v5 \
+    python3 \
+    python3-pip \
+    python3-venv \
+    libpython3-dev \
+    gettext \
+    mysql-client \
+    curl \
+    netcat-openbsd \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed files from builder
+COPY --from=builder /usr/local /usr/local
+
+# Copy build directory (includes SWIG module)
+COPY --from=builder /src/build /build
+
+# Copy source for Python package
+COPY --from=builder /src/python /src/python
+
+# Copy docker test configs
+COPY --from=builder /src/docker /app/docker
+
+# Install Python test dependencies and verlihub-py package
+RUN pip3 install --no-cache-dir --break-system-packages \
+    pytest>=7.4.0 \
+    pytest-asyncio>=0.23.0 \
+    pytest-cov>=4.1.0 \
+    sqlmodel>=0.0.16 \
+    sqlalchemy[asyncio]>=2.0.0 \
+    aiomysql>=0.2.0 \
+    asyncmy>=0.2.9 \
+    asyncpg>=0.29.0 \
+    aiosqlite>=0.19.0 \
+    pydantic>=2.0.0 \
+    passlib>=1.7.4 \
+    python-jose>=3.3.0 \
+    pyyaml>=6.0 \
+    uvicorn>=0.27.0 \
+    fastapi>=0.109.0 \
+    httpx>=0.26.0 \
+    jinja2>=3.1.0 \
+    bcrypt>=4.0.0
+
+# Install verlihub-py package
+RUN pip3 install --no-cache-dir --break-system-packages -e /src/python
+
+# Create verlihub user and directories
+RUN useradd -r -s /bin/false verlihub && \
+    mkdir -p /etc/verlihub /var/lib/verlihub /var/log/verlihub && \
+    chown -R verlihub:verlihub /etc/verlihub /var/lib/verlihub /var/log/verlihub
+
+# Set up Python path for SWIG module
+ENV PYTHONPATH=/build/python:/src/python
+ENV LD_LIBRARY_PATH=/build/src:/usr/local/lib
+
+# Update library cache
+RUN ldconfig
+
+WORKDIR /src
+
+CMD ["verlihub", "--version"]

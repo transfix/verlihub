@@ -64,9 +64,11 @@ target_include_directories(verlihub_core
 )
 
 # Link against Python and the core library
+# Note: We need to link against libverlihub to access plugin management symbols
 target_link_libraries(verlihub_core
     PRIVATE
         verlihub_core_lib  # The refactored core library
+        verlihub           # Main verlihub library for plugin management
         Python3::Python
 )
 

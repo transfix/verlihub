@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ hub_name }} Dashboard{% endblock %}</title>
+    
+    <!-- Bulma CSS from CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom styles -->
+    <style>
+        :root {
+            --vh-primary: #00d1b2;
+            --vh-primary-dark: #00b89c;
+            --vh-dark-bg: #1a1a2e;
+            --vh-dark-card: #16213e;
+            --vh-dark-text: #e4e4e4;
+        }
+        
+        /* Dark theme */
+        [data-theme="dark"] {
+            --bulma-background: var(--vh-dark-bg);
+            --bulma-body-background-color: var(--vh-dark-bg);
+        }
+        
+        [data-theme="dark"] body {
+            background-color: var(--vh-dark-bg);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .navbar {
+            background-color: var(--vh-dark-card);
+        }
+        
+        [data-theme="dark"] .navbar-item,
+        [data-theme="dark"] .navbar-link {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .box,
+        [data-theme="dark"] .card {
+            background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .table {
+            background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .table th {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .input,
+        [data-theme="dark"] .textarea,
+        [data-theme="dark"] .select select {
+            background-color: #0f172a;
+            border-color: #334155;
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .title,
+        [data-theme="dark"] .subtitle {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .footer {
+            background-color: var(--vh-dark-card);
+        }
+        
+        /* Common styles */
+        .hero-body {
+            padding: 1.5rem;
+        }
+        
+        .stat-card {
+            text-align: center;
+        }
+        
+        .stat-card .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--vh-primary);
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        
+        .status-indicator.is-online {
+            background-color: #48c774;
+        }
+        
+        .status-indicator.is-offline {
+            background-color: #f14668;
+        }
+        
+        .user-class-badge {
+            font-size: 0.75rem;
+        }
+        
+        .sidebar {
+            position: fixed;
+            top: 52px;
+            left: 0;
+            height: calc(100vh - 52px);
+            width: 200px;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .main-content {
+            margin-left: 200px;
+            padding: 1.5rem;
+        }
+        
+        @media screen and (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+            }
+        }
+        
+        .notification-container {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            z-index: 1000;
+            width: 300px;
+        }
+        
+        /* Theme toggle button */
+        .theme-toggle {
+            cursor: pointer;
+        }
+        
+        /* Loading spinner */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        
+        /* User list table */
+        .user-table tr.is-online {
+            background-color: rgba(72, 199, 116, 0.1);
+        }
+    </style>
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a class="navbar-item" href="/dashboard/">
+                <i class="fas fa-server mr-2"></i>
+                <strong>{{ hub_name }}</strong>
+            </a>
+            
+            <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarMain">
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+            </a>
+        </div>
+        
+        <div id="navbarMain" class="navbar-menu">
+            <div class="navbar-start">
+                {% if user %}
+                <a class="navbar-item" href="/dashboard/">
+                    <i class="fas fa-tachometer-alt mr-2"></i> Dashboard
+                </a>
+                <a class="navbar-item" href="/dashboard/users">
+                    <i class="fas fa-users mr-2"></i> Users
+                </a>
+                <a class="navbar-item" href="/dashboard/bans">
+                    <i class="fas fa-ban mr-2"></i> Bans
+                </a>
+                {% if user.user_class >= 3 %}
+                <a class="navbar-item" href="/dashboard/console">
+                    <i class="fas fa-terminal mr-2"></i> Console
+                </a>
+                {% endif %}
+                {% if user.user_class >= 5 %}
+                <a class="navbar-item" href="/dashboard/plugins">
+                    <i class="fas fa-puzzle-piece mr-2"></i> Plugins
+                </a>
+                {% endif %}
+                {% if user.user_class >= 10 %}
+                <a class="navbar-item" href="/dashboard/config">
+                    <i class="fas fa-cog mr-2"></i> Config
+                </a>
+                {% endif %}
+                {% if user.user_class >= 5 %}
+                <a class="navbar-item" href="/dashboard/logs">
+                    <i class="fas fa-file-alt mr-2"></i> Logs
+                </a>
+                {% endif %}
+                {% endif %}
+            </div>
+            
+            <div class="navbar-end">
+                <div class="navbar-item">
+                    <span class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}"></span>
+                    <span>{% if hub_running %}Online{% else %}Offline{% endif %}</span>
+                </div>
+                
+                <a class="navbar-item theme-toggle" onclick="toggleTheme()">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                </a>
+                
+                {% if user %}
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">
+                        <i class="fas fa-user mr-2"></i>
+                        {{ user.nick }}
+                    </a>
+                    <div class="navbar-dropdown is-right">
+                        <a class="navbar-item" href="/dashboard/profile">
+                            <i class="fas fa-id-card mr-2"></i> Profile
+                        </a>
+                        <hr class="navbar-divider">
+                        <a class="navbar-item" href="/dashboard/logout">
+                            <i class="fas fa-sign-out-alt mr-2"></i> Logout
+                        </a>
+                    </div>
+                </div>
+                {% else %}
+                <div class="navbar-item">
+                    <a class="button is-primary" href="/dashboard/login">
+                        <i class="fas fa-sign-in-alt mr-2"></i> Login
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Notification container -->
+    <div id="notification-container" class="notification-container"></div>
+    
+    <!-- Main content -->
+    <section class="section" style="margin-top: 52px;">
+        {% block content %}{% endblock %}
+    </section>
+    
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="content has-text-centered">
+            <p>
+                <strong>Verlihub Dashboard</strong> v{{ version }}
+                &copy; {{ current_year }}
+            </p>
+        </div>
+    </footer>
+    
+    <!-- JavaScript -->
+    <script>
+        // Navbar burger toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const burgers = document.querySelectorAll('.navbar-burger');
+            burgers.forEach(burger => {
+                burger.addEventListener('click', () => {
+                    const target = document.getElementById(burger.dataset.target);
+                    burger.classList.toggle('is-active');
+                    target.classList.toggle('is-active');
+                });
+            });
+            
+            // Load saved theme
+            const savedTheme = localStorage.getItem('vh-theme') || 'light';
+            setTheme(savedTheme);
+        });
+        
+        // Theme toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            setTheme(newTheme);
+            localStorage.setItem('vh-theme', newTheme);
+        }
+        
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            const icon = document.getElementById('theme-icon');
+            if (icon) {
+                icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+            }
+        }
+        
+        // Notification helper
+        function showNotification(message, type = 'info', duration = 5000) {
+            const container = document.getElementById('notification-container');
+            const notification = document.createElement('div');
+            notification.className = `notification is-${type}`;
+            notification.innerHTML = `
+                <button class="delete" onclick="this.parentElement.remove()"></button>
+                ${message}
+            `;
+            container.appendChild(notification);
+            
+            if (duration > 0) {
+                setTimeout(() => notification.remove(), duration);
+            }
+        }
+        
+        // Confirmation modal
+        function confirmAction(title, message, onConfirm) {
+            const modal = document.createElement('div');
+            modal.className = 'modal is-active';
+            modal.innerHTML = `
+                <div class="modal-background"></div>
+                <div class="modal-card">
+                    <header class="modal-card-head">
+                        <p class="modal-card-title">${title}</p>
+                        <button class="delete" aria-label="close" onclick="this.closest('.modal').remove()"></button>
+                    </header>
+                    <section class="modal-card-body">
+                        <p>${message}</p>
+                    </section>
+                    <footer class="modal-card-foot">
+                        <button class="button is-danger" id="confirm-btn">Confirm</button>
+                        <button class="button" onclick="this.closest('.modal').remove()">Cancel</button>
+                    </footer>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            modal.querySelector('#confirm-btn').addEventListener('click', () => {
+                modal.remove();
+                onConfirm();
+            });
+        }
+        
+        // API helper
+        async function apiCall(method, endpoint, data = null) {
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'same-origin',
+            };
+            
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            
+            const response = await fetch(`/api/v1${endpoint}`, options);
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'API request failed');
+            }
+            
+            return response.json();
+        }
+    </script>
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

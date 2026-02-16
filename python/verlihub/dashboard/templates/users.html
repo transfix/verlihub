@@ -1,0 +1,408 @@
+{% extends "base.html" %}
+
+{% block title %}User Management - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-users mr-2"></i> User Management
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="openAddUserModal()">
+                <i class="fas fa-user-plus mr-2"></i> Add User
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Tabs for Online/Registered -->
+<div class="tabs is-boxed">
+    <ul>
+        <li class="is-active" id="tab-online">
+            <a onclick="switchTab('online')">
+                <span class="icon"><i class="fas fa-signal"></i></span>
+                <span>Online Users</span>
+                <span class="tag is-primary is-rounded ml-2" id="online-count">{{ online_users|length }}</span>
+            </a>
+        </li>
+        <li id="tab-registered">
+            <a onclick="switchTab('registered')">
+                <span class="icon"><i class="fas fa-user-check"></i></span>
+                <span>Registered Users</span>
+            </a>
+        </li>
+    </ul>
+</div>
+
+<!-- Search bar -->
+<div class="box">
+    <div class="field has-addons">
+        <div class="control is-expanded">
+            <input class="input" type="text" id="search-input" 
+                   placeholder="Search users by nickname..." value="{{ search or '' }}">
+        </div>
+        <div class="control">
+            <button class="button is-info" onclick="searchUsers()">
+                <i class="fas fa-search"></i>
+            </button>
+        </div>
+        <div class="control">
+            <button class="button" onclick="clearSearch()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Online users panel -->
+<div id="panel-online" class="box">
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Nickname</th>
+                    <th>IP Address</th>
+                    <th>Class</th>
+                    <th>Share</th>
+                    <th>Client</th>
+                    <th>Connected</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="online-users-body">
+                {% for u in online_users %}
+                <tr>
+                    <td><strong>{{ u.nick }}</strong></td>
+                    <td><code>{{ u.ip }}</code></td>
+                    <td><span class="tag">{{ u.class }}</span></td>
+                    <td>{{ u.share }}</td>
+                    <td>{{ u.client }}</td>
+                    <td>{{ u.connected }}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" title="Info">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <button class="button is-success is-light" title="Message">
+                                <i class="fas fa-envelope"></i>
+                            </button>
+                            <button class="button is-warning is-light" title="Kick">
+                                <i class="fas fa-shoe-prints"></i>
+                            </button>
+                            <button class="button is-danger is-light" title="Ban">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="has-text-centered has-text-grey">
+                        <i class="fas fa-user-slash fa-2x mb-3"></i>
+                        <p>No users online</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Registered users panel -->
+<div id="panel-registered" class="box" style="display: none;">
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Nickname</th>
+                    <th>Class</th>
+                    <th>Registered</th>
+                    <th>Last Login</th>
+                    <th>Login Count</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="registered-users-body">
+                {% for u in registered_users %}
+                <tr class="{% if u.nick in online_users|map(attribute='nick') %}is-online{% endif %}">
+                    <td>
+                        <strong>{{ u.nick }}</strong>
+                        {% if u.nick in online_users|map(attribute='nick') %}
+                        <span class="tag is-success is-light ml-2">Online</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="tag {% if u.class_ >= 10 %}is-danger{% elif u.class_ >= 5 %}is-warning{% elif u.class_ >= 3 %}is-info{% else %}is-light{% endif %}">
+                            {{ u.class_ }}
+                        </span>
+                    </td>
+                    <td>{{ u.reg_date.strftime('%Y-%m-%d') if u.reg_date else '-' }}</td>
+                    <td>{{ u.login_last.strftime('%Y-%m-%d %H:%M') if u.login_last else 'Never' }}</td>
+                    <td>{{ u.login_cnt or 0 }}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="editUser('{{ u.nick }}')" title="Edit">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            {% if u.class_ < user.user_class %}
+                            <button class="button is-danger is-light" onclick="deleteUser('{{ u.nick }}')" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="has-text-centered has-text-grey">
+                        <i class="fas fa-database fa-2x mb-3"></i>
+                        <p>No registered users found</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Pagination -->
+    <nav class="pagination is-centered" role="navigation" aria-label="pagination">
+        {% if page > 1 %}
+        <a class="pagination-previous" href="?page={{ page - 1 }}{% if search %}&search={{ search }}{% endif %}">Previous</a>
+        {% else %}
+        <a class="pagination-previous" disabled>Previous</a>
+        {% endif %}
+        
+        {% if registered_users|length == per_page %}
+        <a class="pagination-next" href="?page={{ page + 1 }}{% if search %}&search={{ search }}{% endif %}">Next</a>
+        {% else %}
+        <a class="pagination-next" disabled>Next</a>
+        {% endif %}
+    </nav>
+</div>
+
+<!-- Add/Edit User Modal -->
+<div class="modal" id="user-modal">
+    <div class="modal-background" onclick="closeUserModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="user-modal-title">
+                <i class="fas fa-user-plus mr-2"></i> Add User
+            </p>
+            <button class="delete" aria-label="close" onclick="closeUserModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <form id="user-form">
+                <input type="hidden" id="edit-mode" value="add">
+                
+                <div class="field">
+                    <label class="label">Nickname</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" id="user-nick" required>
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-user"></i>
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Password</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="password" id="user-password">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-lock"></i>
+                        </span>
+                    </div>
+                    <p class="help">Leave blank to keep existing password (edit mode)</p>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Class</label>
+                    <div class="control">
+                        <div class="select is-fullwidth">
+                            <select id="user-class">
+                                <option value="0">0 - Guest</option>
+                                <option value="1" selected>1 - Registered</option>
+                                <option value="2">2 - VIP</option>
+                                <option value="3">3 - Operator</option>
+                                <option value="4">4 - Cheef</option>
+                                <option value="5">5 - Admin</option>
+                                {% if user.user_class >= 10 %}
+                                <option value="10">10 - Master</option>
+                                {% endif %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Notes</label>
+                    <div class="control">
+                        <textarea class="textarea" id="user-notes" rows="2"></textarea>
+                    </div>
+                </div>
+            </form>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-success" onclick="saveUser()">
+                <i class="fas fa-save mr-2"></i> Save
+            </button>
+            <button class="button" onclick="closeUserModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<!-- User Info Modal -->
+<div class="modal" id="user-info-modal">
+    <div class="modal-background" onclick="closeUserInfoModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">
+                <i class="fas fa-info-circle mr-2"></i> User Information
+            </p>
+            <button class="delete" aria-label="close" onclick="closeUserInfoModal()"></button>
+        </header>
+        <section class="modal-card-body" id="user-info-content">
+            Loading...
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button" onclick="closeUserInfoModal()">Close</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function switchTab(tab) {
+        // Update tab active state
+        document.getElementById('tab-online').classList.toggle('is-active', tab === 'online');
+        document.getElementById('tab-registered').classList.toggle('is-active', tab === 'registered');
+        
+        // Show/hide panels
+        document.getElementById('panel-online').style.display = tab === 'online' ? 'block' : 'none';
+        document.getElementById('panel-registered').style.display = tab === 'registered' ? 'block' : 'none';
+    }
+    
+    function searchUsers() {
+        const search = document.getElementById('search-input').value;
+        window.location.href = `/dashboard/users?search=${encodeURIComponent(search)}`;
+    }
+    
+    function clearSearch() {
+        document.getElementById('search-input').value = '';
+        window.location.href = '/dashboard/users';
+    }
+    
+    // Add user modal
+    function openAddUserModal() {
+        document.getElementById('user-modal-title').innerHTML = '<i class="fas fa-user-plus mr-2"></i> Add User';
+        document.getElementById('edit-mode').value = 'add';
+        document.getElementById('user-nick').value = '';
+        document.getElementById('user-nick').disabled = false;
+        document.getElementById('user-password').value = '';
+        document.getElementById('user-class').value = '1';
+        document.getElementById('user-notes').value = '';
+        document.getElementById('user-modal').classList.add('is-active');
+    }
+    
+    async function editUser(nick) {
+        document.getElementById('user-modal-title').innerHTML = '<i class="fas fa-user-edit mr-2"></i> Edit User';
+        document.getElementById('edit-mode').value = 'edit';
+        document.getElementById('user-nick').value = nick;
+        document.getElementById('user-nick').disabled = true;
+        document.getElementById('user-password').value = '';
+        
+        try {
+            const user = await apiCall('GET', `/users/${nick}`);
+            document.getElementById('user-class').value = user.class;
+            document.getElementById('user-notes').value = user.notes || '';
+        } catch (error) {
+            showNotification('Failed to load user details', 'danger');
+            return;
+        }
+        
+        document.getElementById('user-modal').classList.add('is-active');
+    }
+    
+    function closeUserModal() {
+        document.getElementById('user-modal').classList.remove('is-active');
+    }
+    
+    async function saveUser() {
+        const mode = document.getElementById('edit-mode').value;
+        const nick = document.getElementById('user-nick').value;
+        const password = document.getElementById('user-password').value;
+        const userClass = parseInt(document.getElementById('user-class').value);
+        const notes = document.getElementById('user-notes').value;
+        
+        if (!nick) {
+            showNotification('Nickname is required', 'warning');
+            return;
+        }
+        
+        if (mode === 'add' && !password) {
+            showNotification('Password is required for new users', 'warning');
+            return;
+        }
+        
+        try {
+            const data = {
+                nick: nick,
+                class: userClass,
+                notes: notes,
+            };
+            
+            if (password) {
+                data.password = password;
+            }
+            
+            if (mode === 'add') {
+                await apiCall('POST', '/users/', data);
+                showNotification(`User ${nick} created successfully`, 'success');
+            } else {
+                await apiCall('PUT', `/users/${nick}`, data);
+                showNotification(`User ${nick} updated successfully`, 'success');
+            }
+            
+            closeUserModal();
+            location.reload();
+        } catch (error) {
+            showNotification(`Failed to save user: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function deleteUser(nick) {
+        confirmAction(
+            'Delete User',
+            `Are you sure you want to delete user "${nick}"? This action cannot be undone.`,
+            async () => {
+                try {
+                    await apiCall('DELETE', `/users/${nick}`);
+                    showNotification(`User ${nick} deleted`, 'success');
+                    location.reload();
+                } catch (error) {
+                    showNotification(`Failed to delete user: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    // User info modal
+    function closeUserInfoModal() {
+        document.getElementById('user-info-modal').classList.remove('is-active');
+    }
+    
+    // Enter key triggers search
+    document.getElementById('search-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            searchUsers();
+        }
+    });
+</script>
+{% endblock %}

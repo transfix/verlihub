@@ -1,0 +1,408 @@
+{% extends "base.html" %}
+
+{% block title %}Ban Management - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-ban mr-2"></i> Ban Management
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-danger" onclick="openAddBanModal()">
+                <i class="fas fa-plus mr-2"></i> Add Ban
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Stats cards -->
+<div class="columns">
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Total Bans</p>
+            <p class="title">{{ bans|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">IP Bans</p>
+            <p class="title">{{ bans|selectattr('ip')|list|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Nick Bans</p>
+            <p class="title">{{ bans|selectattr('nick')|list|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Permanent</p>
+            <p class="title">{{ bans|selectattr('date_limit', 'none')|list|length }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- Search bar -->
+<div class="box">
+    <div class="field has-addons">
+        <div class="control is-expanded">
+            <input class="input" type="text" id="search-input" 
+                   placeholder="Search bans by nick, IP, or reason..." value="{{ search or '' }}">
+        </div>
+        <div class="control">
+            <button class="button is-info" onclick="searchBans()">
+                <i class="fas fa-search"></i>
+            </button>
+        </div>
+        <div class="control">
+            <button class="button" onclick="clearSearch()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Bans table -->
+<div class="box">
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Nick/IP</th>
+                    <th>Reason</th>
+                    <th>Banned By</th>
+                    <th>Date</th>
+                    <th>Expires</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="bans-body">
+                {% for ban in bans %}
+                <tr>
+                    <td>
+                        {% if ban.ip and ban.nick %}
+                        <span class="tag is-danger">Both</span>
+                        {% elif ban.ip %}
+                        <span class="tag is-warning">IP</span>
+                        {% else %}
+                        <span class="tag is-info">Nick</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if ban.nick %}
+                        <strong>{{ ban.nick }}</strong>
+                        {% endif %}
+                        {% if ban.nick and ban.ip %}
+                        <br>
+                        {% endif %}
+                        {% if ban.ip %}
+                        <code>{{ ban.ip }}</code>
+                        {% endif %}
+                    </td>
+                    <td>{{ ban.reason or '-' }}</td>
+                    <td>{{ ban.nick_op or 'System' }}</td>
+                    <td>{{ ban.date_start.strftime('%Y-%m-%d %H:%M') if ban.date_start else '-' }}</td>
+                    <td>
+                        {% if ban.date_limit %}
+                        {{ ban.date_limit.strftime('%Y-%m-%d %H:%M') }}
+                        {% else %}
+                        <span class="tag is-danger">Permanent</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="viewBan({{ ban.id }})" title="View">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <button class="button is-success is-light" onclick="unban({{ ban.id }}, '{{ ban.nick or ban.ip }}')" title="Unban">
+                                <i class="fas fa-unlock"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="has-text-centered has-text-grey">
+                        <i class="fas fa-check-circle fa-2x mb-3 has-text-success"></i>
+                        <p>No bans found</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Pagination -->
+    <nav class="pagination is-centered" role="navigation" aria-label="pagination">
+        {% if page > 1 %}
+        <a class="pagination-previous" href="?page={{ page - 1 }}{% if search %}&search={{ search }}{% endif %}">Previous</a>
+        {% else %}
+        <a class="pagination-previous" disabled>Previous</a>
+        {% endif %}
+        
+        {% if bans|length == per_page %}
+        <a class="pagination-next" href="?page={{ page + 1 }}{% if search %}&search={{ search }}{% endif %}">Next</a>
+        {% else %}
+        <a class="pagination-next" disabled>Next</a>
+        {% endif %}
+    </nav>
+</div>
+
+<!-- Add Ban Modal -->
+<div class="modal" id="ban-modal">
+    <div class="modal-background" onclick="closeBanModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">
+                <i class="fas fa-ban mr-2"></i> Add Ban
+            </p>
+            <button class="delete" aria-label="close" onclick="closeBanModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <form id="ban-form">
+                <div class="field">
+                    <label class="label">Ban Type</label>
+                    <div class="control">
+                        <div class="select is-fullwidth">
+                            <select id="ban-type" onchange="updateBanFields()">
+                                <option value="nick">Nickname</option>
+                                <option value="ip">IP Address</option>
+                                <option value="both">Both</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="field" id="nick-field">
+                    <label class="label">Nickname</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" id="ban-nick">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-user"></i>
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="field" id="ip-field" style="display: none;">
+                    <label class="label">IP Address</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" id="ban-ip" placeholder="e.g., 192.168.1.1 or 192.168.1.0/24">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-network-wired"></i>
+                        </span>
+                    </div>
+                    <p class="help">Supports CIDR notation for IP ranges</p>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Reason</label>
+                    <div class="control">
+                        <textarea class="textarea" id="ban-reason" rows="2" 
+                                  placeholder="Reason for the ban..."></textarea>
+                    </div>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Duration</label>
+                    <div class="control">
+                        <div class="select is-fullwidth">
+                            <select id="ban-duration">
+                                <option value="0">Permanent</option>
+                                <option value="3600">1 Hour</option>
+                                <option value="86400" selected>1 Day</option>
+                                <option value="604800">1 Week</option>
+                                <option value="2592000">30 Days</option>
+                                <option value="31536000">1 Year</option>
+                                <option value="custom">Custom...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="field" id="custom-duration-field" style="display: none;">
+                    <label class="label">Custom Duration (hours)</label>
+                    <div class="control">
+                        <input class="input" type="number" id="ban-custom-duration" min="1" value="24">
+                    </div>
+                </div>
+            </form>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-danger" onclick="addBan()">
+                <i class="fas fa-ban mr-2"></i> Ban
+            </button>
+            <button class="button" onclick="closeBanModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<!-- View Ban Modal -->
+<div class="modal" id="view-ban-modal">
+    <div class="modal-background" onclick="closeViewBanModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">
+                <i class="fas fa-info-circle mr-2"></i> Ban Details
+            </p>
+            <button class="delete" aria-label="close" onclick="closeViewBanModal()"></button>
+        </header>
+        <section class="modal-card-body" id="view-ban-content">
+            Loading...
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button" onclick="closeViewBanModal()">Close</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function searchBans() {
+        const search = document.getElementById('search-input').value;
+        window.location.href = `/dashboard/bans?search=${encodeURIComponent(search)}`;
+    }
+    
+    function clearSearch() {
+        document.getElementById('search-input').value = '';
+        window.location.href = '/dashboard/bans';
+    }
+    
+    // Add ban modal
+    function openAddBanModal() {
+        document.getElementById('ban-type').value = 'nick';
+        document.getElementById('ban-nick').value = '';
+        document.getElementById('ban-ip').value = '';
+        document.getElementById('ban-reason').value = '';
+        document.getElementById('ban-duration').value = '86400';
+        document.getElementById('ban-custom-duration').value = '24';
+        updateBanFields();
+        document.getElementById('ban-modal').classList.add('is-active');
+    }
+    
+    function closeBanModal() {
+        document.getElementById('ban-modal').classList.remove('is-active');
+    }
+    
+    function updateBanFields() {
+        const type = document.getElementById('ban-type').value;
+        const nickField = document.getElementById('nick-field');
+        const ipField = document.getElementById('ip-field');
+        
+        nickField.style.display = (type === 'nick' || type === 'both') ? 'block' : 'none';
+        ipField.style.display = (type === 'ip' || type === 'both') ? 'block' : 'none';
+        
+        // Handle custom duration
+        const duration = document.getElementById('ban-duration').value;
+        document.getElementById('custom-duration-field').style.display = 
+            duration === 'custom' ? 'block' : 'none';
+    }
+    
+    document.getElementById('ban-duration').addEventListener('change', updateBanFields);
+    
+    async function addBan() {
+        const type = document.getElementById('ban-type').value;
+        const nick = document.getElementById('ban-nick').value;
+        const ip = document.getElementById('ban-ip').value;
+        const reason = document.getElementById('ban-reason').value;
+        
+        let duration = parseInt(document.getElementById('ban-duration').value);
+        if (duration === 'custom' || isNaN(duration)) {
+            duration = parseInt(document.getElementById('ban-custom-duration').value) * 3600;
+        }
+        
+        // Validate
+        if ((type === 'nick' || type === 'both') && !nick) {
+            showNotification('Nickname is required', 'warning');
+            return;
+        }
+        
+        if ((type === 'ip' || type === 'both') && !ip) {
+            showNotification('IP address is required', 'warning');
+            return;
+        }
+        
+        try {
+            const data = {
+                reason: reason,
+                duration: duration || null,
+            };
+            
+            if (type === 'nick' || type === 'both') {
+                data.nick = nick;
+            }
+            
+            if (type === 'ip' || type === 'both') {
+                data.ip = ip;
+            }
+            
+            await apiCall('POST', '/bans/', data);
+            showNotification('Ban added successfully', 'success');
+            closeBanModal();
+            location.reload();
+        } catch (error) {
+            showNotification(`Failed to add ban: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function unban(id, identifier) {
+        confirmAction(
+            'Remove Ban',
+            `Are you sure you want to unban "${identifier}"?`,
+            async () => {
+                try {
+                    await apiCall('DELETE', `/bans/${id}`);
+                    showNotification('Ban removed successfully', 'success');
+                    location.reload();
+                } catch (error) {
+                    showNotification(`Failed to remove ban: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    // View ban modal
+    async function viewBan(id) {
+        const content = document.getElementById('view-ban-content');
+        content.innerHTML = '<div class="has-text-centered"><i class="fas fa-spinner fa-spin fa-2x"></i></div>';
+        document.getElementById('view-ban-modal').classList.add('is-active');
+        
+        try {
+            const ban = await apiCall('GET', `/bans/${id}`);
+            content.innerHTML = `
+                <table class="table is-fullwidth">
+                    <tr><th>ID</th><td>${ban.id}</td></tr>
+                    <tr><th>Nickname</th><td>${ban.nick || '-'}</td></tr>
+                    <tr><th>IP Address</th><td><code>${ban.ip || '-'}</code></td></tr>
+                    <tr><th>Reason</th><td>${ban.reason || '-'}</td></tr>
+                    <tr><th>Banned By</th><td>${ban.nick_op || 'System'}</td></tr>
+                    <tr><th>Date Started</th><td>${ban.date_start || '-'}</td></tr>
+                    <tr><th>Expires</th><td>${ban.date_limit || '<span class="tag is-danger">Permanent</span>'}</td></tr>
+                    <tr><th>Type</th><td>${ban.ban_type || '-'}</td></tr>
+                </table>
+            `;
+        } catch (error) {
+            content.innerHTML = `<p class="has-text-danger">Failed to load ban details: ${error.message}</p>`;
+        }
+    }
+    
+    function closeViewBanModal() {
+        document.getElementById('view-ban-modal').classList.remove('is-active');
+    }
+    
+    // Enter key triggers search
+    document.getElementById('search-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            searchBans();
+        }
+    });
+</script>
+{% endblock %}

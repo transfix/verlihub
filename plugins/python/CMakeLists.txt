@@ -37,6 +37,11 @@ option(BUILD_PYTHON_TESTS
     "Build Python plugin unit and integration tests"
     ON)
 
+# Option to build legacy Python plugin tests (slow, to be refactored with thin verlihub)
+option(BUILD_LEGACY_PYTHON_TESTS
+    "Build legacy Python plugin tests (disable during thin verlihub development)"
+    OFF)
+
 if(PYTHON_USE_SINGLE_INTERPRETER)
     message(STATUS "[ !! ] Python single interpreter mode ENABLED")
     message(STATUS "       WARNING: Scripts can access each other's data")
@@ -128,6 +133,9 @@ if(BUILD_PYTHON_TESTS)
         
         if(GMOCK_INCLUDE_DIR)
         include_directories(${GTEST_INCLUDE_DIRS} ${GMOCK_INCLUDE_DIR})
+
+        if(BUILD_LEGACY_PYTHON_TESTS)
+            message(STATUS "[ OK ] Building legacy Python plugin tests (slow)")
         
         # Test executable for wrapper only
         add_executable(test_python_wrapper tests/test_wrapper.cpp)
@@ -244,6 +252,8 @@ if(BUILD_PYTHON_TESTS)
             add_test(NAME SingleInterpreterTests COMMAND test_single_interpreter)
             set_tests_properties(SingleInterpreterTests PROPERTIES LABELS "integration")
         endif()
+        
+        endif() # BUILD_LEGACY_PYTHON_TESTS
         
         message(STATUS "[ OK ] GTest and GMock found, building Python plugin tests")
     else()

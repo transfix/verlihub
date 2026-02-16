@@ -1,0 +1,389 @@
+{% extends "base.html" %}
+
+{% block title %}Plugins - {{ hub_name }}{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title is-4">
+                <i class="fas fa-puzzle-piece mr-2"></i>
+                Plugin Management
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="refreshPlugins()">
+                <i class="fas fa-sync mr-2"></i> Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="columns">
+    <!-- Main Plugin List -->
+    <div class="column is-8">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-list mr-2"></i>
+                Loaded Plugins
+            </h2>
+            
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Version</th>
+                            <th>Status</th>
+                            <th>Auto-load</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="plugins-body">
+                        {% for plugin in plugins %}
+                        <tr data-plugin="{{ plugin.nick }}">
+                            <td>
+                                <strong>{{ plugin.nick }}</strong>
+                                {% if plugin.desc %}
+                                <br><small class="has-text-grey">{{ plugin.desc }}</small>
+                                {% endif %}
+                            </td>
+                            <td>{{ plugin.version or 'N/A' }}</td>
+                            <td>
+                                {% if plugin.loaded %}
+                                <span class="tag is-success">
+                                    <i class="fas fa-check mr-1"></i> Loaded
+                                </span>
+                                {% else %}
+                                <span class="tag is-warning">
+                                    <i class="fas fa-times mr-1"></i> Not Loaded
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if plugin.autoload %}
+                                <span class="tag is-info is-light">Yes</span>
+                                {% else %}
+                                <span class="tag is-light">No</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if plugin.loaded %}
+                                <button class="button is-small is-warning" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'reload')"
+                                        title="Reload plugin">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                                <button class="button is-small is-danger" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'unload')"
+                                        title="Unload plugin">
+                                    <i class="fas fa-power-off"></i>
+                                </button>
+                                {% else %}
+                                <button class="button is-small is-success" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'load')"
+                                        title="Load plugin">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="has-text-centered has-text-grey">
+                                <i class="fas fa-puzzle-piece mr-2"></i>
+                                No plugins found
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Python Scripts Section -->
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fab fa-python mr-2"></i>
+                Python Scripts
+            </h2>
+            
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Script</th>
+                            <th>Path</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="scripts-body">
+                        {% for script in scripts %}
+                        <tr data-script="{{ script.name }}">
+                            <td><strong>{{ script.name }}</strong></td>
+                            <td><code class="is-size-7">{{ script.path }}</code></td>
+                            <td>
+                                {% if script.loaded %}
+                                <span class="tag is-success">
+                                    <i class="fas fa-check mr-1"></i> Loaded
+                                </span>
+                                {% else %}
+                                <span class="tag is-warning">
+                                    <i class="fas fa-times mr-1"></i> Not Loaded
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if script.loaded %}
+                                <button class="button is-small is-warning" 
+                                        onclick="scriptAction('{{ script.name }}', 'reload')"
+                                        title="Reload script">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                                <button class="button is-small is-danger" 
+                                        onclick="scriptAction('{{ script.name }}', 'unload')"
+                                        title="Unload script">
+                                    <i class="fas fa-power-off"></i>
+                                </button>
+                                {% else %}
+                                <button class="button is-small is-success" 
+                                        onclick="scriptAction('{{ script.name }}', 'load')"
+                                        title="Load script">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" class="has-text-centered has-text-grey">
+                                <i class="fab fa-python mr-2"></i>
+                                No Python scripts found
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Load New Script -->
+            <div class="field has-addons mt-4">
+                <div class="control is-expanded">
+                    <input class="input" type="text" id="new-script-path" placeholder="Script path (e.g., /path/to/script.py)">
+                </div>
+                <div class="control">
+                    <button class="button is-primary" onclick="loadNewScript()">
+                        <i class="fas fa-plus mr-2"></i> Load Script
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div class="column is-4">
+        <!-- Plugin Summary -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-chart-pie mr-2"></i>
+                Summary
+            </h3>
+            
+            <div class="content">
+                <table class="table is-narrow is-fullwidth">
+                    <tbody>
+                        <tr>
+                            <td>Total Plugins</td>
+                            <td><strong>{{ plugins|length }}</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Loaded</td>
+                            <td>
+                                <span class="tag is-success">
+                                    {{ plugins|selectattr('loaded')|list|length }}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Python Scripts</td>
+                            <td><strong>{{ scripts|length }}</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Available Plugins Reference -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-info-circle mr-2"></i>
+                Available Plugins
+            </h3>
+            
+            <div class="content is-small">
+                <ul>
+                    <li><strong>plugman</strong> - Plugin Manager</li>
+                    <li><strong>python</strong> - Python Scripting Engine</li>
+                    <li><strong>lua</strong> - Lua Scripting Engine</li>
+                    <li><strong>replacer</strong> - Text Replacement</li>
+                    <li><strong>floodprot</strong> - Flood Protection</li>
+                    <li><strong>messenger</strong> - Offline Messages</li>
+                    <li><strong>stats</strong> - Hub Statistics</li>
+                    <li><strong>pisg</strong> - Statistics Generator</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- Quick Commands -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-terminal mr-2"></i>
+                Quick Commands
+            </h3>
+            
+            <div class="buttons are-small">
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!lstplug')">
+                    !lstplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!onplug python')">
+                    !onplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!offplug python')">
+                    !offplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('+py')">
+                    +py
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Load Script Modal -->
+<div class="modal" id="load-script-modal">
+    <div class="modal-background" onclick="closeModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Load Python Script</p>
+            <button class="delete" aria-label="close" onclick="closeModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label">Script Path</label>
+                <div class="control">
+                    <input class="input" type="text" id="modal-script-path" placeholder="/path/to/script.py">
+                </div>
+                <p class="help">Enter the full path to the Python script</p>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" onclick="submitLoadScript()">Load</button>
+            <button class="button" onclick="closeModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const authToken = '{{ auth_token }}';
+    
+    function refreshPlugins() {
+        location.reload();
+    }
+    
+    async function pluginAction(name, action) {
+        const actionMap = {
+            'load': '!onplug',
+            'unload': '!offplug',
+            'reload': '!replug'
+        };
+        
+        const command = `${actionMap[action]} ${name}`;
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            showNotification(data.success ? 'success' : 'danger', data.message || data.output || 'Command sent');
+            
+            // Refresh after action
+            setTimeout(refreshPlugins, 1000);
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    async function scriptAction(name, action) {
+        const actionMap = {
+            'load': '+py load',
+            'unload': '+py unload',
+            'reload': '+py reload'
+        };
+        
+        const command = `${actionMap[action]} ${name}`;
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            showNotification(data.success ? 'success' : 'danger', data.message || data.output || 'Command sent');
+            
+            // Refresh after action
+            setTimeout(refreshPlugins, 1000);
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    function loadNewScript() {
+        const path = document.getElementById('new-script-path').value.trim();
+        if (!path) {
+            showNotification('warning', 'Please enter a script path');
+            return;
+        }
+        
+        scriptAction(path, 'load');
+    }
+    
+    function runInConsole(command) {
+        // Store command in sessionStorage for console page
+        sessionStorage.setItem('pendingCommand', command);
+    }
+    
+    function showNotification(type, message) {
+        const container = document.getElementById('notification-container');
+        const notification = document.createElement('div');
+        notification.className = `notification is-${type} is-light`;
+        notification.innerHTML = `
+            <button class="delete" onclick="this.parentElement.remove()"></button>
+            ${message}
+        `;
+        container.appendChild(notification);
+        
+        setTimeout(() => notification.remove(), 5000);
+    }
+    
+    function closeModal() {
+        document.getElementById('load-script-modal').classList.remove('is-active');
+    }
+</script>
+{% endblock %}

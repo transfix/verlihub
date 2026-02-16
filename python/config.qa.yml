@@ -1,0 +1,46 @@
+# Verlihub QA Environment Configuration
+# ======================================
+#
+# Use this for testing before production deployment.
+#
+# Usage:
+#   verlihub-server -c qa.yml
+#   verlihub-server -c qa.yml --validate  # Check config before starting
+
+mode: api
+environment: qa
+
+database:
+  host: localhost
+  port: 3306
+  user: verlihub_qa
+  password: qa_password
+  name: verlihub_qa
+
+api:
+  host: "127.0.0.1"
+  port: 8000
+  
+  # QA: Use a fixed secret for session persistence during testing
+  secret: "qa-test-secret-change-for-production-deployment"
+  username: admin
+  password: qa_admin_pass
+  
+  token_expire_minutes: 120  # Longer for testing sessions
+  
+  cors_origins:
+    - "http://localhost:3000"  # Local frontend dev server
+    - "http://localhost:8000"
+  
+  secure_cookies: false  # QA typically runs without HTTPS
+
+hub:
+  name: "QA Test Hub"
+  description: "Quality Assurance Testing Environment"
+  port: 4111
+  listen_host: "0.0.0.0"
+  max_users: 100
+
+logging:
+  level: DEBUG  # Verbose for QA debugging
+  file: "qa.log"

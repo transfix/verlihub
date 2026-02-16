@@ -1,0 +1,121 @@
+# Verlihub Python Server Configuration
+# =====================================
+#
+# This file configures the Verlihub Python API server and optional hub.
+#
+# Usage:
+#   verlihub-server -c config.yml
+#   verlihub-server -c config.yml --env production
+#
+# Priority: Command-line args > Environment vars > This file > Defaults
+
+# =============================================================================
+# Runtime Settings
+# =============================================================================
+
+# Mode: api (REST API only), hub (NMDC hub only), both (API + Hub)
+mode: api
+
+# Environment: development, qa, production
+# Production mode enforces security requirements
+environment: development
+
+# =============================================================================
+# Database Configuration
+# =============================================================================
+database:
+  host: localhost
+  port: 3306
+  user: verlihub
+  password: verlihub  # Change in production!
+  name: verlihub
+
+# =============================================================================
+# API Server Configuration
+# =============================================================================
+api:
+  # Binding
+  host: "127.0.0.1"  # Use 0.0.0.0 to expose externally (behind reverse proxy)
+  port: 8000
+  
+  # Authentication
+  # REQUIRED in production - generate with: python -c "import secrets; print(secrets.token_hex(32))"
+  secret: ""  # If empty, random secret generated (tokens invalidate on restart)
+  username: admin
+  password: ""  # REQUIRED in production
+  
+  # Token settings
+  token_expire_minutes: 60
+  
+  # CORS - restrict to specific origins in production
+  cors_origins:
+    - "*"  # Development: allow all
+    # Production example:
+    # - "https://dashboard.example.com"
+    # - "https://admin.example.com"
+  
+  # Cookies
+  secure_cookies: false  # Set true in production (requires HTTPS)
+
+# =============================================================================
+# Hub Configuration (for mode: hub or both)
+# =============================================================================
+hub:
+  name: "My DC++ Hub"
+  description: "Welcome to my hub!"
+  
+  # Network
+  port: 4111
+  listen_host: "0.0.0.0"
+  
+  # If registering with hublist, full address clients use
+  host: ""  # e.g., "hub.example.com:4111"
+  
+  # Hub info
+  owner: ""
+  topic: ""
+  category: ""
+  
+  # Encoding for legacy clients
+  encoding: "CP1252"
+  
+  # MOTD file path
+  motd_file: ""
+  
+  # Limits
+  max_users: 1000
+
+# =============================================================================
+# Bot Configuration
+# =============================================================================
+bots:
+  security:
+    nick: "Hub-Security"
+    description: "Hub security system"
+  
+  op_chat:
+    nick: "OpChat"
+    description: "Operator chat"
+
+# =============================================================================
+# Plugin Configuration
+# =============================================================================
+plugins:
+  # Plugin directory (leave empty for default)
+  directory: ""
+  
+  # Plugin list (for Python plugins)
+  list: []
+    # - name: example_plugin
+    #   enabled: true
+    #   autoload: true
+    #   config:
+    #     setting1: value1
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: ""     # Log file path (empty = stdout only)
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

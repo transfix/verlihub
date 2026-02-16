@@ -18,6 +18,15 @@
 
 INCLUDE_DIRECTORIES(${VERLIHUB_BINARY_DIR} ${VERLIHUB_SOURCE_DIR}/src)
 
+# Add new C++20 core library subdirectory
+add_subdirectory(core)
+
+# Add SWIG Python bindings subdirectory (optional, controlled by BUILD_PYTHON_BINDINGS)
+option(BUILD_PYTHON_BINDINGS "Build Python SWIG bindings for thin verlihub" OFF)
+if(BUILD_PYTHON_BINDINGS)
+    add_subdirectory(swig)
+endif()
+
 SET(VERLIHUB_HDRS
 	casyncconn.h
 	casyncsocketserver.h

@@ -222,10 +222,22 @@ ENDIF(UNIX)
 # ----------------------------------------------------------------------------------------------------
 # flags
 
-SET(CMAKE_CXX_STANDARD 17) # note: required by icu 75+
+SET(CMAKE_CXX_STANDARD 20) # note: C++20 required for thin verlihub refactoring
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_EXTENSIONS OFF)
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DU_USING_ICU_NAMESPACE=1")
+
+# C++20 compiler version checks
+IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "11.0")
+        message(FATAL_ERROR "GCC 11+ required for C++20 support")
+    ENDIF()
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fconcepts-diagnostics-depth=2")
+ELSEIF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+        message(FATAL_ERROR "Clang 14+ required for C++20 support")
+    ENDIF()
+ENDIF()
 
 IF(HAVE_BSD)
 	SET(CMAKE_CXX_COMPILER "clang++")

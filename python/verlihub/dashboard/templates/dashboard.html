@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ hub_name }}{% endblock %}
+
+{% block content %}
+<!-- Hero section with hub status -->
+<div class="hero is-primary is-small mb-5">
+    <div class="hero-body">
+        <div class="container">
+            <div class="level">
+                <div class="level-item has-text-centered">
+                    <div>
+                        <span class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}" style="width: 14px; height: 14px;"></span>
+                        <p class="heading">Status</p>
+                        <p class="title is-5">{% if hub_running %}Online{% else %}Offline{% endif %}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Users Online</p>
+                        <p class="title is-4" id="user-count">{{ user_count }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Total Share</p>
+                        <p class="title is-4" id="share-size">{{ share_size }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Uptime</p>
+                        <p class="title is-4" id="uptime">{{ uptime }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Port</p>
+                        <p class="title is-4">{{ hub_port }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick actions -->
+<div class="columns">
+    <div class="column">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-bolt mr-2"></i>
+                Quick Actions
+            </h2>
+            
+            <div class="buttons">
+                {% if hub_running %}
+                <button class="button is-warning" onclick="hubAction('stop')">
+                    <i class="fas fa-stop mr-2"></i> Stop Hub
+                </button>
+                <button class="button is-info" onclick="hubAction('restart')">
+                    <i class="fas fa-sync mr-2"></i> Restart Hub
+                </button>
+                {% else %}
+                <button class="button is-success" onclick="hubAction('start')">
+                    <i class="fas fa-play mr-2"></i> Start Hub
+                </button>
+                {% endif %}
+                
+                <button class="button" onclick="broadcastMessage()">
+                    <i class="fas fa-bullhorn mr-2"></i> Broadcast Message
+                </button>
+                
+                <button class="button" onclick="refreshStats()">
+                    <i class="fas fa-refresh mr-2"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Main content area -->
+<div class="columns">
+    <!-- Online users card -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-users mr-2"></i>
+                Online Users
+                <span class="tag is-primary is-rounded ml-2" id="online-count">{{ user_count }}</span>
+            </h2>
+            
+            <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Nick</th>
+                            <th>Class</th>
+                            <th>Share</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="online-users-body">
+                        <!-- Populated via JavaScript -->
+                        <tr>
+                            <td colspan="4" class="has-text-centered has-text-grey">
+                                Loading...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <a href="/dashboard/users" class="button is-small is-link is-light mt-3">
+                View All Users <i class="fas fa-arrow-right ml-2"></i>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Recent activity card -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-clock mr-2"></i>
+                Recent Activity
+            </h2>
+            
+            <div id="activity-feed" style="max-height: 400px; overflow-y: auto;">
+                <article class="message is-info is-small">
+                    <div class="message-body">
+                        Dashboard loaded successfully
+                        <br>
+                        <small class="has-text-grey">Just now</small>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics -->
+<div class="columns">
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-peak-users">--</div>
+            <div class="stat-label">Peak Users Today</div>
+        </div>
+    </div>
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-total-connections">--</div>
+            <div class="stat-label">Total Connections</div>
+        </div>
+    </div>
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-registered">--</div>
+            <div class="stat-label">Registered Users</div>
+        </div>
+    </div>
+</div>
+
+<!-- Broadcast modal -->
+<div class="modal" id="broadcast-modal">
+    <div class="modal-background" onclick="closeBroadcastModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">
+                <i class="fas fa-bullhorn mr-2"></i>
+                Broadcast Message
+            </p>
+            <button class="delete" aria-label="close" onclick="closeBroadcastModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label">Message</label>
+                <div class="control">
+                    <textarea class="textarea" id="broadcast-message" rows="4" 
+                              placeholder="Enter message to broadcast to all users..."></textarea>
+                </div>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" onclick="sendBroadcast()">
+                <i class="fas fa-paper-plane mr-2"></i> Send
+            </button>
+            <button class="button" onclick="closeBroadcastModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Auto-refresh stats every 30 seconds
+    const REFRESH_INTERVAL = 30000;
+    let refreshTimer;
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        loadOnlineUsers();
+        loadStats();
+        startAutoRefresh();
+    });
+    
+    function startAutoRefresh() {
+        refreshTimer = setInterval(() => {
+            refreshStats();
+        }, REFRESH_INTERVAL);
+    }
+    
+    async function refreshStats() {
+        try {
+            const status = await apiCall('GET', '/hub/status');
+            
+            document.getElementById('user-count').textContent = status.user_count || 0;
+            document.getElementById('online-count').textContent = status.user_count || 0;
+            document.getElementById('share-size').textContent = formatBytes(status.total_share || 0);
+            document.getElementById('uptime').textContent = formatUptime(status.uptime || 0);
+            
+            loadOnlineUsers();
+        } catch (error) {
+            console.error('Failed to refresh stats:', error);
+        }
+    }
+    
+    async function loadOnlineUsers() {
+        try {
+            const response = await apiCall('GET', '/users/online');
+            const users = response.users || [];
+            
+            const tbody = document.getElementById('online-users-body');
+            
+            if (users.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="has-text-centered has-text-grey">
+                            No users online
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = users.slice(0, 20).map(user => `
+                <tr>
+                    <td>
+                        <strong>${escapeHtml(user.nick)}</strong>
+                    </td>
+                    <td>
+                        <span class="tag ${getClassColor(user.class)}">${getClassName(user.class)}</span>
+                    </td>
+                    <td>${formatBytes(user.share || 0)}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="showUserInfo('${escapeHtml(user.nick)}')">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            ${user.class < {{ user.user_class }} ? `
+                            <button class="button is-warning is-light" onclick="kickUser('${escapeHtml(user.nick)}')">
+                                <i class="fas fa-shoe-prints"></i>
+                            </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load online users:', error);
+        }
+    }
+    
+    async function loadStats() {
+        try {
+            const stats = await apiCall('GET', '/hub/status');
+            
+            document.getElementById('stat-peak-users').textContent = stats.peak_users || '--';
+            document.getElementById('stat-total-connections').textContent = stats.total_connections || '--';
+            document.getElementById('stat-registered').textContent = stats.registered_users || '--';
+        } catch (error) {
+            console.error('Failed to load stats:', error);
+        }
+    }
+    
+    async function hubAction(action) {
+        const actionMessages = {
+            'start': 'Start the hub?',
+            'stop': 'Stop the hub? All users will be disconnected.',
+            'restart': 'Restart the hub? All users will be briefly disconnected.',
+        };
+        
+        confirmAction(
+            `${action.charAt(0).toUpperCase() + action.slice(1)} Hub`,
+            actionMessages[action],
+            async () => {
+                try {
+                    await apiCall('POST', `/hub/${action}`);
+                    showNotification(`Hub ${action} successful`, 'success');
+                    setTimeout(() => location.reload(), 2000);
+                } catch (error) {
+                    showNotification(`Failed to ${action} hub: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    function broadcastMessage() {
+        document.getElementById('broadcast-modal').classList.add('is-active');
+        document.getElementById('broadcast-message').focus();
+    }
+    
+    function closeBroadcastModal() {
+        document.getElementById('broadcast-modal').classList.remove('is-active');
+        document.getElementById('broadcast-message').value = '';
+    }
+    
+    async function sendBroadcast() {
+        const message = document.getElementById('broadcast-message').value.trim();
+        if (!message) {
+            showNotification('Please enter a message', 'warning');
+            return;
+        }
+        
+        try {
+            await apiCall('POST', '/hub/message', { message });
+            showNotification('Message broadcast successfully', 'success');
+            closeBroadcastModal();
+            addActivity('Broadcast message sent', 'success');
+        } catch (error) {
+            showNotification(`Failed to send message: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function kickUser(nick) {
+        confirmAction(
+            'Kick User',
+            `Kick ${nick} from the hub?`,
+            async () => {
+                try {
+                    await apiCall('POST', '/users/kick', { nick, reason: 'Kicked by admin' });
+                    showNotification(`${nick} has been kicked`, 'success');
+                    addActivity(`Kicked user: ${nick}`, 'warning');
+                    loadOnlineUsers();
+                } catch (error) {
+                    showNotification(`Failed to kick user: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    function showUserInfo(nick) {
+        // TODO: Show user info modal
+        showNotification('User info coming soon', 'info');
+    }
+    
+    function addActivity(message, type = 'info') {
+        const feed = document.getElementById('activity-feed');
+        const article = document.createElement('article');
+        article.className = `message is-${type} is-small`;
+        article.innerHTML = `
+            <div class="message-body">
+                ${escapeHtml(message)}
+                <br>
+                <small class="has-text-grey">Just now</small>
+            </div>
+        `;
+        feed.insertBefore(article, feed.firstChild);
+        
+        // Limit to 10 items
+        while (feed.children.length > 10) {
+            feed.lastChild.remove();
+        }
+    }
+    
+    // Utility functions
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+    
+    function formatUptime(seconds) {
+        if (seconds < 60) return seconds + 's';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return minutes + 'm';
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return hours + 'h ' + (minutes % 60) + 'm';
+        const days = Math.floor(hours / 24);
+        return days + 'd ' + (hours % 24) + 'h';
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function getClassName(classNum) {
+        const classes = {
+            0: 'Guest',
+            1: 'Registered',
+            2: 'VIP',
+            3: 'Operator',
+            4: 'Cheef',
+            5: 'Admin',
+            10: 'Master',
+        };
+        return classes[classNum] || `Class ${classNum}`;
+    }
+    
+    function getClassColor(classNum) {
+        if (classNum >= 10) return 'is-danger';
+        if (classNum >= 5) return 'is-warning';
+        if (classNum >= 3) return 'is-info';
+        if (classNum >= 1) return 'is-success';
+        return 'is-light';
+    }
+</script>
+{% endblock %}

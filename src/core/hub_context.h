@@ -67,6 +67,17 @@ class cDCProto;
 // ============================================================================
 
 /**
+ * Plugin information structure for SWIG bindings.
+ * Defined at namespace level so SWIG can properly expose it.
+ */
+struct PluginInfo {
+    std::string name;       ///< Plugin name/identifier
+    std::string path;       ///< Path to plugin library
+    std::string version;    ///< Plugin version string
+    bool loaded{false};     ///< Whether plugin is currently loaded
+};
+
+/**
  * Hub configuration (mirrors SetupList 'config' section)
  */
 struct HubConfig {
@@ -510,6 +521,95 @@ public:
      * Get hub configuration structure (snapshot).
      */
     [[nodiscard]] HubConfig GetHubConfig() const;
+    
+    // =========================================================================
+    // Plugin Management (for Python/Lua through SWIG)
+    // =========================================================================
+    
+    /**
+     * Load a plugin from a shared library path.
+     * 
+     * @param plugin_path Path to plugin .so file
+     * @return true if plugin was loaded successfully
+     */
+    [[nodiscard]] bool LoadPlugin(std::string_view plugin_path);
+    
+    /**
+     * Unload a plugin by name.
+     * 
+     * @param plugin_name Name of the plugin to unload
+     * @return true if plugin was unloaded successfully
+     */
+    [[nodiscard]] bool UnloadPlugin(std::string_view plugin_name);
+    
+    /**
+     * Reload a plugin.
+     * 
+     * @param plugin_name Name of the plugin to reload
+     * @return true if plugin was reloaded successfully
+     */
+    [[nodiscard]] bool ReloadPlugin(std::string_view plugin_name);
+    
+    /**
+     * Get list of loaded plugins.
+     * 
+     * @return Vector of plugin information
+     */
+    [[nodiscard]] std::vector<PluginInfo> GetLoadedPlugins() const;
+    
+    /**
+     * Check if a specific plugin is loaded.
+     * 
+     * @param plugin_name Name of the plugin
+     * @return true if the plugin is loaded
+     */
+    [[nodiscard]] bool IsPluginLoaded(std::string_view plugin_name) const;
+    
+    /**
+     * Execute a Lua script (requires Lua plugin to be loaded).
+     * 
+     * @param script_path Path to the Lua script
+     * @return true if script executed successfully
+     */
+    [[nodiscard]] bool ExecuteLuaScript(std::string_view script_path);
+    
+    /**
+     * Unload a Lua script.
+     * 
+     * @param script_path Path to the Lua script
+     * @return true if script was unloaded successfully
+     */
+    [[nodiscard]] bool UnloadLuaScript(std::string_view script_path);
+    
+    /**
+     * Get list of loaded Lua scripts.
+     * 
+     * @return Vector of script paths
+     */
+    [[nodiscard]] std::vector<std::string> GetLoadedLuaScripts() const;
+    
+    /**
+     * Execute a Python script (requires Python plugin to be loaded).
+     * 
+     * @param script_path Path to the Python script
+     * @return true if script executed successfully
+     */
+    [[nodiscard]] bool ExecutePythonScript(std::string_view script_path);
+    
+    /**
+     * Unload a Python script.
+     * 
+     * @param script_path Path to the Python script
+     * @return true if script was unloaded successfully
+     */
+    [[nodiscard]] bool UnloadPythonScript(std::string_view script_path);
+    
+    /**
+     * Get list of loaded Python scripts.
+     * 
+     * @return Vector of script paths
+     */
+    [[nodiscard]] std::vector<std::string> GetLoadedPythonScripts() const;
     
     // =========================================================================
     // Event Callback Registration (for Python bridge)

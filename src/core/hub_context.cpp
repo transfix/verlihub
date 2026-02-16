@@ -464,4 +464,135 @@ void HubContext::TimerThreadFunc(std::stop_token stop_token) {
     Log(2, "Timer thread stopping");
 }
 
+// =============================================================================
+// Plugin Management
+// =============================================================================
+
+bool HubContext::LoadPlugin(std::string_view plugin_path) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    // TODO: Implement plugin loading via m_plugin_mgr
+    // The plugin manager needs to be refactored to support this
+    Log(1, "LoadPlugin called for: " + std::string(plugin_path));
+    
+    // Placeholder - in real implementation:
+    // return m_plugin_mgr->LoadPlugin(plugin_path);
+    return false;
+}
+
+bool HubContext::UnloadPlugin(std::string_view plugin_name) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "UnloadPlugin called for: " + std::string(plugin_name));
+    
+    // Placeholder
+    return false;
+}
+
+bool HubContext::ReloadPlugin(std::string_view plugin_name) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "ReloadPlugin called for: " + std::string(plugin_name));
+    
+    // Placeholder - unload then load
+    return false;
+}
+
+std::vector<PluginInfo> HubContext::GetLoadedPlugins() const {
+    std::vector<PluginInfo> result;
+    
+    if (!m_plugin_mgr) {
+        return result;
+    }
+    
+    // TODO: Implement once plugin manager is refactored
+    // For now return empty list
+    return result;
+}
+
+bool HubContext::IsPluginLoaded(std::string_view plugin_name) const {
+    if (!m_plugin_mgr) {
+        return false;
+    }
+    
+    // TODO: Check plugin manager for loaded plugin
+    return false;
+}
+
+bool HubContext::ExecuteLuaScript(std::string_view script_path) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "ExecuteLuaScript called for: " + std::string(script_path));
+    
+    // TODO: Find lua plugin and call its script loading function
+    // This requires accessing the lua plugin through the plugin manager
+    return false;
+}
+
+bool HubContext::UnloadLuaScript(std::string_view script_path) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "UnloadLuaScript called for: " + std::string(script_path));
+    return false;
+}
+
+std::vector<std::string> HubContext::GetLoadedLuaScripts() const {
+    std::vector<std::string> result;
+    
+    if (!m_plugin_mgr) {
+        return result;
+    }
+    
+    // TODO: Get from lua plugin
+    return result;
+}
+
+bool HubContext::ExecutePythonScript(std::string_view script_path) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "ExecutePythonScript called for: " + std::string(script_path));
+    
+    // TODO: Find python plugin and call its script loading function
+    return false;
+}
+
+bool HubContext::UnloadPythonScript(std::string_view script_path) {
+    if (!m_plugin_mgr) {
+        Log(0, "Plugin manager not initialized");
+        return false;
+    }
+    
+    Log(1, "UnloadPythonScript called for: " + std::string(script_path));
+    return false;
+}
+
+std::vector<std::string> HubContext::GetLoadedPythonScripts() const {
+    std::vector<std::string> result;
+    
+    if (!m_plugin_mgr) {
+        return result;
+    }
+    
+    // TODO: Get from python plugin
+    return result;
+}
+
 }  // namespace nVerliHub

@@ -23,3 +23,7 @@ htmlcov/
 .tox/
 .venv/
 venv/
+
+# SWIG build symlinks (for development)
+python/verlihub/verlihub_core.py
+python/verlihub/_verlihub_core.so

@@ -17,12 +17,16 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 # Import SWIG module (built by CMake)
+# Build outputs should be symlinked for development:
+#   ln -sf ../../build/python/verlihub/verlihub_core.py python/verlihub/
+#   ln -sf ../../build/python/verlihub/_verlihub_core.so python/verlihub/
 try:
     from verlihub import verlihub_core
 except ImportError as e:
     raise ImportError(
         "verlihub_core module not found. "
-        "Build with -DBUILD_PYTHON_BINDINGS=ON"
+        "Build with CMake and symlink outputs: "
+        "ln -sf ../../build/python/verlihub/verlihub_core.py python/verlihub/"
     ) from e
 
 logger = logging.getLogger(__name__)

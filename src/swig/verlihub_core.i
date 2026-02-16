@@ -117,6 +117,23 @@ namespace std {
 }
 
 // ============================================================================
+// PluginInfo struct for Python
+// ============================================================================
+
+%feature("docstring") nVerliHub::PluginInfo "
+Information about a loaded plugin.
+
+Attributes:
+    name: Plugin name (e.g., 'lua', 'python')
+    path: Path to the plugin shared library
+    version: Plugin version string
+    loaded: Whether the plugin is currently loaded
+";
+
+// Template for vector of PluginInfo
+%template(PluginInfoVector) std::vector<nVerliHub::PluginInfo>;
+
+// ============================================================================
 // HubConfig - Python can read/write hub configuration
 // ============================================================================
 
@@ -235,6 +252,111 @@ Pass None to remove the handler.
 
 Args:
     callback: IHubEventCallback instance (must outlive context)
+";
+
+// ============================================================================
+// Plugin Management Method Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::LoadPlugin "
+Load a plugin from a shared library file.
+
+Args:
+    plugin_path: Path to the plugin .so file
+
+Returns:
+    True if plugin was loaded successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::UnloadPlugin "
+Unload a plugin by name.
+
+Args:
+    plugin_name: Name of the plugin to unload (e.g., 'lua', 'python')
+
+Returns:
+    True if plugin was unloaded successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::ReloadPlugin "
+Reload a plugin.
+
+Args:
+    plugin_name: Name of the plugin to reload
+
+Returns:
+    True if plugin was reloaded successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::GetLoadedPlugins "
+Get list of loaded plugins.
+
+Returns:
+    List of PluginInfo objects
+";
+
+%feature("docstring") nVerliHub::HubContext::IsPluginLoaded "
+Check if a specific plugin is loaded.
+
+Args:
+    plugin_name: Name of the plugin (e.g., 'lua', 'python')
+
+Returns:
+    True if the plugin is loaded
+";
+
+%feature("docstring") nVerliHub::HubContext::ExecuteLuaScript "
+Execute a Lua script (requires Lua plugin to be loaded).
+
+Args:
+    script_path: Path to the Lua script file
+
+Returns:
+    True if script executed successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::UnloadLuaScript "
+Unload a Lua script.
+
+Args:
+    script_path: Path to the Lua script to unload
+
+Returns:
+    True if script was unloaded successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::GetLoadedLuaScripts "
+Get list of loaded Lua scripts.
+
+Returns:
+    List of script paths
+";
+
+%feature("docstring") nVerliHub::HubContext::ExecutePythonScript "
+Execute a Python script (requires Python plugin to be loaded).
+
+Args:
+    script_path: Path to the Python script file
+
+Returns:
+    True if script executed successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::UnloadPythonScript "
+Unload a Python script.
+
+Args:
+    script_path: Path to the Python script to unload
+
+Returns:
+    True if script was unloaded successfully
+";
+
+%feature("docstring") nVerliHub::HubContext::GetLoadedPythonScripts "
+Get list of loaded Python scripts.
+
+Returns:
+    List of script paths
 ";
 
 // ============================================================================

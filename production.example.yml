@@ -1,39 +1,18 @@
 # Verlihub Production Configuration Example
 # Copy to production.yml and customize for your deployment
 #
-# Usage:
-#   # Legacy C++ hub (MySQL only)
-#   sg docker ./run_production.sh --config production.yml
-#   sg docker ./run_production.sh --config production.yml --edition legacy
-#
-#   # verlihub-py Python hub (MySQL or PostgreSQL)
-#   sg docker ./run_production.sh --config production.yml --edition py
-#
-# Both editions share the same YAML format. Set "edition" below to auto-detect,
-# or pass --edition on the command line. If database.type is "postgresql",
-# the edition is automatically set to "py" since legacy doesn't support it.
+# Usage: sg docker ./run_production.sh [--config production.yml]
 #
 # Most settings have sensible defaults - only configure what you need to change.
 # Settings not specified will use Verlihub's built-in defaults.
 
-# =============================================================================
-# Edition: "legacy" (C++ hub) or "py" (Python hub)
-# Leave blank to auto-detect (defaults to "legacy" for MySQL, "py" for PostgreSQL)
-# =============================================================================
-# edition: py
-
-# =============================================================================
 # Database Configuration
-# Supported types: mysql (legacy + py), postgresql (py only), sqlite (py only)
-# =============================================================================
 database:
-  type: mysql            # "mysql", "postgresql", or "sqlite"
-  host: mysql            # Use "postgres" for PostgreSQL
+  host: mysql
   user: verlihub
   password: verlihub
   name: verlihub
-  port: 3306             # 3306 for MySQL, 5432 for PostgreSQL
-  # path: /data/verlihub.db  # SQLite only — file path inside container
+  port: 3306
 
 # =============================================================================
 # Hub Identity & Branding
@@ -42,16 +21,9 @@ hub:
   # Basic identity
   name: "My DC++ Hub"
   description: "Welcome to My Hub!"
-  # Full hub address for clients.
-  # When set to a non-empty value (e.g. "nmdcs://hub.example.com:411"), the hub
-  # registers itself on public hub lists so DC++ clients can discover it.
-  # Leave empty to keep the hub unlisted / private.
+  # Full hub address for clients (used in hublist registrations)
+  # Example: "nmdcs://hub.example.com:411" or "dc://hub.example.com:4111"
   host: ""
-  # Hub list servers to register on (only used when host is non-empty).
-  # Defaults to the well-known public hub lists if not specified.
-  # hublist_servers:
-  #   - "hublist.te-home.net"
-  #   - "hublist.pwiam.com"
   # Hub owner name (shown in hub info)
   owner: ""
   # Hub topic/tagline (can also be set with !topic command)
@@ -62,9 +34,6 @@ hub:
   # Branding URLs (shown in some clients)
   icon_url: ""      # Small icon (favicon style)
   logo_url: ""      # Larger logo image
-  # Logo for the web dashboard (login screen & navbar).
-  # Leave empty to use the default Verlihub logo.
-  logo: ""          # e.g., "https://example.com/my-hub-logo.png"
   
   # Character encoding for legacy clients (default: CP1252)
   # Common options: CP1252, UTF-8, ISO-8859-1
@@ -324,76 +293,6 @@ users:
     # - nick: regular1
     #   password: user_password
 
-# =============================================================================
-# Lua Plugin & Scripts
-# Lua scripts extend the hub with features like ledokol (chat, security,
-# entertainment). Scripts are loaded via !luaload after the hub starts.
-#
-# Ledokol (https://github.com/Verlihub/ledokol) is the most popular Lua
-# script for Verlihub and provides 70+ features for hub management.
-# =============================================================================
-lua:
-  # Enable the Lua plugin (liblua_pi.so)
-  enabled: true
-  
-  # Automatically fetch scripts from GitHub repos on startup.
-  # Each entry clones the repo and copies .lua files to the scripts directory.
-  github_scripts:
-    - repo: "Verlihub/ledokol"
-      # Specific files to copy (empty = all .lua files in repo root)
-      files:
-        - "ledokol.lua"
-    # Example: add another Lua script repo
-    # - repo: "username/my-lua-script"
-    #   files: []
-  
-  # Scripts to auto-load after the hub starts (via !luaload).
-  # These are loaded in order after github_scripts are fetched.
-  autoload:
-    - "ledokol.lua"
-    # - "another_script.lua"
-  
-  # Per-script configuration
-  # Each key is a script name, value is a map of settings applied after loading.
-  # For ledokol, settings are applied via !ledoset key value.
-  # See https://github.com/Verlihub/ledokol/wiki/Ledokol-Configuration
-  script_config: {}
-    # ledokol:
-    #   antispam_class: 3
-    #   calculator: 1
-    #   chat_history: 1
-    #   chat_history_lines: 50
-    #   news: 1
-    #   releases: 1
-    #   friendly_hubs: 1
-    # my_other_lua_script:
-    #   some_setting: some_value
-
-# =============================================================================
-# Python Plugin & Scripts
-# =============================================================================
-# The Python plugin (libpython_pi.so) enables loading Python scripts into
-# the hub. Works similarly to the Lua plugin but for Python scripts.
-python:
-  # Enable the Python plugin
-  enabled: true
-  
-  # Fetch scripts from GitHub repos on startup
-  github_scripts: []
-    # - repo: "username/my-python-hub-script"
-    #   files:
-    #     - "my_script.py"
-  
-  # Scripts to auto-load (via +pyload)
-  autoload: []
-    # - "my_script.py"
-  
-  # Per-script configuration
-  script_config: {}
-    # my_script:
-    #   api_key: "abc123"
-    #   max_retries: 3
-
 # Python Plugin Mode
 #   single: Single interpreter with dispatcher (supports FastAPI, threading)
 #   multi: Sub-interpreters with script isolation (better security, no FastAPI)
@@ -459,14 +358,9 @@ matterbridge:
 startup_commands:
   # Load Python plugin
   - "!onplug python"
-  # Load Lua plugin (required for ledokol and other Lua scripts)
-  - "!onplug lua"
   # Start FastAPI server (required for /app web interface)
   # Format: !api start <port> [cors_origins...]
   - "!api start 30000"
-  # Lua scripts are auto-loaded from the lua.autoload list above
-  # You can also manually load them here:
-  # - "!luaload ledokol.lua"
   # Example: Set hub topic
   # - "!topic Welcome to the hub!"
   # Example: Configure settings
@@ -485,8 +379,7 @@ plugin_commands: []
 docker:
   # Volume name for persistent data
   config_volume: verlihub-production-config
-  db_volume: verlihub-production-db        # works for MySQL or PostgreSQL
-  # mysql_volume is also accepted as an alias for db_volume
+  mysql_volume: verlihub-production-mysql
   # Network name
   network: verlihub-production-net
   # Container name prefix

@@ -1311,8 +1311,7 @@ if FASTAPI_AVAILABLE:
         return {
             "service": "Verlihub REST API",
             "version": "1.0.0",
-            "dashboard": "/dashboard",
-            "dashboard_embed": "/dashboard/embed",
+            "app": "/app",
             "endpoints": {
                 "hub_info": "/hub",
                 "statistics": "/stats",
@@ -1650,39 +1649,18 @@ if FASTAPI_AVAILABLE:
         else:
             raise HTTPException(status_code=404, detail="No hub icon configured")
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard():
-        """Serve the Verlihub dashboard as a single-page application"""
+    # =============================================================================
+    # Web Application Endpoint (/app)
+    # =============================================================================
+    
+    @app.get("/app", response_class=HTMLResponse)
+    async def app_root():
+        """Serve the Verlihub web application"""
         try:
-            # Find the HTML file in the same directory as this script
             html_path = os.path.join(script_dir, 'verlihub_client.html')
             
             if not os.path.exists(html_path):
-                raise HTTPException(status_code=404, detail="Dashboard HTML file not found")
-            
-            with open(html_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            
-            # Modify API_BASE to use root path since we're serving from same origin
-            html_content = html_content.replace(
-                "const API_BASE = '/verlihub-api';",
-                "const API_BASE = '';"  # Use root - API endpoints are at /hub, /users, etc.
-            )
-            
-            return HTMLResponse(content=html_content)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error loading dashboard: {str(e)}")
-
-    @app.get("/dashboard/embed", response_class=HTMLResponse)
-    async def dashboard_embed():
-        """Serve the embeddable version of the dashboard"""
-        try:
-            html_path = os.path.join(script_dir, 'verlihub_client_embed.html')
-            
-            if not os.path.exists(html_path):
-                raise HTTPException(status_code=404, detail="Embedded dashboard HTML file not found")
+                raise HTTPException(status_code=404, detail="App HTML file not found")
             
             with open(html_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
@@ -1697,7 +1675,7 @@ if FASTAPI_AVAILABLE:
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error loading embedded dashboard: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error loading app: {str(e)}")
 
 # =============================================================================
 # Server Management

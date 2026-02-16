@@ -1,0 +1,407 @@
+# Verlihub Production Configuration Example
+# Copy to production.yml and customize for your deployment
+#
+# Usage: sg docker ./run_production.sh [--config production.yml]
+#
+# Most settings have sensible defaults - only configure what you need to change.
+# Settings not specified will use Verlihub's built-in defaults.
+
+# Database Configuration
+database:
+  host: mysql
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 3306
+
+# =============================================================================
+# Hub Identity & Branding
+# =============================================================================
+hub:
+  # Basic identity
+  name: "My DC++ Hub"
+  description: "Welcome to My Hub!"
+  # Full hub address for clients (used in hublist registrations)
+  # Example: "nmdcs://hub.example.com:411" or "dc://hub.example.com:4111"
+  host: ""
+  # Hub owner name (shown in hub info)
+  owner: ""
+  # Hub topic/tagline (can also be set with !topic command)
+  topic: ""
+  # Hub category for hublist (e.g., "General", "Movies", "Music")
+  category: ""
+  
+  # Branding URLs (shown in some clients)
+  icon_url: ""      # Small icon (favicon style)
+  logo_url: ""      # Larger logo image
+  
+  # Character encoding for legacy clients (default: CP1252)
+  # Common options: CP1252, UTF-8, ISO-8859-1
+  encoding: "CP1252"
+  
+  # Network settings
+  port: 4111
+  listen_host: "0.0.0.0"
+  # Additional ports to listen on (space-separated)
+  # Example: "411 4112 5555"
+  extra_ports: ""
+  
+  # MOTD file path (displayed when users connect)
+  motd_file: ""
+
+# =============================================================================
+# Hub Bots
+# =============================================================================
+bots:
+  # Security bot - sends system messages, kick notifications, etc.
+  security:
+    nick: "Hub-Security"
+    description: "Hub security system"
+  
+  # Operator chat bot - hosts the private operator chatroom
+  opchat:
+    nick: "OpChat"
+    description: "Operator chat"
+    # Minimum class to access operator chat (default: 3 = operators)
+    min_class: 3
+
+# =============================================================================
+# Connection Limits
+# =============================================================================
+limits:
+  # Maximum total users
+  max_users: 6000
+  # Maximum connections from a single IP (0 = unlimited)
+  max_users_per_ip: 0
+  # Maximum passive users (-1 = unlimited)
+  max_passive_users: -1
+  
+  # Limits by user class (0=guest, 1=reg, 2=vip, 3=op, 4=cheef, 5=admin, 6+=master)
+  # max_users_by_class:
+  #   guest: 6000
+  #   registered: 1000
+  #   vip: 1000
+  #   operator: 1000
+  #   cheef: 1000
+  #   admin: 1000
+  #   master: 1000
+
+# =============================================================================
+# Share Requirements
+# =============================================================================
+share:
+  # Minimum share to enter hub (in bytes, 0 = no minimum)
+  # Examples: 1073741824 (1GB), 10737418240 (10GB)
+  min_share: 0
+  # Maximum share (in bytes, 0 = no maximum)
+  max_share: 0
+  
+  # Per-class minimums (override min_share for specific classes)
+  # min_share_by_class:
+  #   registered: 0
+  #   vip: 0
+  #   operator: 0
+  
+  # Passive user share multiplier (e.g., 1.5 = 50% more share required)
+  passive_multiplier: 1.0
+
+# =============================================================================
+# Nick Requirements
+# =============================================================================
+nick:
+  # Nick length limits
+  min_length: 1
+  max_length: 64
+  # Allowed characters (regex pattern, empty = all allowed)
+  # Example: "A-Za-z0-9_-" for alphanumeric + underscore + dash
+  allowed_chars: ""
+  # Required prefix for all nicks (empty = none)
+  prefix: ""
+  # Prefix for auto-registered users
+  autoreg_prefix: ""
+
+# =============================================================================
+# Chat Settings
+# =============================================================================
+chat:
+  # Maximum message lengths
+  max_message_length: 256
+  max_pm_length: 1024
+  max_lines_per_message: 5
+  
+  # Minimum class to chat in main (0 = guests can chat)
+  min_class: 0
+  # Disable /me command
+  disable_me: false
+  # Chat enabled by default for new users
+  default_enabled: true
+
+# =============================================================================
+# Search Settings
+# =============================================================================
+search:
+  # Minimum characters in search query
+  min_chars: 4
+  # Search intervals in seconds (by class)
+  interval:
+    guest: 32
+    registered: 16
+    vip: 8
+    operator: 1
+    passive: 48
+
+# =============================================================================
+# Security & Flood Protection
+# =============================================================================
+security:
+  # Password requirements
+  min_password_length: 6
+  # Default password encryption: 0=plain, 1=encrypt, 2=MD5
+  password_encryption: 2
+  
+  # Clone detection
+  clone_detection:
+    enabled: false
+    # Number of clones before action (0 = disabled)
+    count: 0
+    # Report clones to ops
+    report: true
+    # Temp ban time for detected clones (seconds)
+    ban_time: 1800
+  
+  # Protocol flood protection
+  flood_protection:
+    # Action on flood: 0=ignore, 1=warn, 2=drop, 3=ban
+    action: 3
+    # Temp ban time for flooders (seconds)
+    ban_time: 1800
+    # Report floods to ops
+    report: true
+  
+  # Kick settings
+  hide_kicks: true
+  # Temp ban time after kick (seconds, 0 = no ban)
+  kick_ban_time: 300
+
+# =============================================================================
+# Registration Settings
+# =============================================================================
+registration:
+  # Auto-register class for new users (0 = disabled)
+  auto_register_class: 0
+  # Minimum class that can register others
+  min_class_to_register: 4
+  # Send password request to unregistered users with registered nicks
+  request_password: true
+  # Allow users to change their own password
+  allow_password_change: true
+  # Disable !regme command
+  disable_regme: false
+
+# =============================================================================
+# Hublist Registration
+# =============================================================================
+hublist:
+  # Hublist server address
+  host: "hublist.te-home.net"
+  port: 2501
+  # Send registration to hublist
+  enabled: true
+  # How often to ping hublist (seconds)
+  interval: 600
+  # Include hub address in registration
+  send_address: true
+  # Include minimum share in registration
+  send_min_share: true
+
+# =============================================================================
+# Class Permissions
+# =============================================================================
+permissions:
+  # Minimum class to see operator list
+  oplist_class: 3
+  # Minimum class to see user IPs
+  user_ip_class: 3
+  # Minimum class to bypass bans
+  ban_bypass_class: 10
+  # Minimum class to modify hub topic
+  topic_mod_class: 4
+  # Minimum class to modify plugins
+  plugin_mod_class: 5
+  # Minimum class to broadcast messages
+  broadcast_class: 4
+  # Minimum class to redirect users
+  redirect_class: 4
+  
+  # Class difference required for actions
+  # (e.g., kick_diff: 0 means same class can kick each other)
+  class_differences:
+    kick: 0
+    register: 2
+    pm: 10         # Higher class can PM anyone
+    download: 10   # Higher class can download from anyone
+
+# =============================================================================
+# Advanced Settings (rarely need to change)
+# =============================================================================
+advanced:
+  # DNS lookup for connecting users
+  dns_lookup: false
+  # Extended welcome message with hub info
+  extended_welcome: true
+  # Zlib compression (0 = disabled for compatibility)
+  zlib_enabled: false
+  # Log level (0-5, higher = more verbose)
+  log_level: 0
+  # ExtJSON support (some clients)
+  extjson_enabled: false
+  # Allow same nick from multiple connections
+  allow_same_user: true
+  # Filter LAN search requests
+  filter_lan_requests: false
+
+# User Accounts
+# Supports multiple admins and other user classes
+users:
+  # Master admin (class 10) - full hub control
+  masters:
+    - nick: admin
+      password: changeme_secure_password
+      note: "Primary administrator"
+    # Add more masters as needed:
+    # - nick: admin2
+    #   password: another_password
+
+  # Admins (class 5) - user management, kicks, bans
+  admins: []
+    # - nick: moderator1
+    #   password: mod_password
+    #   note: "Trusted moderator"
+
+  # Operators (class 3) - basic moderation
+  operators: []
+    # - nick: op1
+    #   password: op_password
+
+  # VIP users (class 2) - extra privileges
+  vips: []
+    # - nick: vipuser
+    #   password: vip_password
+
+  # Registered users (class 1) - bypass guests limits
+  registered: []
+    # - nick: regular1
+    #   password: user_password
+
+# Python Plugin Mode
+#   single: Single interpreter with dispatcher (supports FastAPI, threading)
+#   multi: Sub-interpreters with script isolation (better security, no FastAPI)
+python_mode: single
+
+# FastAPI Configuration (only used in single interpreter mode)
+api:
+  enabled: true
+  port: 30000
+  # CORS origins for web interface access
+  cors_origins:
+    - "https://your-domain.com"
+    - "https://www.your-domain.com"
+
+# TLS Configuration
+# Enables encrypted NMDCS connections for clients
+# Requires Verlihub built with USE_FEARTLS_PROXY=ON or USE_TLS_PROXY=ON
+tls:
+  enabled: false
+  # Internal port for TLS proxy (leave 0 to auto-select)
+  # Clients connect to the regular hub port, TLS is handled transparently
+  internal_port: 411
+  # Only allow TLS-encrypted connections (reject non-TLS clients)
+  only_mode: false
+  # Minimum TLS version: 0=1.0, 1=1.1, 2=1.2 (default), 3=1.3
+  min_version: 2
+  # Certificate file path (relative to working directory or absolute)
+  # If not provided, Verlihub generates a self-signed certificate
+  cert_file: ""
+  # Private key file path
+  key_file: ""
+  # Organization name for self-signed certificate generation
+  cert_org: "My Hub"
+  # Email for self-signed certificate generation
+  cert_email: "admin@example.com"
+  # Example with Let's Encrypt:
+  # cert_file: "/etc/letsencrypt/live/hub.example.com/fullchain.pem"
+  # key_file: "/etc/letsencrypt/live/hub.example.com/privkey.pem"
+
+# Matterbridge Configuration
+# Bridges hub chat with Discord, Slack, IRC, Telegram, Matrix, etc.
+# Requires a running Matterbridge instance: https://github.com/42wim/matterbridge
+matterbridge:
+  enabled: false
+  # Matterbridge API URL (configured in matterbridge.toml [api] section)
+  api_url: "http://matterbridge:4242"
+  # Optional: API token for authentication
+  api_token: ""
+  # Gateway name (must match matterbridge.toml gateway config)
+  gateway: "verlihub"
+  # Channel to bridge messages to
+  channel: "#general"
+  # Bot nick for messages from bridge
+  bot_nick: "[Bridge]"
+  # Minimum user class to bridge messages (0=all, 1=reg, 3=op)
+  min_class_to_send: 0
+  # Users to ignore (don't bridge their messages)
+  ignore_nicks: []
+
+# Commands to execute after Verlihub starts
+# These are sent via NMDC protocol as the first master user
+# Use this to load plugins, configure settings, etc.
+startup_commands:
+  # Load Python plugin
+  - "!onplug python"
+  # Start FastAPI server (required for /app web interface)
+  # Format: !api start <port> [cors_origins...]
+  - "!api start 30000"
+  # Example: Set hub topic
+  # - "!topic Welcome to the hub!"
+  # Example: Configure settings
+  # - "!set hub_security 1"
+
+# Additional plugin commands to run
+# These execute after startup_commands
+plugin_commands: []
+  # Start matterbridge connection (if enabled above)
+  # - "!bridge start"
+  # Example Python plugin commands:
+  # - "+py load fastapi_server"
+  # - "+py list"
+  
+# Docker-specific settings
+docker:
+  # Volume name for persistent data
+  config_volume: verlihub-production-config
+  mysql_volume: verlihub-production-mysql
+  # Network name
+  network: verlihub-production-net
+  # Container name prefix
+  container_prefix: vh-prod
+  # Restart policy: no, always, on-failure, unless-stopped
+  restart_policy: unless-stopped
+  # Resource limits (optional)
+  # memory_limit: 2g
+  # cpu_limit: 2
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: info
+  # Keep logs for this many days (0 = forever)
+  retention_days: 30
+
+# Health check settings
+healthcheck:
+  # Interval between health checks
+  interval: 30s
+  # Timeout for each check
+  timeout: 10s
+  # Number of consecutive failures before unhealthy
+  retries: 3

@@ -1,0 +1,33 @@
+edition: py
+
+database:
+  type: sqlite
+  path: /data/verlihub.db
+
+hub:
+  name: "Community Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: boss
+      password: masterpass
+  admins:
+    - nick: mod1
+      password: modpass1
+    - nick: mod2
+      password: modpass2
+  operators:
+    - nick: helper
+      password: helperpass
+  vips:
+    - nick: trusteduser
+      password: vippass
+  registered:
+    - nick: regular1
+      password: userpass1
+    - nick: regular2
+      password: userpass2
+
+api:
+  port: 8000

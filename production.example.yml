@@ -33,6 +33,7 @@ database:
   password: verlihub
   name: verlihub
   port: 3306             # 3306 for MySQL, 5432 for PostgreSQL
+  # path: /data/verlihub.db  # SQLite only — file path inside container
 
 # =============================================================================
 # Hub Identity & Branding

@@ -174,6 +174,7 @@ print(f"DB_PORT={q(db.get('port', 3306 if db_type == 'mysql' else 5432))}")
 print(f"DB_USER={q(db.get('user', 'verlihub'))}")
 print(f"DB_PASS={q(db.get('password', 'verlihub'))}")
 print(f"DB_NAME={q(db.get('name', 'verlihub'))}")
+print(f"DB_PATH={q(db.get('path', ''))}")
 
 print(f"HUB_NAME={q(hub.get('name', 'My Hub'))}")
 print(f"HUB_DESC={q(hub.get('description', ''))}")
@@ -346,7 +347,42 @@ EOF
 # ── Compose generation — verlihub-py hub ─────────────────────────────────────
 
 _compose_py_hub() {
-    cat << EOF
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        # SQLite — no db container dependency, mount a volume for the DB file
+        local sqlite_vol="${CONFIG_VOLUME}-sqlite"
+        local sqlite_mount="/data"
+        local sqlite_file="${DB_PATH:-/data/verlihub.db}"
+        cat << EOF
+  # Verlihub-py Hub (Python) — SQLite
+  ${CONTAINER_PREFIX}-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: ${CONTAINER_PREFIX}-hub
+    command: >
+      python -m verlihub.server
+        -c /config/production.yml
+        --mode api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${HUB_PORT}:${HUB_PORT}"
+      - "${API_PORT}:${API_PORT}"
+    volumes:
+      - ./${CONFIG_FILE}:/config/production.yml:ro
+      - ${sqlite_vol}:${sqlite_mount}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+    else
+        cat << EOF
   # Verlihub-py Hub (Python)
   ${CONTAINER_PREFIX}-hub:
     build:
@@ -377,6 +413,7 @@ _compose_py_hub() {
       - ${NETWORK}
     restart: ${RESTART_POLICY}
 EOF
+    fi
 }
 
 # ── Full compose file generation ─────────────────────────────────────────────
@@ -399,8 +436,10 @@ generate_compose() {
 services:
 EOF
 
-    # Database service
-    if [ "$DB_TYPE" = "postgresql" ]; then
+    # Database service (not needed for SQLite)
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        log_info "SQLite mode — no database container needed"
+    elif [ "$DB_TYPE" = "postgresql" ]; then
         _compose_postgres_service >> "$compose_file"
     else
         _compose_mysql_service >> "$compose_file"
@@ -416,7 +455,20 @@ EOF
     fi
 
     # Volumes and network
-    cat >> "$compose_file" << EOF
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        local sqlite_vol="${CONFIG_VOLUME}-sqlite"
+        cat >> "$compose_file" << EOF
+
+volumes:
+  ${CONFIG_VOLUME}:
+  ${sqlite_vol}:
+
+networks:
+  ${NETWORK}:
+    driver: bridge
+EOF
+    else
+        cat >> "$compose_file" << EOF
 
 volumes:
   ${DB_VOLUME}:
@@ -426,6 +478,7 @@ networks:
   ${NETWORK}:
     driver: bridge
 EOF
+    fi
 
     log_success "Generated $compose_file"
 }
@@ -695,8 +748,8 @@ start_production() {
     if [ -z "$EDITION" ]; then
         if [ -n "$YAML_EDITION" ]; then
             EDITION="$YAML_EDITION"
-        elif [ "$DB_TYPE" = "postgresql" ]; then
-            # PostgreSQL → must be verlihub-py (legacy doesn't support it)
+        elif [ "$DB_TYPE" = "postgresql" ] || [ "$DB_TYPE" = "sqlite" ]; then
+            # PostgreSQL/SQLite → must be verlihub-py (legacy doesn't support them)
             EDITION="py"
         else
             EDITION="legacy"
@@ -706,6 +759,12 @@ start_production() {
     # Validate edition + DB combo
     if [ "$EDITION" = "legacy" ] && [ "$DB_TYPE" = "postgresql" ]; then
         log_error "Legacy verlihub does not support PostgreSQL."
+        log_info  "Use --edition py or change database.type to mysql in your YAML."
+        exit 1
+    fi
+
+    if [ "$EDITION" = "legacy" ] && [ "$DB_TYPE" = "sqlite" ]; then
+        log_error "Legacy verlihub does not support SQLite."
         log_info  "Use --edition py or change database.type to mysql in your YAML."
         exit 1
     fi
@@ -731,6 +790,7 @@ print(c.get('api', {}).get('port', 8000))
     echo "Configuration:"
     echo "  Edition:    $EDITION"
     echo "  Database:   $DB_TYPE"
+    [ "$DB_TYPE" = "sqlite" ] && echo "  DB Path:    ${DB_PATH:-/data/verlihub.db}"
     echo "  Hub Name:   $HUB_NAME"
     echo "  Hub Port:   $HUB_PORT"
     [ -n "$HUB_DESC" ] && echo "  Hub Desc:   $HUB_DESC"

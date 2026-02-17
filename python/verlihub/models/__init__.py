@@ -278,3 +278,51 @@ class PythonScript(PythonScriptBase, table=True):
     __tablename__ = "pi_python"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+
+
+# =============================================================================
+# Invite Code Models
+# =============================================================================
+
+
+class InviteCodeBase(SQLModel):
+    """Base model for invite codes."""
+    code: str = Field(max_length=64, index=True)
+    created_by: str = Field(max_length=64, index=True)  # Nick of the user who owns the code
+    max_class: int = Field(default=UserClass.REGISTERED)  # Max class this invite can grant
+    used: bool = False
+    used_by: Optional[str] = Field(default=None, max_length=64)
+    used_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: Optional[datetime] = None  # None = never expires
+
+
+class InviteCode(InviteCodeBase, table=True):
+    """Invite code for user registration."""
+    __tablename__ = "invite_codes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class InviteCodeRead(InviteCodeBase):
+    """Schema for reading an invite code."""
+    id: int
+
+
+class InviteCodeCreate(SQLModel):
+    """Schema for creating invite codes (admin allocating to a user)."""
+    nick: str  # User to allocate codes to
+    count: int = Field(default=1, ge=1, le=100)  # How many codes to create
+    max_class: int = Field(default=UserClass.REGISTERED)  # Max class these invites can grant
+
+
+# =============================================================================
+# Registration Models
+# =============================================================================
+
+
+class RegisterRequest(SQLModel):
+    """Schema for public self-registration."""
+    nick: str = Field(max_length=64)
+    password: str = Field(max_length=128)
+    invite_code: Optional[str] = Field(default=None, max_length=64)

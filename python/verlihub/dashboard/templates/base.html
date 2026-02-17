@@ -178,7 +178,9 @@
     <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
         <div class="navbar-brand">
             <a class="navbar-item" href="/dashboard/">
-                <i class="fas fa-server mr-2"></i>
+                <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
+                     alt="Verlihub" 
+                     style="height: 28px; width: 28px; border-radius: 50%; margin-right: 0.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.15);">
                 <strong>{{ hub_name }}</strong>
             </a>
             
@@ -202,26 +204,21 @@
                 <a class="navbar-item" href="/dashboard/bans">
                     <i class="fas fa-ban mr-2"></i> Bans
                 </a>
-                {% if user.user_class >= 3 %}
                 <a class="navbar-item" href="/dashboard/console">
                     <i class="fas fa-terminal mr-2"></i> Console
                 </a>
-                {% endif %}
-                {% if user.user_class >= 5 %}
                 <a class="navbar-item" href="/dashboard/plugins">
                     <i class="fas fa-puzzle-piece mr-2"></i> Plugins
                 </a>
-                {% endif %}
-                {% if user.user_class >= 10 %}
                 <a class="navbar-item" href="/dashboard/config">
                     <i class="fas fa-cog mr-2"></i> Config
                 </a>
-                {% endif %}
-                {% if user.user_class >= 5 %}
                 <a class="navbar-item" href="/dashboard/logs">
                     <i class="fas fa-file-alt mr-2"></i> Logs
                 </a>
-                {% endif %}
+                <a class="navbar-item" href="/dashboard/invites">
+                    <i class="fas fa-ticket-alt mr-2"></i> Invites
+                </a>
                 {% endif %}
             </div>
             

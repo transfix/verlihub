@@ -79,14 +79,14 @@ class TestDashboardAuthenticatedRoutes:
         assert response.status_code in [200, 500]
     
     def test_users_page_requires_admin(self, client, operator_token):
-        """Test that users page requires admin class."""
+        """Test that users page is accessible to all authenticated classes."""
         response = client.get(
             "/dashboard/users",
             cookies={"access_token": f"Bearer {operator_token}"},
             follow_redirects=False
         )
-        # Operator (class 3) should get 403, needs class 5
-        assert response.status_code == 403
+        # All authenticated users can now access (may get 500 if DB unavailable)
+        assert response.status_code in [200, 500]
     
     def test_users_page_with_admin(self, client, admin_token):
         """Test that users page loads with admin auth."""
@@ -105,14 +105,14 @@ class TestDashboardAuthenticatedRoutes:
         assert response.status_code in [200, 500]
     
     def test_config_page_requires_master(self, client, admin_token):
-        """Test that config page requires master class."""
+        """Test that config page is accessible to all authenticated classes."""
         response = client.get(
             "/dashboard/config",
             cookies={"access_token": f"Bearer {admin_token}"},
             follow_redirects=False
         )
-        # Admin (class 5) should get 403, needs class 10
-        assert response.status_code == 403
+        # All authenticated users can now access (read-only for non-master)
+        assert response.status_code in [200, 500]
     
     def test_config_page_with_master(self, client, master_token):
         """Test that config page loads with master auth."""
@@ -239,14 +239,14 @@ class TestPluginsPage:
     """Test plugins page routes."""
     
     def test_plugins_requires_admin(self, client, operator_token, admin_token):
-        """Test that plugins page requires admin class."""
-        # Operator (class 3) should get 403
+        """Test that plugins page is accessible to all authenticated classes."""
+        # Operator (class 3) can now access (read-only)
         response = client.get(
             "/dashboard/plugins",
             cookies={"access_token": f"Bearer {operator_token}"},
             follow_redirects=False
         )
-        assert response.status_code == 403
+        assert response.status_code in [200, 500]
         
         # Admin (class 5) should succeed
         response = client.get(

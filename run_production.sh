@@ -142,7 +142,7 @@ check_dependencies() {
 
 parse_config() {
     _CONFIG_FILE="$CONFIG_FILE" python3 << 'PYEOF'
-import yaml, sys, os
+import yaml, sys, os, shlex
 
 config_file = os.environ.get("_CONFIG_FILE", "production.yml")
 if not os.path.exists(config_file):
@@ -151,6 +151,10 @@ if not os.path.exists(config_file):
 
 with open(config_file) as f:
     config = yaml.safe_load(f)
+
+def q(val):
+    """Shell-quote a value so eval handles spaces and special chars safely."""
+    return shlex.quote(str(val))
 
 db   = config.get("database", {})
 hub  = config.get("hub", {})
@@ -164,17 +168,17 @@ db_type = db.get("type", "mysql").lower()
 if db_type in ("postgres", "pg"):
     db_type = "postgresql"
 
-print(f"DB_TYPE={db_type}")
-print(f"DB_HOST={db.get('host', 'mysql' if db_type == 'mysql' else 'postgres')}")
-print(f"DB_PORT={db.get('port', 3306 if db_type == 'mysql' else 5432)}")
-print(f"DB_USER={db.get('user', 'verlihub')}")
-print(f"DB_PASS={db.get('password', 'verlihub')}")
-print(f"DB_NAME={db.get('name', 'verlihub')}")
+print(f"DB_TYPE={q(db_type)}")
+print(f"DB_HOST={q(db.get('host', 'mysql' if db_type == 'mysql' else 'postgres'))}")
+print(f"DB_PORT={q(db.get('port', 3306 if db_type == 'mysql' else 5432))}")
+print(f"DB_USER={q(db.get('user', 'verlihub'))}")
+print(f"DB_PASS={q(db.get('password', 'verlihub'))}")
+print(f"DB_NAME={q(db.get('name', 'verlihub'))}")
 
-print(f"HUB_NAME={hub.get('name', 'My Hub')}")
-print(f"HUB_DESC={hub.get('description', '')}")
-print(f"HUB_PORT={hub.get('port', 4111)}")
-print(f"MOTD_FILE={hub.get('motd_file', '')}")
+print(f"HUB_NAME={q(hub.get('name', 'My Hub'))}")
+print(f"HUB_DESC={q(hub.get('description', ''))}")
+print(f"HUB_PORT={q(hub.get('port', 4111))}")
+print(f"MOTD_FILE={q(hub.get('motd_file', ''))}")
 
 # Users — both new and legacy format
 users = config.get("users", {})
@@ -187,35 +191,35 @@ else:
     admin_nick = admin.get("nick", "admin")
     admin_pass = admin.get("password", "admin")
 
-print(f"ADMIN_NICK={admin_nick}")
-print(f"ADMIN_PASS={admin_pass}")
-print(f"PYTHON_MODE={config.get('python_mode', 'single')}")
-print(f"API_ENABLED={str(api.get('enabled', True)).lower()}")
-print(f"API_PORT={api.get('port', 30000)}")
+print(f"ADMIN_NICK={q(admin_nick)}")
+print(f"ADMIN_PASS={q(admin_pass)}")
+print(f"PYTHON_MODE={q(config.get('python_mode', 'single'))}")
+print(f"API_ENABLED={q(str(api.get('enabled', True)).lower())}")
+print(f"API_PORT={q(api.get('port', 30000))}")
 
 # Docker section
-print(f"CONFIG_VOLUME={dcfg.get('config_volume', 'verlihub-prod-config')}")
-print(f"DB_VOLUME={dcfg.get('db_volume', dcfg.get('mysql_volume', 'verlihub-prod-db'))}")
-print(f"NETWORK={dcfg.get('network', 'verlihub-prod-net')}")
-print(f"CONTAINER_PREFIX={dcfg.get('container_prefix', 'vh-prod')}")
-print(f"RESTART_POLICY={dcfg.get('restart_policy', 'unless-stopped')}")
+print(f"CONFIG_VOLUME={q(dcfg.get('config_volume', 'verlihub-prod-config'))}")
+print(f"DB_VOLUME={q(dcfg.get('db_volume', dcfg.get('mysql_volume', 'verlihub-prod-db')))}")
+print(f"NETWORK={q(dcfg.get('network', 'verlihub-prod-net'))}")
+print(f"CONTAINER_PREFIX={q(dcfg.get('container_prefix', 'vh-prod'))}")
+print(f"RESTART_POLICY={q(dcfg.get('restart_policy', 'unless-stopped'))}")
 
 cors = api.get("cors_origins", [])
-print(f"CORS_ORIGINS={' '.join(cors)}")
+print(f"CORS_ORIGINS={q(' '.join(cors))}")
 
 # Matterbridge
-print(f"MATTERBRIDGE_ENABLED={str(mb.get('enabled', False)).lower()}")
-print(f"MATTERBRIDGE_URL={mb.get('api_url', 'http://matterbridge:4242')}")
-print(f"MATTERBRIDGE_TOKEN={mb.get('api_token', '')}")
-print(f"MATTERBRIDGE_GATEWAY={mb.get('gateway', 'verlihub')}")
-print(f"MATTERBRIDGE_CHANNEL={mb.get('channel', '#general')}")
+print(f"MATTERBRIDGE_ENABLED={q(str(mb.get('enabled', False)).lower())}")
+print(f"MATTERBRIDGE_URL={q(mb.get('api_url', 'http://matterbridge:4242'))}")
+print(f"MATTERBRIDGE_TOKEN={q(mb.get('api_token', ''))}")
+print(f"MATTERBRIDGE_GATEWAY={q(mb.get('gateway', 'verlihub'))}")
+print(f"MATTERBRIDGE_CHANNEL={q(mb.get('channel', '#general'))}")
 
 # Startup commands
 startup_cmds = config.get("startup_commands", [])
 plugin_cmds  = config.get("plugin_commands", [])
 all_cmds = startup_cmds + plugin_cmds
-print(f"HAS_COMMANDS={'true' if all_cmds else 'false'}")
-print(f"CMD_COUNT={len(all_cmds)}")
+print(f"HAS_COMMANDS={q('true' if all_cmds else 'false')}")
+print(f"CMD_COUNT={q(len(all_cmds))}")
 
 # User counts
 uc = {
@@ -225,21 +229,21 @@ uc = {
     "vips":       len(users.get("vips", []))       if users else 0,
     "registered": len(users.get("registered", [])) if users else 0,
 }
-print(f"USER_COUNTS={uc['masters']},{uc['admins']},{uc['operators']},{uc['vips']},{uc['registered']}")
+print(f"USER_COUNTS={q(str(uc['masters'])+','+str(uc['admins'])+','+str(uc['operators'])+','+str(uc['vips'])+','+str(uc['registered']))}")
 
 # TLS
 tls = config.get("tls", {})
-print(f"TLS_ENABLED={str(tls.get('enabled', False)).lower()}")
-print(f"TLS_INTERNAL_PORT={tls.get('internal_port', 411)}")
-print(f"TLS_ONLY_MODE={str(tls.get('only_mode', False)).lower()}")
-print(f"TLS_MIN_VERSION={tls.get('min_version', 2)}")
-print(f"TLS_CERT_FILE={tls.get('cert_file', '')}")
-print(f"TLS_KEY_FILE={tls.get('key_file', '')}")
-print(f"TLS_CERT_ORG={tls.get('cert_org', 'Verlihub')}")
-print(f"TLS_CERT_EMAIL={tls.get('cert_email', 'verlihub@localhost')}")
+print(f"TLS_ENABLED={q(str(tls.get('enabled', False)).lower())}")
+print(f"TLS_INTERNAL_PORT={q(tls.get('internal_port', 411))}")
+print(f"TLS_ONLY_MODE={q(str(tls.get('only_mode', False)).lower())}")
+print(f"TLS_MIN_VERSION={q(tls.get('min_version', 2))}")
+print(f"TLS_CERT_FILE={q(tls.get('cert_file', ''))}")
+print(f"TLS_KEY_FILE={q(tls.get('key_file', ''))}")
+print(f"TLS_CERT_ORG={q(tls.get('cert_org', 'Verlihub'))}")
+print(f"TLS_CERT_EMAIL={q(tls.get('cert_email', 'verlihub@localhost'))}")
 
 # Edition hint (if present in YAML)
-print(f"YAML_EDITION={config.get('edition', '')}")
+print(f"YAML_EDITION={q(config.get('edition', ''))}")
 PYEOF
 }
 

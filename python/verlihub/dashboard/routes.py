@@ -157,6 +157,208 @@ async def logout(request: Request):
     return response
 
 
+# =============================================================================
+# Invite Permalink (QR-code friendly)
+# =============================================================================
+
+
+@dashboard_router.get("/invite/{code}", response_class=HTMLResponse)
+async def invite_permalink(request: Request, code: str):
+    """Clean permalink for invite codes — ideal for QR codes and sharing.
+    
+    Redirects to the registration page with the invite code pre-filled.
+    Example: /dashboard/invite/abc123def456
+    """
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(
+        url=f"/dashboard/register?invite={code}",
+        status_code=303,
+    )
+
+
+# =============================================================================
+# Registration Page
+# =============================================================================
+
+
+@dashboard_router.get("/register", response_class=HTMLResponse)
+async def register_page(
+    request: Request,
+    error: Optional[str] = None,
+    success: Optional[str] = None,
+    invite: Optional[str] = None,
+):
+    """Public registration page."""
+    import os
+    registration_enabled = os.getenv("VH_REGISTRATION_ENABLED", "true").lower() in ("1", "true", "yes")
+    require_invite = os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "false").lower() in ("1", "true", "yes")
+    
+    context = get_base_context(request)
+    context["error"] = error
+    context["success"] = success
+    context["invite_code"] = invite or ""
+    context["registration_enabled"] = registration_enabled
+    context["require_invite"] = require_invite
+    return templates.TemplateResponse(request, "register.html", context)
+
+
+@dashboard_router.post("/register")
+async def register_submit(request: Request):
+    """Handle registration form submission."""
+    import os
+    import re
+    registration_enabled = os.getenv("VH_REGISTRATION_ENABLED", "true").lower() in ("1", "true", "yes")
+    require_invite = os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "false").lower() in ("1", "true", "yes")
+    
+    if not registration_enabled:
+        return RedirectResponse(
+            url="/dashboard/register?error=Registration+is+disabled",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    
+    form = await request.form()
+    nick = (form.get("nick", "") or "").strip()
+    password = form.get("password", "") or ""
+    confirm_password = form.get("confirm_password", "") or ""
+    invite_code = (form.get("invite_code", "") or "").strip()
+    
+    # Validate
+    if not nick or len(nick) < 2:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Nick+must+be+at+least+2+characters&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not re.match(r'^[a-zA-Z0-9_\-\[\]{}|`^]+$', nick):
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Nick+contains+invalid+characters&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not password or len(password) < 4:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Password+must+be+at+least+4+characters&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if password != confirm_password:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Passwords+do+not+match&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if require_invite and not invite_code:
+        return RedirectResponse(
+            url="/dashboard/register?error=An+invite+code+is+required",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    
+    # Call the API registration endpoint
+    from verlihub.api.auth import create_access_token, hash_password
+    from verlihub.models import InviteCode as InviteCodeModel
+    from verlihub.models import utc_now
+    from verlihub.models.database import get_async_session
+    from sqlmodel import select
+    
+    try:
+        async with get_async_session() as session:
+            # Check if nick exists
+            query = select(RegUser).where(RegUser.nick == nick)
+            result = await session.execute(query)
+            if result.scalar_one_or_none() is not None:
+                return RedirectResponse(
+                    url=f"/dashboard/register?error=Nick+already+registered&invite={invite_code}",
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
+            
+            # Handle invite code
+            from verlihub.models import UserClass
+            default_class = int(os.getenv("VH_REGISTRATION_DEFAULT_CLASS", str(UserClass.REGISTERED)))
+            user_class = default_class
+            invite = None
+            
+            if invite_code:
+                query = select(InviteCodeModel).where(InviteCodeModel.code == invite_code)
+                result = await session.execute(query)
+                invite = result.scalar_one_or_none()
+                
+                if invite is None:
+                    return RedirectResponse(
+                        url="/dashboard/register?error=Invalid+invite+code",
+                        status_code=status.HTTP_303_SEE_OTHER,
+                    )
+                if invite.used:
+                    return RedirectResponse(
+                        url="/dashboard/register?error=Invite+code+already+used",
+                        status_code=status.HTTP_303_SEE_OTHER,
+                    )
+                if invite.expires_at and invite.expires_at < utc_now():
+                    return RedirectResponse(
+                        url="/dashboard/register?error=Invite+code+has+expired",
+                        status_code=status.HTTP_303_SEE_OTHER,
+                    )
+                user_class = invite.max_class
+            
+            # Create user
+            new_user = RegUser(
+                nick=nick,
+                login_pwd=hash_password(password),
+                user_class=user_class,
+                authorised=True,
+                reg_op="self-registration",
+            )
+            session.add(new_user)
+            
+            if invite:
+                invite.used = True
+                invite.used_by = nick
+                invite.used_at = utc_now()
+            
+            await session.commit()
+    except Exception:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Registration+failed&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    
+    # Create token and log the user in
+    token = create_access_token(nick, user_class)
+    response = RedirectResponse(url="/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {token.access_token}",
+        httponly=True,
+        max_age=86400,
+        samesite="lax",
+    )
+    return response
+
+
+# =============================================================================
+# Invite Code Management Page
+# =============================================================================
+
+
+@dashboard_router.get("/invites", response_class=HTMLResponse)
+async def invites_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+    access_token: Optional[str] = Cookie(default=None),
+):
+    """Invite code management page."""
+    if user is None:
+        return RedirectResponse(
+            url="/dashboard/login?next_url=/dashboard/invites",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    
+    ctx = get_hub_context()
+    context = get_base_context(request, user)
+    
+    # Pass the token for API calls
+    token = access_token[7:] if access_token and access_token.startswith("Bearer ") else access_token
+    context["auth_token"] = token or ""
+    context["is_admin"] = user.user_class >= 5
+    
+    return templates.TemplateResponse(request, "invites.html", context)
+
+
 @dashboard_router.get("/users", response_class=HTMLResponse)
 async def users_page(
     request: Request,
@@ -170,10 +372,6 @@ async def users_page(
             url="/dashboard/login?next_url=/dashboard/users",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    
-    # Check permission (class >= 5 for admin)
-    if user.user_class < 5:
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     ctx = get_hub_context()
     context = get_base_context(request, user)
@@ -207,6 +405,7 @@ async def users_page(
         "page": page,
         "search": search,
         "per_page": per_page,
+        "can_edit": user.user_class >= 5,  # Admin+ can edit
     })
     
     return templates.TemplateResponse(request, "users.html", context)
@@ -225,9 +424,6 @@ async def bans_page(
             url="/dashboard/login?next_url=/dashboard/bans",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    
-    if user.user_class < 3:  # Operator or higher
-        raise HTTPException(status_code=403, detail="Operator access required")
     
     context = get_base_context(request, user)
     
@@ -257,6 +453,7 @@ async def bans_page(
         "page": page,
         "search": search,
         "per_page": per_page,
+        "can_edit": user.user_class >= 3,  # Operator+ can edit
     })
     
     return templates.TemplateResponse(request, "bans.html", context)
@@ -274,9 +471,6 @@ async def config_page(
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
-    if user.user_class < 10:  # Master only
-        raise HTTPException(status_code=403, detail="Master access required")
-    
     ctx = get_hub_context()
     context = get_base_context(request, user)
     
@@ -289,6 +483,7 @@ async def config_page(
             pass
     
     context["config"] = config
+    context["can_edit"] = user.user_class >= 10  # Master can edit
     
     return templates.TemplateResponse(request, "config.html", context)
 
@@ -305,11 +500,9 @@ async def logs_page(
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
-    if user.user_class < 5:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
     context = get_base_context(request, user)
     context["logs"] = []  # TODO: Implement log retrieval
+    context["can_edit"] = user.user_class >= 5  # Admin+ can manage
     
     return templates.TemplateResponse(request, "logs.html", context)
 
@@ -327,16 +520,13 @@ async def console_page(
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
-    # Require operator or higher (class >= 3)
-    if user.user_class < 3:
-        raise HTTPException(status_code=403, detail="Operator access required")
-    
     ctx = get_hub_context()
     context = get_base_context(request, user)
     
     # Pass the token for API calls
     token = access_token[7:] if access_token and access_token.startswith("Bearer ") else access_token
     context["auth_token"] = token or ""
+    context["can_edit"] = user.user_class >= 3  # Operator+ can use console
     
     return templates.TemplateResponse(request, "console.html", context)
 
@@ -353,10 +543,6 @@ async def plugins_page(
             url="/dashboard/login?next_url=/dashboard/plugins",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    
-    # Require admin or higher (class >= 5)
-    if user.user_class < 5:
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     ctx = get_hub_context()
     context = get_base_context(request, user)
@@ -386,6 +572,7 @@ async def plugins_page(
     
     context["plugins"] = plugins
     context["scripts"] = scripts
+    context["can_edit"] = user.user_class >= 5  # Admin+ can manage plugins
     
     return templates.TemplateResponse(request, "plugins.html", context)
 
@@ -501,6 +688,9 @@ SPA_DASHBOARD_HTML = '''<!DOCTYPE html>
 <body>
     <div class="page-wrapper">
         <div class="page-header">
+            <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
+                 alt="Verlihub" id="spa-logo"
+                 style="width: 72px; height: 72px; border-radius: 50%; box-shadow: 0 4px 16px rgba(0,0,0,0.15); border: 3px solid #1a237e; margin-bottom: 12px;">
             <h1 id="hub-name-header" class="hub-name">Verlihub Dashboard</h1>
             <p id="hub-desc-header" class="hub-desc"></p>
         </div>
@@ -1299,6 +1489,9 @@ EMBED_DASHBOARD_HTML = '''<!DOCTYPE html>
 
                 let html = `
                     <div class="hub-header">
+                        <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
+                             alt="Verlihub"
+                             style="width: 48px; height: 48px; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border: 2px solid #1a237e; margin-bottom: 8px;">
                         <h2 class="hub-name">${escapeHtml(info.name || 'Verlihub')}</h2>
                         ${info.description ? `<p class="hub-desc">${escapeHtml(info.description)}</p>` : ''}
                     </div>

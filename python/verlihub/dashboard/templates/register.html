@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}Register - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="columns is-centered">
+    <div class="column is-4">
+        <div class="box">
+            <div class="has-text-centered mb-5">
+                <figure class="image is-96x96" style="margin: 0 auto 1rem auto;">
+                    <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
+                         alt="Verlihub"
+                         style="border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,0.15); border: 3px solid hsl(171, 100%, 41%);">
+                </figure>
+                <h1 class="title is-4">{{ hub_name }}</h1>
+                <p class="subtitle is-6">Create Account</p>
+            </div>
+            
+            {% if not registration_enabled %}
+            <div class="notification is-warning is-light">
+                Registration is currently disabled. Please contact an administrator.
+            </div>
+            {% else %}
+            
+            {% if error %}
+            <div class="notification is-danger is-light">
+                <button class="delete" onclick="this.parentElement.remove()"></button>
+                {{ error }}
+            </div>
+            {% endif %}
+            
+            {% if success %}
+            <div class="notification is-success is-light">
+                <button class="delete" onclick="this.parentElement.remove()"></button>
+                {{ success }}
+            </div>
+            {% endif %}
+            
+            <form method="post" action="/dashboard/register">
+                <div class="field">
+                    <label class="label">Nickname</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" name="nick" 
+                               placeholder="Choose a nickname" required autofocus
+                               minlength="2" maxlength="64"
+                               pattern="[a-zA-Z0-9_\-\[\]{}|`^]+">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-user"></i>
+                        </span>
+                    </div>
+                    <p class="help">Letters, numbers, _ - [ ] { } | ` ^ allowed</p>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Password</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="password" name="password" 
+                               placeholder="Choose a password" required
+                               minlength="4" id="reg-password">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-lock"></i>
+                        </span>
+                    </div>
+                    <p class="help">At least 4 characters</p>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Confirm Password</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="password" name="confirm_password" 
+                               placeholder="Confirm your password" required
+                               minlength="4" id="reg-confirm">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-lock"></i>
+                        </span>
+                    </div>
+                </div>
+                
+                {% if require_invite %}
+                <div class="field">
+                    <label class="label">Invite Code <span class="tag is-warning is-light">Required</span></label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" name="invite_code" 
+                               placeholder="Enter your invite code" required
+                               value="{{ invite_code }}">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-ticket-alt"></i>
+                        </span>
+                    </div>
+                    <p class="help">You need an invite code from an existing user to register.</p>
+                </div>
+                {% else %}
+                <div class="field">
+                    <label class="label">Invite Code <span class="tag is-info is-light">Optional</span></label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" name="invite_code" 
+                               placeholder="Invite code (optional)"
+                               value="{{ invite_code }}">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-ticket-alt"></i>
+                        </span>
+                    </div>
+                    <p class="help">Have an invite code? Enter it for a higher user class.</p>
+                </div>
+                {% endif %}
+                
+                <div class="field">
+                    <div class="control">
+                        <button class="button is-primary is-fullwidth" type="submit" id="reg-submit">
+                            <i class="fas fa-user-plus mr-2"></i>
+                            Register
+                        </button>
+                    </div>
+                </div>
+            </form>
+            
+            {% endif %}
+            
+            <hr>
+            
+            <div class="has-text-centered">
+                <p>
+                    <small>Already have an account? 
+                        <a href="/dashboard/login">Login here</a>
+                    </small>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Client-side password match validation
+document.getElementById('reg-confirm')?.addEventListener('input', function() {
+    const password = document.getElementById('reg-password').value;
+    const confirm = this.value;
+    if (confirm && password !== confirm) {
+        this.classList.add('is-danger');
+        this.classList.remove('is-success');
+    } else if (confirm) {
+        this.classList.remove('is-danger');
+        this.classList.add('is-success');
+    }
+});
+</script>
+{% endblock %}

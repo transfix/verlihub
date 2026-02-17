@@ -771,5 +771,324 @@ class TestDashboardEndpoints:
         assert "/dashboard/spa" in content
 
 
+# =============================================================================
+# Registration Endpoints
+# =============================================================================
+
+
+class TestRegistrationEndpoints:
+    """Tests for /api/v1/auth/register endpoint."""
+
+    def test_register_missing_fields(self, client):
+        """Test registration with missing fields."""
+        response = client.post("/api/v1/auth/register", json={})
+        assert response.status_code in [422, 500]
+
+    def test_register_short_nick(self, client):
+        """Test registration with too-short nick."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "a",
+            "password": "testpass",
+        })
+        assert response.status_code in [400, 500]
+
+    def test_register_invalid_nick_chars(self, client):
+        """Test registration with invalid characters in nick."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "bad nick!@#",
+            "password": "testpass",
+        })
+        assert response.status_code in [400, 500]
+
+    def test_register_short_password(self, client):
+        """Test registration with too-short password."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "testuser",
+            "password": "abc",
+        })
+        assert response.status_code in [400, 500]
+
+    def test_register_success(self, client):
+        """Test successful registration returns a token."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "newuser_test",
+            "password": "testpass1234",
+        })
+        # Should succeed or fail with DB error (500) in test environment
+        assert response.status_code in [200, 500]
+        if response.status_code == 200:
+            data = response.json()
+            assert "access_token" in data
+            assert data["token_type"] == "bearer"
+            assert "expires_in" in data
+
+    def test_register_duplicate_nick(self, client):
+        """Test registration with duplicate nick returns conflict."""
+        payload = {"nick": "dup_user_test", "password": "testpass1234"}
+        # First registration
+        r1 = client.post("/api/v1/auth/register", json=payload)
+        if r1.status_code == 200:
+            # Second should fail
+            r2 = client.post("/api/v1/auth/register", json=payload)
+            assert r2.status_code == 409
+
+    def test_register_with_invalid_invite_code(self, client):
+        """Test registration with an invalid invite code."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "inviteuser",
+            "password": "testpass1234",
+            "invite_code": "nonexistent_code",
+        })
+        # Should return 400 for invalid code, or 500 if DB not available
+        assert response.status_code in [400, 500]
+
+    def test_register_no_auth_needed(self, client):
+        """Test that registration endpoint does not require authentication."""
+        response = client.post("/api/v1/auth/register", json={
+            "nick": "noauth_reg",
+            "password": "testpass1234",
+        })
+        # Should NOT return 401
+        assert response.status_code != 401
+
+
+# =============================================================================
+# Invite Code Endpoints
+# =============================================================================
+
+
+class TestInviteCodeEndpoints:
+    """Tests for /api/v1/invites/* endpoints."""
+
+    def test_allocate_requires_admin(self, client, user_header):
+        """Test that invite allocation requires admin permission."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "someuser",
+            "count": 1,
+            "max_class": 1,
+        }, headers=user_header)
+        assert response.status_code == 403
+
+    def test_allocate_requires_operator_forbidden(self, client, operator_header):
+        """Test that operator cannot allocate invites."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "someuser",
+            "count": 1,
+            "max_class": 1,
+        }, headers=operator_header)
+        assert response.status_code == 403
+
+    def test_allocate_with_admin(self, client, admin_header):
+        """Test invite allocation with admin permission."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "testuser",
+            "count": 3,
+            "max_class": 1,
+        }, headers=admin_header)
+        # Should succeed or DB error
+        assert response.status_code in [200, 500]
+        if response.status_code == 200:
+            data = response.json()
+            assert data["allocated"] == 3
+            assert len(data["codes"]) == 3
+            assert data["nick"] == "testuser"
+            assert data["max_class"] == 1
+
+    def test_allocate_class_exceeds_own(self, client, admin_header):
+        """Test that admin can't allocate invites with class higher than their own."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "testuser",
+            "count": 1,
+            "max_class": 10,  # Master - exceeds admin (5)
+        }, headers=admin_header)
+        assert response.status_code in [400, 500]
+
+    def test_allocate_invalid_class(self, client, admin_header):
+        """Test allocation with invalid user class."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "testuser",
+            "count": 1,
+            "max_class": 99,
+        }, headers=admin_header)
+        assert response.status_code in [400, 500]
+
+    def test_admin_list_invites_requires_admin(self, client, user_header):
+        """Test that listing all invites requires admin."""
+        response = client.get("/api/v1/invites/admin", headers=user_header)
+        assert response.status_code == 403
+
+    def test_admin_list_invites(self, client, admin_header):
+        """Test admin can list all invites."""
+        response = client.get("/api/v1/invites/admin", headers=admin_header)
+        assert response.status_code in [200, 500]
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, list)
+
+    def test_mine_requires_auth(self, client):
+        """Test that /mine requires authentication."""
+        response = client.get("/api/v1/invites/mine")
+        assert response.status_code == 401
+
+    def test_mine_returns_summary(self, client, user_header):
+        """Test user can view their own invites."""
+        response = client.get("/api/v1/invites/mine", headers=user_header)
+        assert response.status_code in [200, 500]
+        if response.status_code == 200:
+            data = response.json()
+            assert "total" in data
+            assert "used" in data
+            assert "available" in data
+            assert "codes" in data
+
+    def test_revoke_requires_admin(self, client, user_header):
+        """Test that revoking an invite requires admin."""
+        response = client.delete("/api/v1/invites/somecode", headers=user_header)
+        assert response.status_code == 403
+
+    def test_revoke_nonexistent_code(self, client, admin_header):
+        """Test revoking a nonexistent code returns 404."""
+        response = client.delete("/api/v1/invites/nonexistent", headers=admin_header)
+        assert response.status_code in [404, 500]
+
+    def test_allocate_without_auth(self, client):
+        """Test that allocation without auth returns 401."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "test",
+            "count": 1,
+            "max_class": 1,
+        })
+        assert response.status_code == 401
+
+    def test_master_can_allocate_high_class(self, client, master_header):
+        """Test that master can allocate invites with high class."""
+        response = client.post("/api/v1/invites/allocate", json={
+            "nick": "testuser",
+            "count": 1,
+            "max_class": 5,  # Admin class - within master's range
+        }, headers=master_header)
+        assert response.status_code in [200, 500]
+        if response.status_code == 200:
+            data = response.json()
+            assert data["max_class"] == 5
+
+
+# =============================================================================
+# Dashboard Access Tests (All user classes)
+# =============================================================================
+
+
+class TestDashboardAccess:
+    """Tests that all user classes can access dashboard pages (no 403s)."""
+
+    def test_dashboard_pages_no_403_for_user(self, client):
+        """Test that basic user class doesn't get 403 on any dashboard page."""
+        from verlihub.api.auth import create_access_token, Permission
+        token = create_access_token("basic_user", Permission.USER)
+        # Set cookie for dashboard requests
+        client.cookies.set("access_token", f"Bearer {token.access_token}")
+        
+        pages = ["/dashboard/users", "/dashboard/bans", "/dashboard/config",
+                 "/dashboard/logs", "/dashboard/console", "/dashboard/plugins",
+                 "/dashboard/invites"]
+        
+        for page in pages:
+            response = client.get(page, follow_redirects=False)
+            # Should NOT be 403 - may be 200, 302/303 redirect, or 500 (DB)
+            assert response.status_code != 403, f"{page} returned 403 for basic user"
+
+    def test_dashboard_pages_redirect_when_not_logged_in(self, client):
+        """Test that pages redirect to login when not authenticated."""
+        pages = ["/dashboard/", "/dashboard/users", "/dashboard/bans",
+                 "/dashboard/config", "/dashboard/logs", "/dashboard/console",
+                 "/dashboard/plugins", "/dashboard/invites"]
+        
+        for page in pages:
+            response = client.get(page, follow_redirects=False)
+            assert response.status_code == 303, f"{page} didn't redirect to login"
+            assert "/dashboard/login" in response.headers.get("location", "")
+
+
+class TestDashboardRegistrationPage:
+    """Tests for the dashboard registration page."""
+
+    def test_register_page_returns_html(self, client):
+        """Test registration page returns valid HTML."""
+        response = client.get("/dashboard/register")
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("content-type", "")
+        content = response.text
+        assert "Register" in content or "Create Account" in content
+
+    def test_register_page_has_form(self, client):
+        """Test registration page has the form fields."""
+        response = client.get("/dashboard/register")
+        assert response.status_code == 200
+        content = response.text
+        assert 'name="nick"' in content
+        assert 'name="password"' in content
+        assert 'name="confirm_password"' in content
+        assert 'name="invite_code"' in content
+
+    def test_register_page_shows_error(self, client):
+        """Test registration page shows error parameter."""
+        response = client.get("/dashboard/register?error=Test+error")
+        assert response.status_code == 200
+        content = response.text
+        assert "Test error" in content
+
+    def test_register_page_preserves_invite_code(self, client):
+        """Test registration page preserves invite code in form."""
+        response = client.get("/dashboard/register?invite=ABC123")
+        assert response.status_code == 200
+        content = response.text
+        assert "ABC123" in content
+
+    def test_register_page_link_from_login(self, client):
+        """Test login page links to registration."""
+        response = client.get("/dashboard/login")
+        assert response.status_code == 200
+        content = response.text
+        assert "/dashboard/register" in content
+        assert "Register" in content
+
+
+class TestInvitePermalink:
+    """Tests for the /dashboard/invite/{code} permalink route."""
+
+    def test_invite_permalink_redirects_to_register(self, client):
+        """Test that /dashboard/invite/CODE redirects to register page with invite pre-filled."""
+        response = client.get("/dashboard/invite/TESTCODE123", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard/register?invite=TESTCODE123"
+
+    def test_invite_permalink_follow_redirect(self, client):
+        """Test that following the redirect lands on registration with invite code."""
+        response = client.get("/dashboard/invite/ABC456")
+        assert response.status_code == 200
+        content = response.text
+        assert "ABC456" in content
+        assert "Create Account" in content
+
+    def test_invite_permalink_with_special_chars(self, client):
+        """Test permalink with URL-safe invite code characters."""
+        response = client.get("/dashboard/invite/test-code_123", follow_redirects=False)
+        assert response.status_code == 303
+        assert "test-code_123" in response.headers["location"]
+
+    def test_invite_permalink_empty_code(self, client):
+        """Test that /dashboard/invite/ without a code returns 404 (no match)."""
+        response = client.get("/dashboard/invite/", follow_redirects=False)
+        # FastAPI will return 307 for trailing slash or 404 — either is fine
+        assert response.status_code in (307, 404, 405)
+
+    def test_invite_permalink_registration_form_prefilled(self, client):
+        """Test that the invite code value appears in the form input after redirect."""
+        response = client.get("/dashboard/invite/MYINVITE789")
+        assert response.status_code == 200
+        content = response.text
+        assert 'value="MYINVITE789"' in content
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

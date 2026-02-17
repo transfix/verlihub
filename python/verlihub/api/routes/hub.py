@@ -3,6 +3,9 @@ Hub status and control API endpoints.
 """
 from __future__ import annotations
 
+import os
+import time
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,6 +40,25 @@ class HubStatus(BaseModel):
     uptime_seconds: int
 
 
+class HubInfo(BaseModel):
+    """Full hub information."""
+    name: str
+    description: str
+    host: str
+    topic: str
+    motd: str
+    max_users: int
+    version: str
+    icon_url: str
+    logo_url: str
+    uptime_seconds: int
+    uptime_formatted: str
+    hub_encoding: str
+    hub_owner: str
+    listen_port: int
+    tls_enabled: bool
+
+
 class HubConfig(BaseModel):
     """Hub configuration response."""
     hub_name: str
@@ -64,6 +86,30 @@ class BroadcastRequest(BaseModel):
 
 
 # =============================================================================
+# Utility Functions
+# =============================================================================
+
+
+def format_uptime(seconds: int) -> str:
+    """Format uptime in human-readable format."""
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0 or hours > 0 or days > 0:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    
+    return " ".join(parts)
+
+
+# =============================================================================
 # Dependency to get HubContext
 # =============================================================================
 
@@ -81,9 +127,72 @@ def get_hub_context():
     return ctx
 
 
+# Track hub start time
+_hub_start_time: Optional[float] = None
+
+
+def get_hub_start_time() -> float:
+    """Get hub start time."""
+    global _hub_start_time
+    if _hub_start_time is None:
+        _hub_start_time = time.time()
+    return _hub_start_time
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
+
+
+@router.get("/info", response_model=HubInfo)
+async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
+    """Get full hub information including uptime and MOTD."""
+    try:
+        hub_name = ctx.get_config("config", "hub_name", "Verlihub")
+        hub_desc = ctx.get_config("config", "hub_desc", "DC++ Hub")
+        hub_host = ctx.get_config("config", "hub_host", "")
+        hub_owner = ctx.get_config("config", "hub_owner", "")
+        hub_encoding = ctx.get_config("config", "hub_encoding", "CP1252")
+        max_users = int(ctx.get_config("config", "max_users", "1000"))
+        listen_port = int(ctx.get_config("config", "listen_port", "411"))
+        tls_enabled = ctx.get_config("config", "tls_enabled", "0") == "1"
+        icon_url = ctx.get_config("config", "hub_icon_url", "")
+        logo_url = ctx.get_config("config", "hub_logo_url", "")
+        version = ctx.get_config("config", "hub_version", "Verlihub")
+        
+        topic = ctx.hub_topic if hasattr(ctx, 'hub_topic') else ""
+        
+        # Read MOTD file
+        motd = ""
+        config_dir = os.getenv("VH_CONFIG_DIR", "/etc/verlihub")
+        motd_file = Path(config_dir) / "motd"
+        if motd_file.exists():
+            try:
+                motd = motd_file.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                pass
+        
+        uptime = int(time.time() - get_hub_start_time())
+        
+        return HubInfo(
+            name=hub_name,
+            description=hub_desc,
+            host=hub_host,
+            topic=topic,
+            motd=motd,
+            max_users=max_users,
+            version=version,
+            icon_url=icon_url,
+            logo_url=logo_url,
+            uptime_seconds=uptime,
+            uptime_formatted=format_uptime(uptime),
+            hub_encoding=hub_encoding,
+            hub_owner=hub_owner,
+            listen_port=listen_port,
+            tls_enabled=tls_enabled,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/status", response_model=HubStatus)

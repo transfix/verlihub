@@ -301,6 +301,110 @@ class HubClient:
         return self._request("GET", "/hub/stats")
     
     # =========================================================================
+    # Statistics and Monitoring
+    # =========================================================================
+    
+    def get_statistics(self) -> dict[str, Any]:
+        """
+        Get comprehensive hub statistics.
+        
+        Returns dict with:
+            - users_online: int
+            - max_users: int 
+            - operators_online: int
+            - bots_online: int
+            - total_share: int (bytes)
+            - total_share_formatted: str
+            - average_share: int (bytes)
+            - average_share_formatted: str
+            - hub_name: str
+            - uptime_seconds: int
+            - uptime_formatted: str
+        """
+        return self._request("GET", "/stats/stats")
+    
+    def get_geo_distribution(self) -> dict[str, Any]:
+        """
+        Get geographic distribution of users.
+        
+        Returns dict with:
+            - total_countries: int
+            - distribution: list of {country_code, country_name, users, share, share_formatted}
+        """
+        return self._request("GET", "/stats/geo")
+    
+    def get_share_stats(self) -> dict[str, Any]:
+        """
+        Get share size statistics.
+        
+        Returns dict with:
+            - total, total_formatted
+            - average, average_formatted
+            - median, median_formatted
+            - max, max_formatted
+            - min, min_formatted
+        """
+        return self._request("GET", "/stats/share")
+    
+    def get_operators(self) -> list[dict[str, Any]]:
+        """
+        Get list of online operators (class >= 3).
+        
+        Returns list of dicts with:
+            - nick, user_class, class_name, ip, share, share_formatted
+        """
+        return self._request("GET", "/stats/ops")
+    
+    def get_bots(self) -> list[dict[str, Any]]:
+        """
+        Get list of hub bots.
+        
+        Returns list of dicts with:
+            - nick, description
+        """
+        return self._request("GET", "/stats/bots")
+    
+    def get_detailed_users(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """
+        Get detailed list of online users with geo info and clone detection.
+        
+        Args:
+            limit: Maximum number of users to return
+            offset: Number of users to skip
+        
+        Returns list of dicts with:
+            - nick, user_class, class_name
+            - ip, host
+            - country_code, country, city, region, asn
+            - description, tag, email
+            - share, share_formatted
+            - is_clone, clone_group, same_ip_users
+        """
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        return self._request("GET", "/stats/users/detailed", params=params or None)
+    
+    def health_check(self) -> dict[str, Any]:
+        """
+        Perform health check.
+        
+        Returns dict with:
+            - status: "healthy" or "degraded"
+            - timestamp: ISO format
+            - hub_running: bool
+            - database_connected: bool
+            - uptime_seconds: int
+        """
+        return self._request("GET", "/stats/health")
+    
+    # =========================================================================
     # User Operations
     # =========================================================================
     
@@ -566,6 +670,55 @@ class AsyncHubClient:
     async def get_hub_stats(self) -> dict[str, Any]:
         """Get hub statistics."""
         return await self._request("GET", "/hub/stats")
+    
+    async def get_hub_info(self) -> dict[str, Any]:
+        """Get full hub information."""
+        return await self._request("GET", "/hub/info")
+    
+    # =========================================================================
+    # Statistics and Monitoring
+    # =========================================================================
+    
+    async def get_statistics(self) -> dict[str, Any]:
+        """Get comprehensive hub statistics."""
+        return await self._request("GET", "/stats/stats")
+    
+    async def get_geo_distribution(self) -> dict[str, Any]:
+        """Get geographic distribution of users."""
+        return await self._request("GET", "/stats/geo")
+    
+    async def get_share_stats(self) -> dict[str, Any]:
+        """Get share size statistics."""
+        return await self._request("GET", "/stats/share")
+    
+    async def get_operators(self) -> list[dict[str, Any]]:
+        """Get list of online operators."""
+        return await self._request("GET", "/stats/ops")
+    
+    async def get_bots(self) -> list[dict[str, Any]]:
+        """Get list of hub bots."""
+        return await self._request("GET", "/stats/bots")
+    
+    async def get_detailed_users(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Get detailed list of online users."""
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        return await self._request("GET", "/stats/users/detailed", params=params or None)
+    
+    async def health_check(self) -> dict[str, Any]:
+        """Perform health check."""
+        return await self._request("GET", "/stats/health")
+    
+    # =========================================================================
+    # User Operations
+    # =========================================================================
     
     async def get_user_count(self) -> int:
         """Get number of online users."""

@@ -568,5 +568,208 @@ class TestConsoleAPI:
             assert "success" in data or "output" in data or "message" in data
 
 
+# =============================================================================
+# Statistics Endpoints
+# =============================================================================
+
+
+class TestStatsEndpoints:
+    """Tests for /api/v1/stats/* endpoints."""
+    
+    def test_stats_endpoint(self, client):
+        """Test comprehensive statistics endpoint."""
+        response = client.get("/api/v1/stats/stats")
+        # Either works or hub not initialized
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "users_online" in data
+            assert "max_users" in data
+            assert "total_share" in data
+            assert "total_share_formatted" in data
+            assert "uptime_seconds" in data
+            assert "uptime_formatted" in data
+    
+    def test_geo_distribution(self, client):
+        """Test geographic distribution endpoint."""
+        response = client.get("/api/v1/stats/geo")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "total_countries" in data
+            assert "distribution" in data
+            assert isinstance(data["distribution"], list)
+    
+    def test_share_stats(self, client):
+        """Test share statistics endpoint."""
+        response = client.get("/api/v1/stats/share")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "total" in data
+            assert "total_formatted" in data
+            assert "average" in data
+            assert "average_formatted" in data
+            assert "median" in data
+            assert "median_formatted" in data
+    
+    def test_operators_list(self, client):
+        """Test operators list endpoint."""
+        response = client.get("/api/v1/stats/ops")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, list)
+            # If there are operators, check structure
+            if data:
+                op = data[0]
+                assert "nick" in op
+                assert "user_class" in op
+                assert "class_name" in op
+    
+    def test_bots_list(self, client):
+        """Test bots list endpoint."""
+        response = client.get("/api/v1/stats/bots")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, list)
+    
+    def test_health_check(self, client):
+        """Test health check endpoint."""
+        response = client.get("/api/v1/stats/health")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "status" in data
+            assert "timestamp" in data
+            assert "hub_running" in data
+            assert "database_connected" in data
+    
+    def test_detailed_users(self, client):
+        """Test detailed users endpoint."""
+        response = client.get("/api/v1/stats/users/detailed")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, list)
+            # If there are users, check structure
+            if data:
+                user = data[0]
+                assert "nick" in user
+                assert "user_class" in user
+                assert "class_name" in user
+                assert "share" in user
+                assert "share_formatted" in user
+                assert "is_clone" in user
+    
+    def test_detailed_users_with_pagination(self, client):
+        """Test detailed users endpoint with pagination."""
+        response = client.get("/api/v1/stats/users/detailed?limit=10&offset=0")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) <= 10
+
+
+# =============================================================================
+# Hub Info Endpoint
+# =============================================================================
+
+
+class TestHubInfoEndpoint:
+    """Tests for /api/v1/hub/info endpoint."""
+    
+    def test_hub_info_full(self, client):
+        """Test full hub info endpoint."""
+        response = client.get("/api/v1/hub/info")
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "name" in data
+            assert "description" in data
+            assert "host" in data
+            assert "topic" in data
+            assert "motd" in data
+            assert "max_users" in data
+            assert "version" in data
+            assert "uptime_seconds" in data
+            assert "uptime_formatted" in data
+            assert "hub_encoding" in data
+            assert "tls_enabled" in data
+
+
+class TestDashboardEndpoints:
+    """Tests for dashboard HTML endpoints."""
+    
+    def test_spa_dashboard_returns_html(self, client):
+        """Test that SPA dashboard returns valid HTML."""
+        response = client.get("/dashboard/spa")
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("content-type", "")
+        
+        # Check for essential HTML elements
+        content = response.text
+        assert "<!DOCTYPE html>" in content
+        assert "<title" in content
+        assert "Verlihub Dashboard" in content
+        
+    def test_spa_dashboard_has_tabs(self, client):
+        """Test that SPA dashboard has all navigation tabs."""
+        response = client.get("/dashboard/spa")
+        assert response.status_code == 200
+        content = response.text
+        
+        # Check for tab elements
+        assert 'data-tab="hub"' in content
+        assert 'data-tab="users"' in content
+        assert 'data-tab="geo"' in content
+        assert 'data-tab="cities"' in content
+        assert 'data-tab="asns"' in content
+        assert 'data-tab="ips"' in content
+        
+    def test_spa_dashboard_has_javascript(self, client):
+        """Test that SPA dashboard includes JavaScript."""
+        response = client.get("/dashboard/spa")
+        assert response.status_code == 200
+        content = response.text
+        
+        # Check for essential JavaScript functions
+        assert "<script>" in content
+        assert "fetchData" in content or "fetch(" in content
+        assert "loadTab" in content
+        
+    def test_embed_dashboard_returns_html(self, client):
+        """Test that embed dashboard returns valid HTML."""
+        response = client.get("/dashboard/embed")
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("content-type", "")
+        
+        content = response.text
+        assert "<!DOCTYPE html>" in content
+        
+    def test_embed_dashboard_is_minimal(self, client):
+        """Test that embed dashboard is compact/minimal design."""
+        response = client.get("/dashboard/embed")
+        assert response.status_code == 200
+        content = response.text
+        
+        # Embed should have compact structure
+        assert "embed-container" in content
+        assert "stat-box" in content
+        assert "stats-grid" in content
+        
+    def test_embed_dashboard_has_powered_by(self, client):
+        """Test that embed dashboard links back to full dashboard."""
+        response = client.get("/dashboard/embed")
+        assert response.status_code == 200
+        content = response.text
+        
+        # Should have link to full dashboard
+        assert "powered-by" in content
+        assert "/dashboard/spa" in content
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -377,6 +377,172 @@ class TestClientErrors:
 
 
 # =============================================================================
+# HubClient Tests
+# =============================================================================
+
+
+class TestHubClientInit:
+    """Tests for HubClient initialization."""
+    
+    def test_init_simple(self):
+        """Test simple client initialization."""
+        client = HubClient("http://localhost:8000/api/v1")
+        assert client._base_url == "http://localhost:8000/api/v1"
+        assert not client.is_authenticated
+        client.close()
+    
+    def test_init_with_options(self):
+        """Test client initialization with options."""
+        client = HubClient(
+            "http://localhost:8000/api/v1",
+            timeout=60.0,
+            verify_ssl=False,
+        )
+        assert client._timeout == 60.0
+        assert client._verify_ssl is False
+        client.close()
+    
+    def test_context_manager(self):
+        """Test client as context manager."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert client is not None
+            assert not client.is_authenticated
+
+
+class TestHubClientAuth:
+    """Tests for HubClient authentication."""
+    
+    def test_not_authenticated_initially(self):
+        """Test client is not authenticated initially."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert not client.is_authenticated
+            assert client.user_class == 0
+    
+    def test_logout_clears_state(self):
+        """Test logout clears authentication state."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            # Manually set some state
+            client._token = "fake_token"
+            client._user_class = 5
+            client._user_nick = "admin"
+            
+            client.logout()
+            
+            assert not client.is_authenticated
+            assert client._token is None
+            assert client.user_class == 0
+
+
+class TestHubClientMethods:
+    """Tests for HubClient methods without network."""
+    
+    def test_headers_without_auth(self):
+        """Test headers when not authenticated."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            headers = client._headers()
+            assert headers == {}
+    
+    def test_headers_with_auth(self):
+        """Test headers when authenticated."""
+        from datetime import timedelta
+        
+        with HubClient("http://localhost:8000/api/v1") as client:
+            client._token = "test_token"
+            client._token_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+            
+            headers = client._headers()
+            assert headers == {"Authorization": "Bearer test_token"}
+
+
+class TestHubClientStatisticsMethods:
+    """Tests for HubClient statistics method interfaces."""
+    
+    def test_get_statistics_method_exists(self):
+        """Test get_statistics method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_statistics")
+            assert callable(client.get_statistics)
+    
+    def test_get_geo_distribution_method_exists(self):
+        """Test get_geo_distribution method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_geo_distribution")
+            assert callable(client.get_geo_distribution)
+    
+    def test_get_share_stats_method_exists(self):
+        """Test get_share_stats method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_share_stats")
+            assert callable(client.get_share_stats)
+    
+    def test_get_operators_method_exists(self):
+        """Test get_operators method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_operators")
+            assert callable(client.get_operators)
+    
+    def test_get_bots_method_exists(self):
+        """Test get_bots method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_bots")
+            assert callable(client.get_bots)
+    
+    def test_get_detailed_users_method_exists(self):
+        """Test get_detailed_users method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "get_detailed_users")
+            assert callable(client.get_detailed_users)
+    
+    def test_health_check_method_exists(self):
+        """Test health_check method exists."""
+        with HubClient("http://localhost:8000/api/v1") as client:
+            assert hasattr(client, "health_check")
+            assert callable(client.health_check)
+
+
+class TestAsyncHubClientMethods:
+    """Tests for AsyncHubClient statistics method interfaces."""
+    
+    def test_async_statistics_methods_exist(self):
+        """Test async statistics methods exist."""
+        # AsyncHubClient uses httpx.AsyncClient internally
+        # Just check the methods exist
+        assert hasattr(AsyncHubClient, "get_statistics")
+        assert hasattr(AsyncHubClient, "get_geo_distribution")
+        assert hasattr(AsyncHubClient, "get_share_stats")
+        assert hasattr(AsyncHubClient, "get_operators")
+        assert hasattr(AsyncHubClient, "get_bots")
+        assert hasattr(AsyncHubClient, "get_detailed_users")
+        assert hasattr(AsyncHubClient, "health_check")
+        assert hasattr(AsyncHubClient, "get_hub_info")
+
+
+# =============================================================================
+# Client Exception Tests
+# =============================================================================
+
+
+class TestClientExceptions:
+    """Tests for client exceptions."""
+    
+    def test_hub_client_error(self):
+        """Test HubClientError exception."""
+        error = HubClientError("API error")
+        assert str(error) == "API error"
+    
+    def test_authentication_error(self):
+        """Test AuthenticationError exception."""
+        error = AuthenticationError("Invalid credentials")
+        assert isinstance(error, HubClientError)
+        assert str(error) == "Invalid credentials"
+    
+    def test_permission_error(self):
+        """Test PermissionError exception."""
+        error = PermissionError("Insufficient permissions")
+        assert isinstance(error, HubClientError)
+
+
+# =============================================================================
 # Data Classes Tests
 # =============================================================================
 

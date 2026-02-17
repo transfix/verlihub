@@ -1,0 +1,29 @@
+# QA test configuration — PostgreSQL backend
+# Used by docker-compose.qa-test.yml
+environment: development
+mode: api
+
+database:
+  type: postgresql
+  host: qa-postgres
+  port: 5432
+  name: verlihub_qa
+  user: verlihub
+  password: verlihub
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+
+hub:
+  name: "QA Test Hub"
+  port: 4111
+  max_users: 100
+  description: "Verlihub-py QA load testing"
+
+logging:
+  level: debug

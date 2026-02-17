@@ -390,6 +390,992 @@ async def plugins_page(
     return templates.TemplateResponse(request, "plugins.html", context)
 
 
+# =============================================================================
+# SPA Dashboard (Single Page Application)
+# =============================================================================
+
+
+# SPA Dashboard HTML - Full-featured single-page dashboard matching verlihub_client.html
+SPA_DASHBOARD_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title id="page-title">Verlihub Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; }
+        
+        .page-wrapper { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .page-header { text-align: center; margin-bottom: 20px; }
+        .hub-name { font-size: 2em; margin: 0; color: #1a237e; }
+        .hub-desc { font-size: 1.1em; color: #555; margin: 10px 0 0 0; }
+        
+        /* Navigation tabs */
+        #tabs { margin-bottom: 20px; position: relative; z-index: 100; display: flex; justify-content: center; flex-wrap: wrap; }
+        .tab { cursor: pointer; display: inline-block; padding: 12px 18px; background: #eee; border: 1px solid #ccc; margin-right: 5px; margin-bottom: 5px; border-radius: 5px 5px 0 0; position: relative; z-index: 101; transition: all 0.2s; }
+        .tab:hover { background: #e0e0e0; }
+        .tab.active { background: #fff; border-bottom: none; font-weight: bold; color: #1a237e; }
+        
+        /* Content area */
+        #content { padding: 20px; border: 1px solid #ccc; border-radius: 0 5px 5px 5px; background: #fff; min-height: 300px; position: relative; z-index: 1; }
+        #content::before { content: "Loading..."; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.2em; color: #666; display: none; z-index: 10; }
+        #content.loading::before { display: block; }
+        #content.loading > * { opacity: 0.3; pointer-events: none; }
+        
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #f5f5f5; font-size: 1em; cursor: pointer; user-select: none; }
+        th:hover { background: #e9e9e9; }
+        tr:nth-child(even) { background: #fafafa; }
+        tr.update-highlight { background: #ffffd0 !important; animation: highlightFade 4s ease-out forwards; }
+        @keyframes highlightFade { 0% { background: #ffffd0 !important; } 50% { background: #ffffd0 !important; } 100% { background: transparent; } }
+        
+        /* Links */
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        
+        /* User detail modal */
+        #user-detail { position: fixed; top: 10%; left: 10%; width: 80%; max-width: 800px; max-height: 80%; overflow-y: auto; background: #fff; border: 1px solid #aaa; padding: 20px; box-shadow: 0 0 20px rgba(0,0,0,0.3); display: none; z-index: 1000; border-radius: 8px; }
+        #user-detail button.close-btn { float: right; padding: 8px 12px; cursor: pointer; background: #1a237e; color: white; border: none; border-radius: 4px; }
+        #user-detail h3 { color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px; margin-top: 25px; margin-bottom: 15px; }
+        #user-detail h3:first-of-type { margin-top: 10px; }
+        
+        /* Info list */
+        .info-list { list-style: none; padding: 0; margin: 15px 0; }
+        .info-list li { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+        
+        /* Flag and counts */
+        .flag { font-size: 2em; text-align: center; }
+        .count { text-align: center; font-weight: bold; font-size: 1.2em; }
+        .total-countries, .total-users { font-size: 1.2em; font-weight: bold; margin-bottom: 15px; }
+        
+        /* Hub info layout */
+        .hub-topic { font-size: 1.4em; font-weight: bold; margin: 0 0 30px 0; text-align: center; }
+        .hub-upper { display: flex; flex-wrap: wrap; gap: 30px; align-items: flex-start; margin-bottom: 30px; justify-content: center; }
+        .hub-logo-wrapper { flex: 0 0 auto; text-align: center; width: 256px; height: 256px; display: flex; align-items: center; justify-content: center; }
+        .hub-logo img { max-width: 256px; max-height: 256px; width: auto; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: block; }
+        .hub-info { flex: 1 1 300px; }
+        .motd-wrapper { text-align: center; margin-top: 20px; }
+        .motd { background: #f0f0f0; padding: 15px; border-radius: 8px; display: block; text-align: left; width: 100%; box-sizing: border-box; }
+        .motd pre { margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 0.95em; }
+        
+        /* Sort arrows */
+        .sort-arrow { margin-left: 6px; opacity: 0.5; }
+        .sort-arrow.active { opacity: 1; font-weight: bold; }
+        
+        /* Cards */
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .card { background: #f8f9fa; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; }
+        .card h3 { color: #1a237e; margin-bottom: 10px; font-size: 0.95em; }
+        .card-value { font-size: 1.8em; font-weight: 700; color: #1a237e; }
+        .card-label { font-size: 0.85em; color: #666; margin-top: 5px; }
+        
+        /* Badges */
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; font-weight: 600; margin-left: 5px; }
+        .badge-clone { background: #ffebee; color: #c62828; }
+        .badge-op { background: #e3f2fd; color: #1565c0; }
+        .badge-bot { background: #f3e5f5; color: #7b1fa2; }
+        
+        /* Clone filter */
+        .filter-controls { margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; }
+        .filter-controls label { cursor: pointer; user-select: none; }
+        
+        /* Health status */
+        .status-healthy { color: #2e7d32; }
+        .status-degraded { color: #ed6c02; }
+        .status-unknown { color: #9e9e9e; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .page-wrapper { width: 100%; padding: 10px; }
+            .tab { padding: 10px 12px; font-size: 0.9em; }
+            th, td { padding: 8px 6px; font-size: 0.85em; }
+            #user-detail { left: 5%; width: 90%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-wrapper">
+        <div class="page-header">
+            <h1 id="hub-name-header" class="hub-name">Verlihub Dashboard</h1>
+            <p id="hub-desc-header" class="hub-desc"></p>
+        </div>
+
+        <div id="tabs">
+            <span class="tab active" data-tab="hub">Hub</span>
+            <span class="tab" data-tab="users">Online Users</span>
+            <span class="tab" data-tab="geo">Countries</span>
+            <span class="tab" data-tab="cities">Cities</span>
+            <span class="tab" data-tab="asns">ASNs</span>
+            <span class="tab" data-tab="ips">IPs</span>
+        </div>
+        <div id="content">Loading...</div>
+    </div>
+
+    <div id="user-detail">
+        <button class="close-btn" onclick="closeUserDetail()">Close &times;</button>
+        <h2 id="user-detail-title">Details</h2>
+        <div id="user-content"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1';
+        let currentTab = 'hub';
+        let currentUsers = [];
+        let currentGeo = [];
+        let currentCities = [];
+        let currentASNs = [];
+        let currentIPs = [];
+        let isFirstLoad = { users: true, geo: true, cities: true, asns: true, ips: true };
+        let hideClones = false;
+        let opsList = [];
+        let botsList = [];
+        let hubStartTime = null;
+        let uptimeUpdateInterval = null;
+        let pollInterval = null;
+
+        const sortState = {
+            users: { key: 'share', asc: false },
+            geo: { key: 'users', asc: false },
+            cities: { key: 'users', asc: false },
+            asns: { key: 'users', asc: false },
+            ips: { key: 'users', asc: false }
+        };
+
+        function fetchData(endpoint) {
+            return fetch(API_BASE + endpoint)
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+                    return res.json();
+                });
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === undefined || bytes === null) return 'N/A';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) {
+                bytes /= 1024;
+                i++;
+            }
+            return `${bytes.toFixed(2)} ${units[i]}`;
+        }
+
+        function getFlagEmoji(cc) {
+            if (!cc || cc.length !== 2) return '&#x1F310;';
+            return String.fromCodePoint(...[...cc.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+        }
+
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            let parts = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0 || days > 0) parts.push(`${hours}h`);
+            if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+            parts.push(`${secs}s`);
+            return parts.join(' ');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function updateUptimeDisplay() {
+            if (!hubStartTime) return;
+            const now = Date.now();
+            const uptimeSeconds = (now - hubStartTime) / 1000;
+            const uptimeElement = document.getElementById('hub-uptime');
+            if (uptimeElement) {
+                uptimeElement.textContent = formatUptime(uptimeSeconds);
+            }
+        }
+
+        function setSort(tab, key) {
+            if (sortState[tab].key === key) {
+                sortState[tab].asc = !sortState[tab].asc;
+            } else {
+                sortState[tab].key = key;
+                sortState[tab].asc = (tab === 'geo' && key === 'users') || (tab === 'users' && key === 'share') ? false : true;
+            }
+            loadTab(currentTab);
+        }
+
+        async function fetchOpsAndBots() {
+            try {
+                const [opsData, botsData] = await Promise.all([
+                    fetchData('/stats/ops'),
+                    fetchData('/stats/bots')
+                ]);
+                opsList = opsData || [];
+                botsList = botsData || [];
+            } catch (err) {
+                console.error('Failed to fetch ops/bots:', err);
+                opsList = [];
+                botsList = [];
+            }
+        }
+
+        async function loadTab(tab) {
+            const isTabSwitch = (currentTab !== tab);
+            currentTab = tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            const activeTab = document.querySelector(`.tab[data-tab="${tab}"]`);
+            if (activeTab) activeTab.classList.add('active');
+
+            const contentEl = document.getElementById('content');
+            contentEl.classList.add('loading');
+
+            try {
+                let html = '';
+                switch (tab) {
+                    case 'hub': html = await renderHub(); break;
+                    case 'users': html = await renderUsers(); break;
+                    case 'geo': html = await renderGeo(); break;
+                    case 'cities': html = await renderCities(); break;
+                    case 'asns': html = await renderASNs(); break;
+                    case 'ips': html = await renderIPs(); break;
+                }
+                contentEl.innerHTML = html;
+                contentEl.classList.remove('loading');
+            } catch (err) {
+                contentEl.innerHTML = `<p style="color:red;">Error: ${escapeHtml(err.message)}</p>`;
+                contentEl.classList.remove('loading');
+                console.error('Tab load error:', err);
+            }
+        }
+
+        async function renderHub() {
+            const [info, stats, health] = await Promise.all([
+                fetchData('/hub/info'),
+                fetchData('/stats/stats'),
+                fetchData('/stats/health').catch(() => ({ status: 'unknown', hub_running: false }))
+            ]);
+
+            document.getElementById('hub-name-header').textContent = info.name || 'Verlihub';
+            document.getElementById('hub-desc-header').textContent = info.description || '';
+            document.title = (info.name || 'Verlihub') + ' - Dashboard';
+
+            // Store start time for live uptime updates
+            if (info.uptime_seconds) {
+                hubStartTime = Date.now() - (info.uptime_seconds * 1000);
+                if (!uptimeUpdateInterval) {
+                    uptimeUpdateInterval = setInterval(updateUptimeDisplay, 1000);
+                }
+            }
+
+            let html = '';
+            
+            // Topic
+            if (info.topic) {
+                html += `<div class="hub-topic">${escapeHtml(info.topic)}</div>`;
+            }
+
+            // Upper section with logo and info
+            html += '<div class="hub-upper">';
+            if (info.logo_url) {
+                html += `<div class="hub-logo-wrapper"><div class="hub-logo"><img src="${escapeHtml(info.logo_url)}" alt="Hub Logo"></div></div>`;
+            } else if (info.icon_url) {
+                html += `<div class="hub-logo-wrapper"><div class="hub-logo"><img src="${escapeHtml(info.icon_url)}" alt="Hub Icon"></div></div>`;
+            }
+            
+            html += '<div class="hub-info"><ul class="info-list">';
+            html += `<li><strong>Host:</strong> ${escapeHtml(info.host) || 'Not configured'}</li>`;
+            html += `<li><strong>Port:</strong> ${info.listen_port || 411}</li>`;
+            html += `<li><strong>TLS:</strong> ${info.tls_enabled ? 'Enabled' : 'Disabled'}</li>`;
+            html += `<li><strong>Version:</strong> ${escapeHtml(info.version) || 'Unknown'}</li>`;
+            html += `<li><strong>Encoding:</strong> ${escapeHtml(info.hub_encoding) || 'UTF-8'}</li>`;
+            if (info.hub_owner) html += `<li><strong>Owner:</strong> ${escapeHtml(info.hub_owner)}</li>`;
+            html += `<li><strong>Uptime:</strong> <span id="hub-uptime">${info.uptime_formatted || formatUptime(info.uptime_seconds || 0)}</span></li>`;
+            html += '</ul></div></div>';
+
+            // Stats cards
+            html += '<div class="cards">';
+            html += `<div class="card"><h3>Users Online</h3><div class="card-value">${stats.users_online}</div><div class="card-label">of ${stats.max_users} max</div></div>`;
+            html += `<div class="card"><h3>Total Share</h3><div class="card-value">${stats.total_share_formatted}</div></div>`;
+            html += `<div class="card"><h3>Operators</h3><div class="card-value">${stats.operators_online}</div><div class="card-label">online</div></div>`;
+            html += `<div class="card"><h3>Bots</h3><div class="card-value">${stats.bots_online}</div><div class="card-label">active</div></div>`;
+            html += `<div class="card"><h3>Status</h3><div class="card-value status-${health.status}">${health.status}</div></div>`;
+            html += '</div>';
+
+            // MOTD
+            if (info.motd) {
+                html += '<div class="motd-wrapper"><h3 style="margin-bottom: 10px;">Message of the Day</h3>';
+                html += `<div class="motd"><pre>${escapeHtml(info.motd)}</pre></div></div>`;
+            }
+
+            return html;
+        }
+
+        async function renderUsers() {
+            const response = await fetchData('/stats/users/detailed?limit=500');
+            let users = Array.isArray(response) ? response : (response.users || []);
+
+            // Clone detection
+            const cloneGroups = new Map();
+            const nickToCloneKey = new Map();
+            let cloneCount = 0;
+
+            for (const user of users) {
+                const nick = user.nick || '';
+                const isBot = botsList.some(bot => bot.nick === nick);
+                if (isBot) continue;
+                
+                const ip = user.ip || '';
+                const share = user.share || 0;
+                const cloneKey = `${ip}:${share}`;
+                
+                if (!cloneGroups.has(cloneKey)) cloneGroups.set(cloneKey, []);
+                cloneGroups.get(cloneKey).push(user);
+                nickToCloneKey.set(nick, cloneKey);
+            }
+
+            const uniqueUsers = cloneGroups.size;
+            for (const [key, group] of cloneGroups) {
+                if (group.length > 1) cloneCount += group.length - 1;
+            }
+
+            // Filter if hiding clones
+            let displayUsers = users;
+            if (hideClones) {
+                const seenKeys = new Set();
+                displayUsers = users.filter(u => {
+                    const cloneKey = nickToCloneKey.get(u.nick);
+                    if (!cloneKey || seenKeys.has(cloneKey)) return !cloneKey;
+                    seenKeys.add(cloneKey);
+                    return true;
+                });
+            }
+
+            // Sort
+            const sorted = [...displayUsers].sort((a, b) => {
+                const key = sortState.users.key;
+                const asc = sortState.users.asc;
+                if (key === 'nick') return asc ? a.nick.localeCompare(b.nick) : b.nick.localeCompare(a.nick);
+                if (key === 'class') return asc ? (a.class_name || '').localeCompare(b.class_name || '') : (b.class_name || '').localeCompare(a.class_name || '');
+                if (key === 'country') return asc ? (a.country_code || '').localeCompare(b.country_code || '') : (b.country_code || '').localeCompare(a.country_code || '');
+                if (key === 'share') return asc ? (a.share || 0) - (b.share || 0) : (b.share || 0) - (a.share || 0);
+                return 0;
+            });
+
+            const clonePercent = users.length > 0 ? ((cloneCount / users.length) * 100).toFixed(1) : 0;
+
+            let html = `
+                <div class="filter-controls">
+                    <label><input type="checkbox" id="hide-clones" ${hideClones ? 'checked' : ''} onchange="toggleHideClones(this.checked)"> Hide clones (show only unique)</label>
+                </div>
+                <div class="total-users">
+                    Online users: ${users.length} | True users: ${uniqueUsers} | Clones: ${cloneCount} (${clonePercent}%)
+                </div>`;
+
+            html += '<table id="users-table"><thead><tr>';
+            const headers = [
+                { text: 'Nick', key: 'nick' },
+                { text: 'Class', key: 'class' },
+                { text: 'Country', key: 'country' },
+                { text: 'Share', key: 'share' }
+            ];
+            for (const h of headers) {
+                const arrow = sortState.users.key === h.key ? (sortState.users.asc ? '&uarr;' : '&darr;') : '&varr;';
+                const activeClass = sortState.users.key === h.key ? 'active' : '';
+                html += `<th onclick="setSort('users', '${h.key}')">${h.text} <span class="sort-arrow ${activeClass}">${arrow}</span></th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (const user of sorted) {
+                const nick = user.nick || 'Unknown';
+                const prevUser = currentUsers.find(u => u.nick === nick);
+                const isNew = !prevUser && !isFirstLoad.users;
+                const shareChanged = prevUser && (user.share || 0) !== (prevUser.share || 0) && !isFirstLoad.users;
+                const highlightClass = (isNew || shareChanged) ? ' update-highlight' : '';
+
+                const cloneKey = nickToCloneKey.get(nick);
+                const cloneGroup = cloneGroups.get(cloneKey) || [];
+                const hasClones = cloneGroup.length > 1;
+                const isOp = opsList.some(op => op.nick === nick);
+                const isBot = botsList.some(bot => bot.nick === nick);
+
+                const badges = [];
+                if (isBot) badges.push('<span class="badge badge-bot">BOT</span>');
+                if (isOp && !isBot) badges.push('<span class="badge badge-op">OP</span>');
+                if (hasClones && !isBot) badges.push(`<span class="badge badge-clone">Clone (${cloneGroup.length})</span>`);
+
+                html += `<tr class="${highlightClass}">`;
+                html += `<td><a href="#" onclick="showUser('${encodeURIComponent(nick)}'); return false;">${escapeHtml(nick)}</a>${badges.join('')}</td>`;
+                html += `<td>${escapeHtml(user.class_name || 'Unknown')}</td>`;
+                html += `<td><span class="flag">${getFlagEmoji(user.country_code)}</span></td>`;
+                html += `<td>${user.share_formatted || formatBytes(user.share || 0)}</td>`;
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+
+            currentUsers = [...users];
+            isFirstLoad.users = false;
+            return html;
+        }
+
+        async function renderGeo() {
+            const data = await fetchData('/stats/geo');
+            const distribution = data.distribution || [];
+
+            const sorted = [...distribution].sort((a, b) => {
+                const key = sortState.geo.key;
+                const asc = sortState.geo.asc;
+                if (key === 'country') return asc ? a.country_code.localeCompare(b.country_code) : b.country_code.localeCompare(a.country_code);
+                return asc ? a.users - b.users : b.users - a.users;
+            });
+
+            let html = `<div class="total-countries">Total countries represented: ${data.total_countries || distribution.length}</div>`;
+            html += '<table id="geo-table"><thead><tr>';
+            
+            const headers = [{ text: 'Flag', key: 'country' }, { text: 'Country', key: 'country' }, { text: 'Users', key: 'users' }, { text: 'Share', key: 'share' }];
+            for (const h of headers) {
+                const arrow = sortState.geo.key === h.key ? (sortState.geo.asc ? '&uarr;' : '&darr;') : '&varr;';
+                const activeClass = sortState.geo.key === h.key ? 'active' : '';
+                html += `<th onclick="setSort('geo', '${h.key}')">${h.text} <span class="sort-arrow ${activeClass}">${arrow}</span></th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (const item of sorted) {
+                const prev = currentGeo.find(g => g.country_code === item.country_code);
+                const changed = prev && prev.users !== item.users && !isFirstLoad.geo;
+                const isNew = !prev && !isFirstLoad.geo;
+                const highlightClass = (isNew || changed) ? ' update-highlight' : '';
+                
+                html += `<tr class="${highlightClass}" style="cursor: pointer;" onclick="showCountryUsers('${item.country_code}')">`;
+                html += `<td class="flag">${getFlagEmoji(item.country_code)}</td>`;
+                html += `<td>${escapeHtml(item.country_name || item.country_code)}</td>`;
+                html += `<td class="count">${item.users}</td>`;
+                html += `<td>${item.share_formatted || formatBytes(item.share || 0)}</td>`;
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+
+            currentGeo = [...distribution];
+            isFirstLoad.geo = false;
+            return html;
+        }
+
+        async function renderCities() {
+            const response = await fetchData('/stats/users/detailed?limit=500');
+            const users = Array.isArray(response) ? response : (response.users || []);
+
+            const cityStats = new Map();
+            for (const user of users) {
+                const city = user.city || '';
+                const cc = (user.country_code || '').toUpperCase();
+                if (!city || city === 'N/A' || !cc) continue;
+                const key = `${city}|||${cc}`;
+                if (!cityStats.has(key)) cityStats.set(key, { city, country_code: cc, users: 0 });
+                cityStats.get(key).users++;
+            }
+
+            const cityArray = Array.from(cityStats.values());
+            const sorted = [...cityArray].sort((a, b) => {
+                const key = sortState.cities.key;
+                const asc = sortState.cities.asc;
+                if (key === 'city') return asc ? a.city.localeCompare(b.city) : b.city.localeCompare(a.city);
+                return asc ? a.users - b.users : b.users - a.users;
+            });
+
+            let html = `<div class="total-countries">Total cities represented: ${cityArray.length}</div>`;
+            html += '<table id="cities-table"><thead><tr>';
+            
+            const headers = [{ text: 'City', key: 'city' }, { text: 'Flag', key: 'country' }, { text: 'Users', key: 'users' }];
+            for (const h of headers) {
+                const arrow = sortState.cities.key === h.key ? (sortState.cities.asc ? '&uarr;' : '&darr;') : '&varr;';
+                const activeClass = sortState.cities.key === h.key ? 'active' : '';
+                html += `<th onclick="setSort('cities', '${h.key}')">${h.text} <span class="sort-arrow ${activeClass}">${arrow}</span></th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (const item of sorted) {
+                const prev = currentCities.find(c => c.city === item.city && c.country_code === item.country_code);
+                const changed = prev && prev.users !== item.users && !isFirstLoad.cities;
+                const isNew = !prev && !isFirstLoad.cities;
+                const highlightClass = (isNew || changed) ? ' update-highlight' : '';
+                const cityKey = `${item.city}|||${item.country_code}`;
+                
+                html += `<tr class="${highlightClass}" style="cursor: pointer;" onclick="showCityUsers('${encodeURIComponent(cityKey)}')">`;
+                html += `<td>${escapeHtml(item.city)}</td>`;
+                html += `<td class="flag">${getFlagEmoji(item.country_code)}</td>`;
+                html += `<td class="count">${item.users}</td>`;
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+
+            currentCities = [...cityArray];
+            isFirstLoad.cities = false;
+            return html;
+        }
+
+        async function renderASNs() {
+            const response = await fetchData('/stats/users/detailed?limit=500');
+            const users = Array.isArray(response) ? response : (response.users || []);
+
+            const asnStats = new Map();
+            for (const user of users) {
+                const asn = user.asn || '';
+                if (!asn || asn === 'N/A') continue;
+                if (!asnStats.has(asn)) asnStats.set(asn, { asn, users: 0 });
+                asnStats.get(asn).users++;
+            }
+
+            const asnArray = Array.from(asnStats.values());
+            const sorted = [...asnArray].sort((a, b) => {
+                const key = sortState.asns.key;
+                const asc = sortState.asns.asc;
+                if (key === 'asn') return asc ? a.asn.localeCompare(b.asn) : b.asn.localeCompare(a.asn);
+                return asc ? a.users - b.users : b.users - a.users;
+            });
+
+            let html = `<div class="total-countries">Total ASNs represented: ${asnArray.length}</div>`;
+            html += '<table id="asns-table"><thead><tr>';
+            
+            const headers = [{ text: 'ASN', key: 'asn' }, { text: 'Users', key: 'users' }];
+            for (const h of headers) {
+                const arrow = sortState.asns.key === h.key ? (sortState.asns.asc ? '&uarr;' : '&darr;') : '&varr;';
+                const activeClass = sortState.asns.key === h.key ? 'active' : '';
+                html += `<th onclick="setSort('asns', '${h.key}')">${h.text} <span class="sort-arrow ${activeClass}">${arrow}</span></th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (const item of sorted) {
+                const prev = currentASNs.find(a => a.asn === item.asn);
+                const changed = prev && prev.users !== item.users && !isFirstLoad.asns;
+                const isNew = !prev && !isFirstLoad.asns;
+                const highlightClass = (isNew || changed) ? ' update-highlight' : '';
+                
+                html += `<tr class="${highlightClass}" style="cursor: pointer;" onclick="showASNUsers('${encodeURIComponent(item.asn)}')">`;
+                html += `<td>${escapeHtml(item.asn)}</td>`;
+                html += `<td class="count">${item.users}</td>`;
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+
+            currentASNs = [...asnArray];
+            isFirstLoad.asns = false;
+            return html;
+        }
+
+        async function renderIPs() {
+            const response = await fetchData('/stats/users/detailed?limit=500');
+            const users = Array.isArray(response) ? response : (response.users || []);
+
+            const ipStats = new Map();
+            for (const user of users) {
+                const ip = user.ip || '';
+                if (!ip || ip === 'N/A') continue;
+                if (!ipStats.has(ip)) ipStats.set(ip, { ip, hostname: user.host || '', asn: user.asn || '', users: 0 });
+                ipStats.get(ip).users++;
+            }
+
+            const ipArray = Array.from(ipStats.values());
+            const sorted = [...ipArray].sort((a, b) => {
+                const key = sortState.ips.key;
+                const asc = sortState.ips.asc;
+                if (key === 'ip') return asc ? a.ip.localeCompare(b.ip) : b.ip.localeCompare(a.ip);
+                if (key === 'hostname') return asc ? a.hostname.localeCompare(b.hostname) : b.hostname.localeCompare(a.hostname);
+                if (key === 'asn') return asc ? a.asn.localeCompare(b.asn) : b.asn.localeCompare(a.asn);
+                return asc ? a.users - b.users : b.users - a.users;
+            });
+
+            let html = `<div class="total-countries">Total IP addresses: ${ipArray.length}</div>`;
+            html += '<table id="ips-table"><thead><tr>';
+            
+            const headers = [{ text: 'IP Address', key: 'ip' }, { text: 'Hostname', key: 'hostname' }, { text: 'ASN', key: 'asn' }, { text: 'Users', key: 'users' }];
+            for (const h of headers) {
+                const arrow = sortState.ips.key === h.key ? (sortState.ips.asc ? '&uarr;' : '&darr;') : '&varr;';
+                const activeClass = sortState.ips.key === h.key ? 'active' : '';
+                html += `<th onclick="setSort('ips', '${h.key}')">${h.text} <span class="sort-arrow ${activeClass}">${arrow}</span></th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (const item of sorted) {
+                const prev = currentIPs.find(i => i.ip === item.ip);
+                const changed = prev && prev.users !== item.users && !isFirstLoad.ips;
+                const isNew = !prev && !isFirstLoad.ips;
+                const highlightClass = (isNew || changed) ? ' update-highlight' : '';
+                
+                html += `<tr class="${highlightClass}" style="cursor: pointer;" onclick="showIPUsers('${encodeURIComponent(item.ip)}')">`;
+                html += `<td>${escapeHtml(item.ip)}</td>`;
+                html += `<td>${escapeHtml(item.hostname) || 'N/A'}</td>`;
+                html += `<td>${escapeHtml(item.asn) || 'N/A'}</td>`;
+                html += `<td class="count">${item.users}</td>`;
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+
+            currentIPs = [...ipArray];
+            isFirstLoad.ips = false;
+            return html;
+        }
+
+        async function showUser(encodedNick) {
+            const nick = decodeURIComponent(encodedNick);
+            try {
+                const response = await fetchData('/stats/users/detailed?limit=500');
+                const users = Array.isArray(response) ? response : (response.users || []);
+                const user = users.find(u => u.nick === nick);
+                if (!user) { alert('User not found'); return; }
+
+                const isOp = opsList.some(op => op.nick === nick);
+                const isBot = botsList.some(bot => bot.nick === nick);
+
+                let html = '<h3>Basic Information</h3><ul class="info-list">';
+                html += `<li><strong>Nickname:</strong> ${escapeHtml(nick)}`;
+                if (isBot) html += ' <span class="badge badge-bot">BOT</span>';
+                if (isOp) html += ' <span class="badge badge-op">OP</span>';
+                html += '</li>';
+                html += `<li><strong>Class:</strong> ${escapeHtml(user.class_name || 'Unknown')}</li>`;
+                html += `<li><strong>Share:</strong> ${user.share_formatted || formatBytes(user.share || 0)}</li>`;
+                if (user.description) html += `<li><strong>Description:</strong> ${escapeHtml(user.description)}</li>`;
+                if (user.tag) html += `<li><strong>Tag:</strong> ${escapeHtml(user.tag)}</li>`;
+                if (user.email) html += `<li><strong>Email:</strong> ${escapeHtml(user.email)}</li>`;
+                html += '</ul>';
+
+                html += '<h3>Geographic Information</h3><ul class="info-list">';
+                html += `<li><strong>Country:</strong> <span class="flag">${getFlagEmoji(user.country_code)}</span> ${escapeHtml(user.country || user.country_code || 'Unknown')}</li>`;
+                if (user.city) html += `<li><strong>City:</strong> ${escapeHtml(user.city)}</li>`;
+                if (user.region) html += `<li><strong>Region:</strong> ${escapeHtml(user.region)}</li>`;
+                if (user.asn) html += `<li><strong>ASN:</strong> ${escapeHtml(user.asn)}</li>`;
+                html += '</ul>';
+
+                html += '<h3>Connection Information</h3><ul class="info-list">';
+                if (user.ip) html += `<li><strong>IP:</strong> ${escapeHtml(user.ip)}</li>`;
+                if (user.host) html += `<li><strong>Hostname:</strong> ${escapeHtml(user.host)}</li>`;
+                html += '</ul>';
+
+                if (user.is_clone || (user.same_ip_users && user.same_ip_users.length > 0)) {
+                    html += '<h3>Network Analysis</h3><ul class="info-list">';
+                    if (user.is_clone && user.clone_group) {
+                        html += `<li><strong>Clone Group:</strong> ${user.clone_group.map(n => escapeHtml(n)).join(', ')}</li>`;
+                    }
+                    if (user.same_ip_users && user.same_ip_users.length > 0) {
+                        html += `<li><strong>Same IP:</strong> ${user.same_ip_users.map(n => escapeHtml(n)).join(', ')}</li>`;
+                    }
+                    html += '</ul>';
+                }
+
+                document.getElementById('user-detail-title').textContent = nick;
+                document.getElementById('user-content').innerHTML = html;
+                document.getElementById('user-detail').style.display = 'block';
+            } catch (err) {
+                alert(`Failed to load user: ${err.message}`);
+            }
+        }
+
+        async function showCountryUsers(countryCode) {
+            try {
+                const response = await fetchData('/stats/users/detailed?limit=500');
+                const users = Array.isArray(response) ? response : (response.users || []);
+                const countryUsers = users.filter(u => (u.country_code || '').toUpperCase() === countryCode.toUpperCase());
+                
+                if (countryUsers.length === 0) { alert(`No users from ${countryCode}`); return; }
+                
+                const countryName = countryUsers[0].country || countryCode;
+                let html = `<div style="text-align: center; font-size: 3em; margin: 10px 0;">${getFlagEmoji(countryCode)}</div>`;
+                html += `<h3>Users from ${escapeHtml(countryName)} (${countryUsers.length})</h3><ul class="info-list">`;
+                
+                countryUsers.sort((a, b) => (b.share || 0) - (a.share || 0));
+                for (const user of countryUsers) {
+                    html += `<li><a href="#" onclick="showUser('${encodeURIComponent(user.nick)}'); return false;">${escapeHtml(user.nick)}</a> - ${user.share_formatted || formatBytes(user.share || 0)}</li>`;
+                }
+                html += '</ul>';
+                
+                document.getElementById('user-detail-title').textContent = countryName;
+                document.getElementById('user-content').innerHTML = html;
+                document.getElementById('user-detail').style.display = 'block';
+            } catch (err) {
+                alert(`Failed to load country users: ${err.message}`);
+            }
+        }
+
+        async function showCityUsers(encodedCityKey) {
+            try {
+                const cityKey = decodeURIComponent(encodedCityKey);
+                const [cityName, countryCode] = cityKey.split('|||');
+                
+                const response = await fetchData('/stats/users/detailed?limit=500');
+                const users = Array.isArray(response) ? response : (response.users || []);
+                const cityUsers = users.filter(u => u.city === cityName && (u.country_code || '').toUpperCase() === countryCode);
+                
+                if (cityUsers.length === 0) { alert(`No users from ${cityName}`); return; }
+                
+                let html = `<div style="text-align: center; font-size: 3em; margin: 10px 0;">${getFlagEmoji(countryCode)}</div>`;
+                html += `<h3>Users from ${escapeHtml(cityName)} (${cityUsers.length})</h3><ul class="info-list">`;
+                
+                cityUsers.sort((a, b) => (b.share || 0) - (a.share || 0));
+                for (const user of cityUsers) {
+                    html += `<li><a href="#" onclick="showUser('${encodeURIComponent(user.nick)}'); return false;">${escapeHtml(user.nick)}</a> - ${user.share_formatted || formatBytes(user.share || 0)}</li>`;
+                }
+                html += '</ul>';
+                
+                document.getElementById('user-detail-title').textContent = `${cityName}, ${countryCode}`;
+                document.getElementById('user-content').innerHTML = html;
+                document.getElementById('user-detail').style.display = 'block';
+            } catch (err) {
+                alert(`Failed to load city users: ${err.message}`);
+            }
+        }
+
+        async function showASNUsers(encodedASN) {
+            try {
+                const asn = decodeURIComponent(encodedASN);
+                
+                const response = await fetchData('/stats/users/detailed?limit=500');
+                const users = Array.isArray(response) ? response : (response.users || []);
+                const asnUsers = users.filter(u => u.asn === asn);
+                
+                if (asnUsers.length === 0) { alert(`No users from ASN ${asn}`); return; }
+                
+                let html = `<h3>Users from ${escapeHtml(asn)} (${asnUsers.length})</h3><ul class="info-list">`;
+                
+                asnUsers.sort((a, b) => (b.share || 0) - (a.share || 0));
+                for (const user of asnUsers) {
+                    html += `<li><a href="#" onclick="showUser('${encodeURIComponent(user.nick)}'); return false;">${escapeHtml(user.nick)}</a> - ${user.share_formatted || formatBytes(user.share || 0)}</li>`;
+                }
+                html += '</ul>';
+                
+                document.getElementById('user-detail-title').textContent = asn;
+                document.getElementById('user-content').innerHTML = html;
+                document.getElementById('user-detail').style.display = 'block';
+            } catch (err) {
+                alert(`Failed to load ASN users: ${err.message}`);
+            }
+        }
+
+        async function showIPUsers(encodedIP) {
+            try {
+                const ip = decodeURIComponent(encodedIP);
+                
+                const response = await fetchData('/stats/users/detailed?limit=500');
+                const users = Array.isArray(response) ? response : (response.users || []);
+                const ipUsers = users.filter(u => u.ip === ip);
+                
+                if (ipUsers.length === 0) { alert(`No users from IP ${ip}`); return; }
+                
+                const firstUser = ipUsers[0];
+                let html = '<ul class="info-list">';
+                html += `<li><strong>Hostname:</strong> ${escapeHtml(firstUser.host) || 'N/A'}</li>`;
+                html += `<li><strong>ASN:</strong> ${escapeHtml(firstUser.asn) || 'N/A'}</li>`;
+                if (firstUser.city) html += `<li><strong>City:</strong> ${escapeHtml(firstUser.city)}</li>`;
+                if (firstUser.country) html += `<li><strong>Country:</strong> ${getFlagEmoji(firstUser.country_code)} ${escapeHtml(firstUser.country)}</li>`;
+                html += '</ul>';
+                
+                html += `<h3>Users from this IP (${ipUsers.length})</h3><ul class="info-list">`;
+                ipUsers.sort((a, b) => (b.share || 0) - (a.share || 0));
+                for (const user of ipUsers) {
+                    html += `<li><a href="#" onclick="showUser('${encodeURIComponent(user.nick)}'); return false;">${escapeHtml(user.nick)}</a> - ${user.share_formatted || formatBytes(user.share || 0)}</li>`;
+                }
+                html += '</ul>';
+                
+                document.getElementById('user-detail-title').textContent = ip;
+                document.getElementById('user-content').innerHTML = html;
+                document.getElementById('user-detail').style.display = 'block';
+            } catch (err) {
+                alert(`Failed to load IP users: ${err.message}`);
+            }
+        }
+
+        function closeUserDetail() {
+            document.getElementById('user-detail').style.display = 'none';
+        }
+
+        function toggleHideClones(checked) {
+            hideClones = checked;
+            loadTab('users');
+        }
+
+        // Tab click handlers
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                loadTab(tab.dataset.tab);
+            });
+        });
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(() => {
+                fetchOpsAndBots().then(() => loadTab(currentTab));
+            }, 30000);
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeUserDetail();
+        });
+
+        // Initial load
+        fetchOpsAndBots().then(() => {
+            loadTab('hub');
+            startPolling();
+        });
+    </script>
+</body>
+</html>
+'''
+
+
+# Embeddable mini dashboard for iframe embedding
+EMBED_DASHBOARD_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Hub Stats</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: transparent; color: #333; padding: 10px; }
+        .embed-container { max-width: 400px; margin: 0 auto; }
+        .hub-header { text-align: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }
+        .hub-name { font-size: 1.3em; color: #1a237e; margin: 0 0 5px 0; }
+        .hub-desc { font-size: 0.85em; color: #666; margin: 0; }
+        .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
+        .stat-box { background: #f8f9fa; padding: 12px; border-radius: 8px; text-align: center; }
+        .stat-value { font-size: 1.5em; font-weight: 700; color: #1a237e; }
+        .stat-label { font-size: 0.75em; color: #666; margin-top: 2px; }
+        .top-countries { margin-top: 10px; }
+        .top-countries h4 { font-size: 0.9em; color: #333; margin-bottom: 8px; }
+        .country-list { list-style: none; padding: 0; }
+        .country-item { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 0.85em; }
+        .country-item:last-child { border-bottom: none; }
+        .flag { margin-right: 5px; }
+        .status-healthy { color: #2e7d32; }
+        .status-degraded { color: #ed6c02; }
+        .status-unknown { color: #9e9e9e; }
+        .powered-by { text-align: center; margin-top: 15px; font-size: 0.7em; color: #999; }
+        .powered-by a { color: #666; text-decoration: none; }
+        .powered-by a:hover { text-decoration: underline; }
+        .loading { text-align: center; padding: 20px; color: #666; }
+        .error { color: #c62828; text-align: center; padding: 10px; }
+    </style>
+</head>
+<body>
+    <div class="embed-container" id="embed-content">
+        <div class="loading">Loading hub stats...</div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1';
+
+        function formatBytes(bytes) {
+            if (!bytes) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+            return bytes.toFixed(1) + ' ' + units[i];
+        }
+
+        function getFlagEmoji(cc) {
+            if (!cc || cc.length !== 2) return '&#x1F310;';
+            return String.fromCodePoint(...[...cc.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        async function loadStats() {
+            try {
+                const [info, stats, geo, health] = await Promise.all([
+                    fetch(API_BASE + '/hub/info').then(r => r.ok ? r.json() : {}),
+                    fetch(API_BASE + '/stats/stats').then(r => r.ok ? r.json() : {}),
+                    fetch(API_BASE + '/stats/geo').then(r => r.ok ? r.json() : { distribution: [] }),
+                    fetch(API_BASE + '/stats/health').then(r => r.ok ? r.json() : { status: 'unknown' }).catch(() => ({ status: 'unknown' }))
+                ]);
+
+                const topCountries = (geo.distribution || []).slice(0, 5);
+
+                let html = `
+                    <div class="hub-header">
+                        <h2 class="hub-name">${escapeHtml(info.name || 'Verlihub')}</h2>
+                        ${info.description ? `<p class="hub-desc">${escapeHtml(info.description)}</p>` : ''}
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-value">${stats.users_online || 0}</div>
+                            <div class="stat-label">Users Online</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value">${stats.total_share_formatted || formatBytes(stats.total_share || 0)}</div>
+                            <div class="stat-label">Total Share</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value">${stats.operators_online || 0}</div>
+                            <div class="stat-label">Operators</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value status-${health.status}">${health.status || 'unknown'}</div>
+                            <div class="stat-label">Status</div>
+                        </div>
+                    </div>`;
+
+                if (topCountries.length > 0) {
+                    html += `
+                        <div class="top-countries">
+                            <h4>Top Countries</h4>
+                            <ul class="country-list">`;
+                    for (const c of topCountries) {
+                        html += `<li class="country-item"><span><span class="flag">${getFlagEmoji(c.country_code)}</span>${escapeHtml(c.country_name || c.country_code)}</span><span>${c.users}</span></li>`;
+                    }
+                    html += `</ul></div>`;
+                }
+
+                html += `<div class="powered-by">Powered by <a href="/dashboard/spa" target="_blank">Verlihub</a></div>`;
+
+                document.getElementById('embed-content').innerHTML = html;
+            } catch (err) {
+                document.getElementById('embed-content').innerHTML = `<div class="error">Failed to load: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        // Initial load
+        loadStats();
+
+        // Auto-refresh every 60 seconds
+        setInterval(loadStats, 60000);
+    </script>
+</body>
+</html>
+'''
+
+
+@dashboard_router.get("/spa", response_class=HTMLResponse)
+async def spa_dashboard(request: Request):
+    """
+    Single-Page Application dashboard.
+    
+    No authentication required - public view of hub statistics.
+    Full-featured dashboard with tabs for Hub, Users, Countries, Cities, ASNs, IPs.
+    """
+    return HTMLResponse(content=SPA_DASHBOARD_HTML)
+
+
+@dashboard_router.get("/embed", response_class=HTMLResponse)
+async def embed_dashboard(request: Request):
+    """
+    Embeddable mini dashboard for iframe embedding.
+    
+    No authentication required - compact view of hub statistics.
+    Designed to be embedded in external websites via iframe.
+    
+    Example usage:
+        <iframe src="https://your-hub.com/dashboard/embed" width="400" height="400" frameborder="0"></iframe>
+    """
+    return HTMLResponse(content=EMBED_DASHBOARD_HTML)
+
+
 # Utility functions
 
 def _format_bytes(size: int) -> str:

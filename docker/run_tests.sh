@@ -48,6 +48,7 @@ show_help() {
     echo "  dual          Run dual-build tests (original + verlihub-py)"
     echo "  full          Run full integration tests (Docker, requires running hubs)"
     echo "  sql-semantics Compare SQL semantics across databases (Docker)"
+    echo "  playwright    Run Playwright E2E tests for dashboard (Docker)"
     echo "  docker        Run all tests via Docker (no local deps needed)"
     echo "  help          Show this help message"
     echo ""
@@ -55,12 +56,16 @@ show_help() {
     echo "  -v, --verbose   Verbose output"
     echo "  -k PATTERN      Only run tests matching PATTERN"
     echo "  --docker        Force Docker mode for unit/integration tests"
+    echo "  --headed        Run Playwright tests in headed mode (visible browser)"
+    echo "  --base-url URL  Base URL for Playwright tests (default: http://localhost:30000)"
     echo ""
     echo "Examples:"
     echo "  $0 unit                    # Run fast unit tests"
     echo "  $0 mysql -v                # Run MySQL tests with verbose output"
     echo "  $0 unit -k 'test_user'     # Run tests matching 'test_user'"
     echo "  $0 dual                    # Build & test both editions"
+    echo "  $0 playwright              # Run dashboard E2E tests"
+    echo "  $0 playwright --headed     # Run E2E tests with visible browser"
     echo "  $0 docker                  # Run everything via Docker"
 }
 
@@ -186,6 +191,37 @@ run_sql_semantics() {
     docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit sql-semantics-tests
 }
 
+run_playwright_tests() {
+    echo -e "${YELLOW}Running Playwright E2E tests for dashboard...${NC}"
+    cd "$PROJECT_DIR"
+    
+    local pytest_args="-v --tb=short"
+    [ -n "$VERBOSE" ] && pytest_args="-vvs --tb=long"
+    [ -n "$PATTERN" ] && pytest_args="$pytest_args -k '$PATTERN'"
+    [ -n "$HEADED" ] && pytest_args="$pytest_args --headed"
+    [ -n "$BASE_URL" ] && pytest_args="$pytest_args --base-url $BASE_URL"
+    
+    if [ "$FORCE_DOCKER" = "1" ]; then
+        echo -e "${BLUE}Using Docker for Playwright tests...${NC}"
+        # Run playwright tests in Docker container with browser
+        docker compose -f docker/docker-compose.test.yml run --rm \
+            -e DASHBOARD_URL="${BASE_URL:-http://host.docker.internal:30000}" \
+            mysql-tests sh -c "pip install pytest-playwright && playwright install chromium && pytest docker/tests/test_dashboard_playwright.py $pytest_args -p docker/tests/conftest_playwright"
+    else
+        # Check if playwright is installed locally
+        if ! python -c "import playwright" 2>/dev/null; then
+            echo -e "${BLUE}Installing playwright dependencies...${NC}"
+            pip install pytest-playwright
+            playwright install chromium
+        fi
+        
+        setup_local_env
+        PYTHONPATH=build/python pytest docker/tests/test_dashboard_playwright.py $pytest_args \
+            -p docker/tests/conftest_playwright \
+            --base-url "${BASE_URL:-http://localhost:30000}"
+    fi
+}
+
 # Parse arguments
 COMMAND="${1:-help}"
 shift || true
@@ -223,6 +259,8 @@ shift || true
 VERBOSE=""
 PATTERN=""
 FORCE_DOCKER=""
+HEADED=""
+BASE_URL=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -237,6 +275,14 @@ while [[ $# -gt 0 ]]; do
         --docker)
             FORCE_DOCKER=1
             shift
+            ;;
+        --headed)
+            HEADED=1
+            shift
+            ;;
+        --base-url)
+            BASE_URL="$2"
+            shift 2
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
@@ -271,6 +317,9 @@ case $COMMAND in
         ;;
     sql-semantics)
         run_sql_semantics
+        ;;
+    playwright)
+        run_playwright_tests
         ;;
     docker)
         run_docker_tests

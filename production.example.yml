@@ -1,18 +1,38 @@
 # Verlihub Production Configuration Example
 # Copy to production.yml and customize for your deployment
 #
-# Usage: sg docker ./run_production.sh [--config production.yml]
+# Usage:
+#   # Legacy C++ hub (MySQL only)
+#   sg docker ./run_production.sh --config production.yml
+#   sg docker ./run_production.sh --config production.yml --edition legacy
+#
+#   # verlihub-py Python hub (MySQL or PostgreSQL)
+#   sg docker ./run_production.sh --config production.yml --edition py
+#
+# Both editions share the same YAML format. Set "edition" below to auto-detect,
+# or pass --edition on the command line. If database.type is "postgresql",
+# the edition is automatically set to "py" since legacy doesn't support it.
 #
 # Most settings have sensible defaults - only configure what you need to change.
 # Settings not specified will use Verlihub's built-in defaults.
 
+# =============================================================================
+# Edition: "legacy" (C++ hub) or "py" (Python hub)
+# Leave blank to auto-detect (defaults to "legacy" for MySQL, "py" for PostgreSQL)
+# =============================================================================
+# edition: py
+
+# =============================================================================
 # Database Configuration
+# Supported types: mysql (legacy + py), postgresql (py only), sqlite (py only)
+# =============================================================================
 database:
-  host: mysql
+  type: mysql            # "mysql", "postgresql", or "sqlite"
+  host: mysql            # Use "postgres" for PostgreSQL
   user: verlihub
   password: verlihub
   name: verlihub
-  port: 3306
+  port: 3306             # 3306 for MySQL, 5432 for PostgreSQL
 
 # =============================================================================
 # Hub Identity & Branding
@@ -379,7 +399,8 @@ plugin_commands: []
 docker:
   # Volume name for persistent data
   config_volume: verlihub-production-config
-  mysql_volume: verlihub-production-mysql
+  db_volume: verlihub-production-db        # works for MySQL or PostgreSQL
+  # mysql_volume is also accepted as an alias for db_volume
   # Network name
   network: verlihub-production-net
   # Container name prefix

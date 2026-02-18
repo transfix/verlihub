@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "../nmdc_protocol.h"
+#include "../compat_format.h"
 
 using namespace nVerliHub;
 using namespace NMDCProtocol;
@@ -546,4 +547,66 @@ TEST(NMDCProtocolTest, PrivateMessageRoundtrip) {
     EXPECT_EQ(parsed.from, from);
     EXPECT_EQ(parsed.to, to);
     EXPECT_EQ(parsed.message, msg_text);
+}
+
+// ============================================================
+// vh::fmt() compatibility shim tests
+// ============================================================
+
+TEST(CompatFormat, SingleStringPlaceholder) {
+    EXPECT_EQ(vh::fmt("Hello {}!", "World"), "Hello World!");
+}
+
+TEST(CompatFormat, MultipleStringPlaceholders) {
+    EXPECT_EQ(vh::fmt("{} and {}", "Alice", "Bob"), "Alice and Bob");
+}
+
+TEST(CompatFormat, IntegerPlaceholder) {
+    EXPECT_EQ(vh::fmt("port={}", 411), "port=411");
+}
+
+TEST(CompatFormat, MixedTypes) {
+    EXPECT_EQ(vh::fmt("{}:{}", "hub.example.com", 411), "hub.example.com:411");
+}
+
+TEST(CompatFormat, NoPlaceholders) {
+    EXPECT_EQ(vh::fmt("no placeholders here"), "no placeholders here");
+}
+
+TEST(CompatFormat, ThreePlaceholders) {
+    EXPECT_EQ(vh::fmt("{} + {} = {}", 1, 2, 3), "1 + 2 = 3");
+}
+
+TEST(CompatFormat, EmptyString) {
+    EXPECT_EQ(vh::fmt(""), "");
+}
+
+TEST(CompatFormat, ConsecutivePlaceholders) {
+    EXPECT_EQ(vh::fmt("{}{}{}", "a", "b", "c"), "abc");
+}
+
+TEST(CompatFormat, PlaceholderAtStart) {
+    EXPECT_EQ(vh::fmt("{} is here", "Value"), "Value is here");
+}
+
+TEST(CompatFormat, PlaceholderAtEnd) {
+    EXPECT_EQ(vh::fmt("value is {}", 42), "value is 42");
+}
+
+TEST(CompatFormat, BooleanValue) {
+    // boolalpha behavior: std::format uses "true"/"false",
+    // ostringstream also uses "true"/"false" with boolalpha
+    std::string result = vh::fmt("flag={}", true);
+    // Accept either "1" or "true" depending on implementation
+    EXPECT_TRUE(result == "flag=true" || result == "flag=1");
+}
+
+TEST(CompatFormat, FloatingPoint) {
+    std::string result = vh::fmt("pi={}", 3.14);
+    EXPECT_TRUE(result.find("pi=3.14") == 0);
+}
+
+TEST(CompatFormat, CStringArg) {
+    const char* name = "verlihub";
+    EXPECT_EQ(vh::fmt("hub={}", name), "hub=verlihub");
 }

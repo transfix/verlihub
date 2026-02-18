@@ -40,6 +40,7 @@ set(CORE_HEADERS
     thread_safe_collections.h
     nmdc_protocol.h
     nmdc_hub_server.h
+    compat_format.h
 )
 
 # Create the core library (static for linking into main app and SWIG module)

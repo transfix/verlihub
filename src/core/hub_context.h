@@ -36,6 +36,7 @@
 #include <chrono>
 #include <span>
 
+#include "compat_format.h"
 #include "thread_safe_collections.h"
 
 namespace nVerliHub {
@@ -665,14 +666,13 @@ public:
              std::source_location loc = std::source_location::current()) const;
     
     /**
-     * Log with formatted arguments (streams-based, GCC 11+ compatible).
+     * Log with format string and arguments.
+     * Uses std::format on GCC 13+ and a lightweight fallback on GCC 11/12.
      */
     template<typename... Args>
-    void LogFmt(int level, Args&&... args) const {
+    void LogFmt(int level, const std::string& fmt_str, Args&&... args) const {
         if (level <= m_log_level.load(std::memory_order_relaxed)) {
-            std::ostringstream oss;
-            (oss << ... << std::forward<Args>(args));
-            Log(level, oss.str());
+            Log(level, vh::fmt(fmt_str, std::forward<Args>(args)...));
         }
     }
 #endif  // SWIG

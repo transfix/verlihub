@@ -2,9 +2,9 @@ name: Unit Tests
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [master, main, develop, verlihub-py]
   pull_request:
-    branches: [master, main, develop]
+    branches: [master, main, develop, verlihub-py]
 
 jobs:
   cpp-unit-tests:
@@ -38,6 +38,8 @@ jobs:
             -DWITH_LUA=ON \
             -DWITH_PYTHON=ON \
             -DBUILD_CORE_TESTS=ON \
+            -DBUILD_PYTHON_TESTS=ON \
+            -DBUILD_LEGACY_PYTHON_TESTS=ON \
             -DCMAKE_INSTALL_PREFIX=/usr/local
 
       - name: Build

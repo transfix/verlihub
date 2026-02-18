@@ -123,7 +123,7 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
         ? m_hub_config.listen_ip 
         : std::string(listen_ip);
     
-    Log(0, "Starting hub on " + actual_ip + ":" + std::to_string(actual_port));
+    Log(0, vh::fmt("Starting hub on {}:{}", actual_ip, actual_port));
     
     // Configure the NMDC server
     m_nmdc_server->SetHubName(m_hub_config.hub_name);
@@ -139,11 +139,11 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     
     // Start listening on the NMDC port
     if (!m_nmdc_server->StartListening(actual_port)) {
-        Log(0, "Failed to start listening on port " + std::to_string(actual_port));
+        Log(0, vh::fmt("Failed to start listening on port {}", actual_port));
         return false;
     }
     
-    Log(0, "Listening on " + actual_ip + ":" + std::to_string(actual_port));
+    Log(0, vh::fmt("Listening on {}:{}", actual_ip, actual_port));
     
     m_running.store(true, std::memory_order_release);
     
@@ -151,7 +151,7 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     m_server_thread = std::thread([this]() {
         Log(0, "Server event loop starting");
         int result = m_nmdc_server->run();
-        Log(0, "Server event loop exited with code " + std::to_string(result));
+        Log(0, vh::fmt("Server event loop exited with code {}", result));
         m_running.store(false, std::memory_order_release);
     });
     
@@ -409,9 +409,10 @@ void HubContext::Log(int level, std::string_view message,
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
     
     // Format: [timestamp] [level] [file:line] message
-    std::cerr << "[" << time_t_now << "] [L" << level << "] ["
-              << loc.file_name() << ":" << loc.line() << "] "
-              << message << "\n";
+    std::cerr << vh::fmt("[{}] [L{}] [{}:{}] {}\n",
+                         time_t_now, level,
+                         loc.file_name(), loc.line(),
+                         message);
 }
 
 // =============================================================================

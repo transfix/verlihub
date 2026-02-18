@@ -1,0 +1,48 @@
+name: Docker Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+
+jobs:
+  docker-multi-db-tests:
+    name: Multi-DB Docker Tests
+    runs-on: self-hosted
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean up previous Docker resources
+        run: |
+          docker compose -f docker/docker-compose.test.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker compose -f docker/docker-compose.dual-test.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker compose -f docker/docker-compose.smoke-tests.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+      - name: Run verlihub-py unit tests (SQLite)
+        run: ./docker_test_launcher.sh py-unit
+
+      - name: Run verlihub-py MySQL tests
+        run: ./docker_test_launcher.sh py-mysql
+
+      - name: Run verlihub-py PostgreSQL tests
+        run: ./docker_test_launcher.sh py-postgres
+
+      - name: Run SQL semantics comparison
+        run: ./docker_test_launcher.sh sql-semantics
+
+      - name: Upload logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose -f docker/docker-compose.test.yml logs > /tmp/ci-logs/test-compose.log 2>&1 || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          ./docker_test_launcher.sh cleanup || true
+          docker system prune -f 2>/dev/null || true

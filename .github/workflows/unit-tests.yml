@@ -1,0 +1,54 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+
+jobs:
+  cpp-unit-tests:
+    name: C++ Unit Tests
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential cmake g++ pkg-config \
+            libmysqlclient-dev libssl-dev libpcre3-dev \
+            libmaxminddb-dev libicu-dev zlib1g-dev \
+            gettext libasprintf-dev \
+            lua5.4 liblua5.4-dev python3-dev \
+            libgtest-dev libgmock-dev \
+            libcurl4-openssl-dev \
+            rapidjson-dev swig
+
+      - name: Configure CMake
+        run: |
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_PLUGINS=ON \
+            -DWITH_LUA=ON \
+            -DWITH_PYTHON=ON \
+            -DBUILD_CORE_TESTS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run C++ unit tests
+        run: |
+          cd build
+          ctest --output-on-failure --label-regex "unit" --timeout 120
+
+      - name: Run C++ integration tests
+        run: |
+          cd build
+          ctest --output-on-failure --label-regex "integration" --timeout 180 || true

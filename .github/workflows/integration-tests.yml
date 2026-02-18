@@ -1,0 +1,47 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+
+jobs:
+  integration-tests:
+    name: Docker Integration Tests
+    runs-on: self-hosted
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean up previous Docker resources
+        run: |
+          docker compose down --remove-orphans --volumes 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+      - name: Run dispatcher tests
+        run: ./run_integration_tests.sh --dispatcher
+
+      - name: Run single interpreter integration tests
+        run: ./run_integration_tests.sh --single
+
+      - name: Run multi interpreter integration tests
+        run: ./run_integration_tests.sh --multi
+
+      - name: Run C++ unit tests (Docker)
+        run: ./run_integration_tests.sh --unit
+
+      - name: Upload logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose logs > /tmp/ci-logs/docker-compose.log 2>&1 || true
+          docker compose --profile multi logs >> /tmp/ci-logs/docker-compose.log 2>&1 || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose down --remove-orphans --volumes 2>/dev/null || true
+          docker compose --profile multi down --remove-orphans --volumes 2>/dev/null || true

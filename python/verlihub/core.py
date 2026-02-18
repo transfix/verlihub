@@ -29,6 +29,12 @@ except ImportError as e:
         "ln -sf ../../build/python/verlihub/verlihub_core.py python/verlihub/"
     ) from e
 
+if verlihub_core is None:
+    raise ImportError(
+        "verlihub_core SWIG module not available. "
+        "Build with CMake first or run in standalone API mode."
+    )
+
 logger = logging.getLogger(__name__)
 
 

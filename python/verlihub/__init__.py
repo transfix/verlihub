@@ -28,6 +28,6 @@ try:
     from verlihub.core import HubContext, create_hub
     __all__ = ["HubContext", "create_hub", "VerlihubConfig", "load_config", 
                "verlihub_core", "__version__"]
-except ImportError:
+except (ImportError, AttributeError):
     # SWIG module not yet built
     __all__ = ["VerlihubConfig", "load_config", "verlihub_core", "__version__"]

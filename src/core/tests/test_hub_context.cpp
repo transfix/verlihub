@@ -108,14 +108,14 @@ TEST_F(HubContextLifecycleTest, Initialize) {
 
 TEST_F(HubContextLifecycleTest, StartRequiresInitialize) {
     // Start without Initialize should fail
-    EXPECT_FALSE(ctx->Start(411, "127.0.0.1"));
+    EXPECT_FALSE(ctx->Start(14117, "127.0.0.1"));
     EXPECT_FALSE(ctx->IsRunning());
 }
 
 TEST_F(HubContextLifecycleTest, StartAndStop) {
     ASSERT_TRUE(ctx->Initialize());
     
-    ASSERT_TRUE(ctx->Start(0, ""));  // Use config defaults
+    ASSERT_TRUE(ctx->Start(14111, "127.0.0.1"));  // Use high port for CI
     EXPECT_TRUE(ctx->IsRunning());
     
     ctx->Stop();
@@ -124,10 +124,10 @@ TEST_F(HubContextLifecycleTest, StartAndStop) {
 
 TEST_F(HubContextLifecycleTest, DoubleStart) {
     ASSERT_TRUE(ctx->Initialize());
-    ASSERT_TRUE(ctx->Start());
+    ASSERT_TRUE(ctx->Start(14112, "127.0.0.1"));
     
     // Second start should also succeed (no-op)
-    EXPECT_TRUE(ctx->Start());
+    EXPECT_TRUE(ctx->Start(14112, "127.0.0.1"));
     EXPECT_TRUE(ctx->IsRunning());
     
     ctx->Stop();
@@ -191,7 +191,7 @@ TEST_F(HubContextSignalTest, PendingReload) {
 
 TEST_F(HubContextSignalTest, RequestShutdownFromThread) {
     ASSERT_TRUE(ctx->Initialize());
-    ASSERT_TRUE(ctx->Start());
+    ASSERT_TRUE(ctx->Start(14113, "127.0.0.1"));
     
     std::thread signaler([&]() {
         std::this_thread::sleep_for(50ms);
@@ -362,7 +362,7 @@ TEST_F(HubContextEventTest, SetAndRemoveCallback) {
 TEST_F(HubContextEventTest, HubStartedCallback) {
     ctx->SetEventCallback(callback.get());
     ASSERT_TRUE(ctx->Initialize());
-    ASSERT_TRUE(ctx->Start());
+    ASSERT_TRUE(ctx->Start(14114, "127.0.0.1"));
     
     EXPECT_EQ(1, callback->hubStartedCount.load());
     
@@ -372,7 +372,7 @@ TEST_F(HubContextEventTest, HubStartedCallback) {
 TEST_F(HubContextEventTest, HubStoppingCallback) {
     ctx->SetEventCallback(callback.get());
     ASSERT_TRUE(ctx->Initialize());
-    ASSERT_TRUE(ctx->Start());
+    ASSERT_TRUE(ctx->Start(14115, "127.0.0.1"));
     
     ctx->Stop();
     
@@ -382,7 +382,7 @@ TEST_F(HubContextEventTest, HubStoppingCallback) {
 TEST_F(HubContextEventTest, TimerCallback) {
     ctx->SetEventCallback(callback.get());
     ASSERT_TRUE(ctx->Initialize());
-    ASSERT_TRUE(ctx->Start());
+    ASSERT_TRUE(ctx->Start(14116, "127.0.0.1"));
     
     // Wait for at least one timer tick
     std::this_thread::sleep_for(1500ms);

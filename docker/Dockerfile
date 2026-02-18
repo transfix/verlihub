@@ -96,6 +96,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-client \
     curl \
     netcat-openbsd \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed files from builder

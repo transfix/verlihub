@@ -232,6 +232,15 @@ uc = {
 }
 print(f"USER_COUNTS={q(str(uc['masters'])+','+str(uc['admins'])+','+str(uc['operators'])+','+str(uc['vips'])+','+str(uc['registered']))}")
 
+# Lua plugin & scripts
+lua = config.get("lua", {})
+print(f"LUA_ENABLED={q(str(lua.get('enabled', True)).lower())}")
+lua_autoload = lua.get("autoload", [])
+print(f"LUA_AUTOLOAD={q(','.join(lua_autoload))}")
+lua_github = lua.get("github_scripts", [])
+lua_repos = [gs.get("repo", "") for gs in lua_github if gs.get("repo")]
+print(f"LUA_GITHUB_REPOS={q(','.join(lua_repos))}")
+
 # TLS
 tls = config.get("tls", {})
 print(f"TLS_ENABLED={q(str(tls.get('enabled', False)).lower())}")
@@ -723,6 +732,48 @@ run_startup_commands() {
     return $exit_code
 }
 
+# ── Lua script auto-loading ─────────────────────────────────────────────────
+
+run_lua_autoload() {
+    if [ "$LUA_ENABLED" != "true" ]; then
+        return 0
+    fi
+
+    if [ -z "$LUA_AUTOLOAD" ]; then
+        return 0
+    fi
+
+    log_info "Auto-loading Lua scripts..."
+
+    IFS=',' read -ra LUA_SCRIPTS <<< "$LUA_AUTOLOAD"
+    for script in "${LUA_SCRIPTS[@]}"; do
+        script="$(echo "$script" | xargs)"  # trim whitespace
+        if [ -n "$script" ]; then
+            log_info "  Loading Lua script: $script"
+            python3 -c "
+import sys, time
+sys.path.insert(0, 'docker/tests')
+try:
+    from nmdc_client import NMDCClient
+except ImportError:
+    print('nmdc_client not available, skipping Lua autoload')
+    sys.exit(0)
+c = NMDCClient('localhost', $HUB_PORT, '$ADMIN_NICK', '$ADMIN_PASS')
+if not c.connect():
+    print('Could not connect to hub for Lua autoload')
+    sys.exit(1)
+time.sleep(1)
+c.send_chat('!luaload $script')
+time.sleep(2)
+msgs = c.read_messages(timeout=3)
+for m in msgs:
+    print('  ' + str(m))
+c.close()
+" 2>/dev/null || log_warn "Failed to autoload $script"
+        fi
+    done
+}
+
 # ── Start ────────────────────────────────────────────────────────────────────
 
 start_production() {
@@ -858,6 +909,9 @@ print(c.get('api', {}).get('port', 8000))
         if [ "$first_run" = "true" ] || [ "$HAS_COMMANDS" = "true" ]; then
             run_startup_commands || true
         fi
+        
+        # Auto-load Lua scripts after startup commands (which load the Lua plugin)
+        run_lua_autoload || true
     fi
 
     echo ""

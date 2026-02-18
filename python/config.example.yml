@@ -150,6 +150,28 @@ plugins:
     #     setting1: value1
 
 # =============================================================================
+# Lua Plugin & Scripts
+# =============================================================================
+lua:
+  # Enable the Lua plugin (liblua_pi.so)
+  enabled: true
+  
+  # Fetch scripts from GitHub repos on startup
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files:
+        - "ledokol.lua"
+  
+  # Scripts to auto-load (via !luaload)
+  autoload:
+    - "ledokol.lua"
+  
+  # Ledokol configuration (applied via !ledoset)
+  ledokol_config: {}
+    # antispam_class: 3
+    # calculator: 1
+
+# =============================================================================
 # Logging Configuration
 # =============================================================================
 logging:

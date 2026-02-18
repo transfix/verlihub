@@ -570,8 +570,23 @@ async def plugins_page(
         except AttributeError:
             scripts = []
     
+    # Get Lua scripts
+    lua_scripts = []
+    if ctx:
+        try:
+            lua_scripts = ctx.get_lua_scripts() or []
+        except AttributeError:
+            # Fall back to checking scripts directory
+            import os
+            scripts_dir = os.environ.get("VH_SCRIPTS_DIR", "/usr/local/share/verlihub/scripts")
+            if os.path.isdir(scripts_dir):
+                for f in os.listdir(scripts_dir):
+                    if f.endswith(".lua"):
+                        lua_scripts.append({"name": f, "loaded": False})
+    
     context["plugins"] = plugins
     context["scripts"] = scripts
+    context["lua_scripts"] = lua_scripts
     context["can_edit"] = user.user_class >= 5  # Admin+ can manage plugins
     
     return templates.TemplateResponse(request, "plugins.html", context)

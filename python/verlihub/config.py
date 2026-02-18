@@ -236,6 +236,31 @@ class PluginsConfig:
 
 
 @dataclass
+class LuaGithubScript:
+    """A Lua script to fetch from a GitHub repository."""
+    repo: str  # e.g. "Verlihub/ledokol"
+    files: list[str] = field(default_factory=list)  # specific files, or empty for all
+
+
+@dataclass
+class LuaConfig:
+    """
+    Lua plugin and script configuration.
+    
+    Controls loading of the Lua plugin (liblua_pi.so) and manages
+    Lua scripts such as ledokol (https://github.com/Verlihub/ledokol).
+    
+    Scripts listed in ``github_scripts`` are fetched from GitHub on
+    startup and placed in the hub's scripts directory. Scripts in
+    ``autoload`` are loaded via ``!luaload`` after the hub starts.
+    """
+    enabled: bool = True
+    github_scripts: list[LuaGithubScript] = field(default_factory=list)
+    autoload: list[str] = field(default_factory=list)
+    ledokol_config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
     level: str = "INFO"
@@ -255,6 +280,7 @@ class VerlihubConfig:
     hub: HubConfig = field(default_factory=HubConfig)
     bots: BotsConfig = field(default_factory=BotsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
+    lua: LuaConfig = field(default_factory=LuaConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
@@ -377,6 +403,23 @@ class VerlihubConfig:
                     )
                     for p in plugins.get("list", [])
                 ]
+        
+        # Lua plugin & scripts
+        if "lua" in data:
+            lua = data["lua"]
+            github_scripts = [
+                LuaGithubScript(
+                    repo=gs.get("repo", ""),
+                    files=gs.get("files", []),
+                )
+                for gs in lua.get("github_scripts", [])
+            ]
+            config.lua = LuaConfig(
+                enabled=lua.get("enabled", True),
+                github_scripts=github_scripts,
+                autoload=lua.get("autoload", []),
+                ledokol_config=lua.get("ledokol_config", {}),
+            )
         
         # Logging
         if "logging" in data:
@@ -541,6 +584,15 @@ class VerlihubConfig:
             "logging": {
                 "level": self.logging.level,
                 "file": self.logging.file,
+            },
+            "lua": {
+                "enabled": self.lua.enabled,
+                "github_scripts": [
+                    {"repo": gs.repo, "files": gs.files}
+                    for gs in self.lua.github_scripts
+                ],
+                "autoload": self.lua.autoload,
+                "ledokol_config": self.lua.ledokol_config,
             },
         }
 

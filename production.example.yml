@@ -314,6 +314,46 @@ users:
     # - nick: regular1
     #   password: user_password
 
+# =============================================================================
+# Lua Plugin & Scripts
+# Lua scripts extend the hub with features like ledokol (chat, security,
+# entertainment). Scripts are loaded via !luaload after the hub starts.
+#
+# Ledokol (https://github.com/Verlihub/ledokol) is the most popular Lua
+# script for Verlihub and provides 70+ features for hub management.
+# =============================================================================
+lua:
+  # Enable the Lua plugin (liblua_pi.so)
+  enabled: true
+  
+  # Automatically fetch scripts from GitHub repos on startup.
+  # Each entry clones the repo and copies .lua files to the scripts directory.
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      # Specific files to copy (empty = all .lua files in repo root)
+      files:
+        - "ledokol.lua"
+    # Example: add another Lua script repo
+    # - repo: "username/my-lua-script"
+    #   files: []
+  
+  # Scripts to auto-load after the hub starts (via !luaload).
+  # These are loaded in order after github_scripts are fetched.
+  autoload:
+    - "ledokol.lua"
+    # - "another_script.lua"
+  
+  # Ledokol configuration (applied via !ledoset after loading)
+  # See https://github.com/Verlihub/ledokol/wiki/Ledokol-Configuration
+  ledokol_config: {}
+    # antispam_class: 3
+    # calculator: 1
+    # chat_history: 1
+    # chat_history_lines: 50
+    # news: 1
+    # releases: 1
+    # friendly_hubs: 1
+
 # Python Plugin Mode
 #   single: Single interpreter with dispatcher (supports FastAPI, threading)
 #   multi: Sub-interpreters with script isolation (better security, no FastAPI)
@@ -379,9 +419,14 @@ matterbridge:
 startup_commands:
   # Load Python plugin
   - "!onplug python"
+  # Load Lua plugin (required for ledokol and other Lua scripts)
+  - "!onplug lua"
   # Start FastAPI server (required for /app web interface)
   # Format: !api start <port> [cors_origins...]
   - "!api start 30000"
+  # Lua scripts are auto-loaded from the lua.autoload list above
+  # You can also manually load them here:
+  # - "!luaload ledokol.lua"
   # Example: Set hub topic
   # - "!topic Welcome to the hub!"
   # Example: Configure settings

@@ -45,7 +45,7 @@ services:
       qa-postgres:
         condition: service_healthy
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /app/docker/tests/configs/qa-postgresql.yml
         --mode api
     ports:

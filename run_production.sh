@@ -360,7 +360,7 @@ _compose_py_hub() {
       dockerfile: docker/Dockerfile.verlihub-py
     container_name: ${CONTAINER_PREFIX}-hub
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /config/production.yml
         --mode api
     environment:
@@ -393,7 +393,7 @@ EOF
       ${CONTAINER_PREFIX}-db:
         condition: service_healthy
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /config/production.yml
         --mode api
     environment:

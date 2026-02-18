@@ -117,6 +117,9 @@ RUN useradd -r -s /bin/false verlihub && \
     mkdir -p /etc/verlihub /var/lib/verlihub /var/log/verlihub && \
     chown -R verlihub:verlihub /etc/verlihub /var/lib/verlihub /var/log/verlihub
 
+# Ensure 'python' command exists (Ubuntu 24.04 only ships python3)
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
 # Set up Python path for SWIG module
 ENV PYTHONPATH=/build/python:/src/python
 ENV LD_LIBRARY_PATH=/build/src:/usr/local/lib

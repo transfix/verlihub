@@ -59,7 +59,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.verlihub-py
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /app/docker/tests/configs/sqlite-memory.yml
         --mode api
     ports:
@@ -96,7 +96,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.verlihub-py
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /app/docker/tests/configs/sqlite-file.yml
         --mode api
     volumes:
@@ -138,7 +138,7 @@ services:
       mysql:
         condition: service_healthy
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         -c /app/docker/tests/configs/mysql.yml
         --mode api
     ports:
@@ -178,7 +178,7 @@ services:
       postgres:
         condition: service_healthy
     command: >
-      python -m verlihub.server  
+      python3 -m verlihub.server
         -c /app/docker/tests/configs/postgresql.yml
         --mode api
     ports:
@@ -219,7 +219,7 @@ services:
       VH_API_PASSWORD: admin123
       VH_API_HOST: "0.0.0.0"
     command: >
-      python -m verlihub.server
+      python3 -m verlihub.server
         --config-dir /data
         --mode api
     volumes:

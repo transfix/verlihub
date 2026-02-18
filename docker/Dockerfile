@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblua5.4-dev \
     python3-dev \
     pkg-config \
+    libgtest-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -61,6 +62,12 @@ RUN mkdir -p build && cd build && \
     fi && \
     make -j$(nproc) && \
     make install
+
+# Test builder - extends builder with core tests
+FROM builder AS test-builder
+RUN cd /src/build && \
+    cmake -DBUILD_CORE_TESTS=ON . && \
+    make -j$(nproc)
 
 # Runtime image
 FROM ubuntu:24.04 AS runtime

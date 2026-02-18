@@ -67,7 +67,7 @@ class DatabaseConfig:
         self.port = port or int(os.getenv("VH_DB_PORT", str(DEFAULT_DB_PORT)))
         self.database = database or os.getenv("VH_DB_NAME", DEFAULT_DB_NAME)
         self.user = user or os.getenv("VH_DB_USER", "")
-        self.password = password or os.getenv("VH_DB_PASS", "")
+        self.password = password or os.getenv("VH_DB_PASSWORD", os.getenv("VH_DB_PASS", ""))
         
         # Driver override
         self._driver = driver

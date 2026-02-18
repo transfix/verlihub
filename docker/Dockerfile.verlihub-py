@@ -43,7 +43,7 @@ RUN mkdir -p build && cd build && \
           -DWITH_LUA=ON \
           -DWITH_PYTHON=ON \
           -DPYTHON_USE_SINGLE_INTERPRETER=ON \
-          -DWITH_SWIG_BINDINGS=ON \
+          -DBUILD_PYTHON_BINDINGS=ON \
           .. && \
     make -j$(nproc) && \
     make install
@@ -111,6 +111,17 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Install verlihub-py package
 RUN pip3 install --no-cache-dir --break-system-packages -e /src/python
+
+# Copy SWIG module into the installed verlihub package directory
+# The SWIG build outputs to /build/python/verlihub/ but pip installed
+# the package from /src/python/verlihub/, so Python only looks there.
+RUN if [ -f /build/python/verlihub/_verlihub_core.so ]; then \
+        cp /build/python/verlihub/_verlihub_core.so /src/python/verlihub/ && \
+        cp /build/python/verlihub/verlihub_core.py /src/python/verlihub/ && \
+        echo "SWIG module copied to package directory"; \
+    else \
+        echo "WARNING: SWIG module not found at /build/python/verlihub/"; \
+    fi
 
 # Create verlihub user and directories
 RUN useradd -r -s /bin/false verlihub && \

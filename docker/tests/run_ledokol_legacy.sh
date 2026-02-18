@@ -43,16 +43,21 @@ sleep 15
 echo "Loading ledokol.lua via !luaload..."
 python3 -c "
 import sys, time
-sys.path.insert(0, '/tests')
-from nmdc_client import NMDCClient
-c = NMDCClient('${HUB_HOST}', ${HUB_PORT}, '${ADMIN_NICK}', '${ADMIN_PASS}')
-if not c.connect():
-    print('ERROR: Could not connect to hub')
+try:
+    from verlihub.client.nmdc import NMDCClient
+except ImportError:
+    sys.path.insert(0, '/python')
+    from verlihub.client.nmdc import NMDCClient
+try:
+    c = NMDCClient('${HUB_HOST}', ${HUB_PORT}, '${ADMIN_NICK}', '${ADMIN_PASS}')
+    c.connect(timeout=30)
+except Exception as e:
+    print(f'ERROR: Could not connect to hub: {e}')
     sys.exit(1)
 time.sleep(2)
 c.send_chat('!luaload ledokol.lua')
 time.sleep(3)
-msgs = c.read_messages(timeout=5)
+msgs = c.wait_for_response(timeout=5)
 for m in msgs:
     print('  hub> ' + str(m))
 c.close()

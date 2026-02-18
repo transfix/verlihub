@@ -752,20 +752,25 @@ run_lua_autoload() {
             log_info "  Loading Lua script: $script"
             python3 -c "
 import sys, time
-sys.path.insert(0, 'docker/tests')
 try:
-    from nmdc_client import NMDCClient
+    from verlihub.client.nmdc import NMDCClient
 except ImportError:
-    print('nmdc_client not available, skipping Lua autoload')
-    sys.exit(0)
-c = NMDCClient('localhost', $HUB_PORT, '$ADMIN_NICK', '$ADMIN_PASS')
-if not c.connect():
-    print('Could not connect to hub for Lua autoload')
+    sys.path.insert(0, 'python')
+    try:
+        from verlihub.client.nmdc import NMDCClient
+    except ImportError:
+        print('verlihub NMDC client not available, skipping Lua autoload')
+        sys.exit(0)
+try:
+    c = NMDCClient('localhost', $HUB_PORT, '$ADMIN_NICK', '$ADMIN_PASS')
+    c.connect(timeout=15)
+except Exception as e:
+    print(f'Could not connect to hub for Lua autoload: {e}')
     sys.exit(1)
 time.sleep(1)
 c.send_chat('!luaload $script')
 time.sleep(2)
-msgs = c.read_messages(timeout=3)
+msgs = c.wait_for_response(timeout=3)
 for m in msgs:
     print('  ' + str(m))
 c.close()

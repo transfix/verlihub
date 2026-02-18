@@ -21,6 +21,17 @@ if _build_python_dir.exists() and str(_build_python_dir) not in sys.path:
     sys.path.insert(0, str(_build_python_dir))
 
 
+def _require_swig():
+    """Import and return verlihub_core, skipping if SWIG module not available."""
+    try:
+        from verlihub import verlihub_core
+    except ImportError:
+        pytest.skip("verlihub_core module not available")
+    if verlihub_core is None:
+        pytest.skip("verlihub_core SWIG module not built")
+    return verlihub_core
+
+
 # =============================================================================
 # Test Fixtures
 # =============================================================================
@@ -33,6 +44,8 @@ def hub_context():
         from verlihub import verlihub_core
     except ImportError:
         pytest.skip("verlihub_core module not available")
+    if verlihub_core is None:
+        pytest.skip("verlihub_core SWIG module not built")
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
@@ -275,10 +288,7 @@ class TestPluginInfo:
     
     def test_plugin_info_attributes(self):
         """Test that PluginInfo has expected attributes."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         # PluginInfo should be accessible
         # Note: May not be directly constructible from Python
@@ -287,10 +297,7 @@ class TestPluginInfo:
     
     def test_plugin_info_vector(self):
         """Test that PluginInfoVector is available."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         # Should be able to create empty vector
         # vec = verlihub_core.PluginInfoVector()
@@ -388,81 +395,54 @@ class TestPluginMethods:
     
     def test_method_exists_load_plugin(self):
         """Verify LoadPlugin method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'LoadPlugin')
     
     def test_method_exists_unload_plugin(self):
         """Verify UnloadPlugin method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'UnloadPlugin')
     
     def test_method_exists_reload_plugin(self):
         """Verify ReloadPlugin method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'ReloadPlugin')
     
     def test_method_exists_get_loaded_plugins(self):
         """Verify GetLoadedPlugins method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'GetLoadedPlugins')
     
     def test_method_exists_is_plugin_loaded(self):
         """Verify IsPluginLoaded method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'IsPluginLoaded')
     
     def test_method_exists_execute_lua_script(self):
         """Verify ExecuteLuaScript method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'ExecuteLuaScript')
     
     def test_method_exists_execute_python_script(self):
         """Verify ExecutePythonScript method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'ExecutePythonScript')
     
     def test_method_exists_get_loaded_lua_scripts(self):
         """Verify GetLoadedLuaScripts method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'GetLoadedLuaScripts')
     
     def test_method_exists_get_loaded_python_scripts(self):
         """Verify GetLoadedPythonScripts method exists."""
-        try:
-            from verlihub import verlihub_core
-        except ImportError:
-            pytest.skip("verlihub_core not available")
+        verlihub_core = _require_swig()
         
         assert hasattr(verlihub_core.HubContext, 'GetLoadedPythonScripts')

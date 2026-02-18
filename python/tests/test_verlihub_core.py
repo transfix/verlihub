@@ -23,7 +23,9 @@ if BUILD_DIR.exists():
 # Import SWIG module
 try:
     from verlihub import verlihub_core
-    SWIG_AVAILABLE = True
+    # verlihub/__init__.py catches ImportError and sets verlihub_core = None,
+    # so we must check the value rather than relying on ImportError.
+    SWIG_AVAILABLE = verlihub_core is not None
 except ImportError:
     SWIG_AVAILABLE = False
     verlihub_core = None

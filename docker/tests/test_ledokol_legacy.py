@@ -32,8 +32,14 @@ import sys
 import time
 from typing import Optional, List, Callable
 
-# Use the standalone NMDC client (zero-dependency, same directory)
-from nmdc_client import NMDCClient
+# Use the official verlihub NMDC client
+try:
+    from verlihub.client.nmdc import NMDCClient
+except ImportError:
+    # Fallback: add python dir to path and retry
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
+    from verlihub.client.nmdc import NMDCClient
 
 
 class LedokolTestRunner:
@@ -107,9 +113,10 @@ class LedokolTestRunner:
             nick=self.admin_nick,
             password=self.admin_pass,
         )
-        self.client.debug = self.debug
-        if not self.client.connect(timeout=30):
-            print("[SETUP] ✗ Connection failed")
+        try:
+            self.client.connect(timeout=30)
+        except Exception as e:
+            print(f"[SETUP] ✗ Connection failed: {e}")
             return False
         print("[SETUP] ✓ Connected")
         # Give ledokol a moment to send its welcome / history burst

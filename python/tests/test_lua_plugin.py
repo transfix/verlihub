@@ -43,6 +43,8 @@ def hub_context():
         from verlihub import verlihub_core
     except ImportError:
         pytest.skip("verlihub_core module not available")
+    if verlihub_core is None:
+        pytest.skip("verlihub_core SWIG module not built")
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)

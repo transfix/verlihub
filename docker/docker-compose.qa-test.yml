@@ -44,6 +44,10 @@ services:
     depends_on:
       qa-postgres:
         condition: service_healthy
+    environment:
+      VH_AUTO_START: "1"
+      VH_PORT: "4111"
+      VH_LISTEN_IP: "0.0.0.0"
     command: >
       python3 -m verlihub.server
         -c /app/docker/tests/configs/qa-postgresql.yml

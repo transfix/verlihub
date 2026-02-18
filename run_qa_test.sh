@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Connect a desktop client:  dc://localhost:4111"
             echo "Dashboard:                 http://localhost:8000/dashboard/spa"
-            echo "API:                       http://localhost:8000/api/health"
+            echo "API:                       http://localhost:8000/health"
             exit 0
             ;;
         *)
@@ -128,13 +128,13 @@ if [ "$ACTION" = "interactive" ]; then
     # Wait for hub health
     echo -e "${BLUE}→ Waiting for hub to become healthy...${NC}"
     for i in $(seq 1 60); do
-        if curl -sf http://localhost:8000/api/health > /dev/null 2>&1; then
+        if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
             echo ""
             echo -e "${GREEN}✓ Hub is ready!${NC}"
             echo ""
             echo -e "  ${GREEN}Connect desktop client:${NC}  dc://localhost:4111"
             echo -e "  ${GREEN}Dashboard:${NC}               http://localhost:8000/dashboard/spa"
-            echo -e "  ${GREEN}API health:${NC}              http://localhost:8000/api/health"
+            echo -e "  ${GREEN}API health:${NC}              http://localhost:8000/health"
             echo ""
             echo -e "${YELLOW}  Press Ctrl+C to stop${NC}"
             break
@@ -153,6 +153,11 @@ if [ "$ACTION" = "interactive" ]; then
 
 else
     # Normal mode: full run including load test
+
+    # Clean up any leftover containers/volumes from previous runs
+    echo -e "${BLUE}→ Cleaning up previous QA environment...${NC}"
+    docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+
     echo -e "${BLUE}→ Building and starting QA environment...${NC}"
 
     # Export KEEP_ALIVE so docker-compose picks it up

@@ -372,7 +372,7 @@ _compose_py_hub() {
       - ./${CONFIG_FILE}:/config/production.yml:ro
       - ${sqlite_vol}:${sqlite_mount}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -404,7 +404,7 @@ EOF
     volumes:
       - ./${CONFIG_FILE}:/config/production.yml:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -519,7 +519,7 @@ wait_for_hub() {
 
         if [ "$EDITION" = "py" ]; then
             # verlihub-py: check API health endpoint
-            if docker exec "$hub_container" curl -sf "http://localhost:${API_PORT}/api/health" >/dev/null 2>&1; then
+            if docker exec "$hub_container" curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
                 log_success "Hub API is healthy"
                 return 0
             fi

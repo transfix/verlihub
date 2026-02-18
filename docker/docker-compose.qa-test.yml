@@ -52,7 +52,7 @@ services:
       - "4111:4111"    # NMDC hub – connect desktop clients here
       - "8000:8000"    # API + dashboard
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 5s
       timeout: 5s
       retries: 20

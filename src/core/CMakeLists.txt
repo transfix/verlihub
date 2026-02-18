@@ -125,6 +125,36 @@ if(BUILD_CORE_TESTS)
         )
         target_compile_features(test_hub_context PRIVATE cxx_std_20)
         
+        # NMDCProtocol tests
+        add_executable(test_nmdc_protocol
+            tests/test_nmdc_protocol.cpp
+        )
+        target_link_libraries(test_nmdc_protocol
+            GTest::gtest
+            GTest::gtest_main
+            verlihub_core_lib
+            pthread
+        )
+        target_compile_definitions(test_nmdc_protocol PRIVATE
+            BUILD_DIR="${CMAKE_BINARY_DIR}"
+        )
+        target_compile_features(test_nmdc_protocol PRIVATE cxx_std_20)
+
+        # NMDCHubServer tests
+        add_executable(test_nmdc_hub_server
+            tests/test_nmdc_hub_server.cpp
+        )
+        target_link_libraries(test_nmdc_hub_server
+            GTest::gtest
+            GTest::gtest_main
+            verlihub_core_lib
+            pthread
+        )
+        target_compile_definitions(test_nmdc_hub_server PRIVATE
+            BUILD_DIR="${CMAKE_BINARY_DIR}"
+        )
+        target_compile_features(test_nmdc_hub_server PRIVATE cxx_std_20)
+
         # Register tests with CTest
         add_test(NAME ThreadSafeCollectionsTests 
             COMMAND test_thread_safe_collections
@@ -141,8 +171,24 @@ if(BUILD_CORE_TESTS)
             LABELS "core;unit"
             TIMEOUT 120
         )
+
+        add_test(NAME NMDCProtocolTests
+            COMMAND test_nmdc_protocol
+        )
+        set_tests_properties(NMDCProtocolTests PROPERTIES
+            LABELS "core;unit"
+            TIMEOUT 60
+        )
+
+        add_test(NAME NMDCHubServerTests
+            COMMAND test_nmdc_hub_server
+        )
+        set_tests_properties(NMDCHubServerTests PROPERTIES
+            LABELS "core;unit"
+            TIMEOUT 60
+        )
         
-        message(STATUS "[ OK ] Core tests configured: ThreadSafeCollections, HubContext")
+        message(STATUS "[ OK ] Core tests configured: ThreadSafeCollections, HubContext, NMDCProtocol, NMDCHubServer")
     else()
         message(STATUS "[ !! ] GTest not found; skipping core library tests")
     endif()

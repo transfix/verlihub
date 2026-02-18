@@ -19,12 +19,12 @@
 */
 
 #include "hub_context.h"
+#include "nmdc_hub_server.h"
 #include <iostream>
 #include <chrono>
 #include <sstream>
-#include "src/cvhpluginmgr.h"
-#include "src/cpluginmanager.h"
-#include "src/cpluginbase.h"
+#include <fstream>
+#include <thread>
 
 namespace nVerliHub {
 
@@ -112,6 +112,11 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
         return true;
     }
     
+    if (!m_nmdc_server) {
+        Log(0, "Cannot start: NMDCHubServer not created");
+        return false;
+    }
+    
     // Use provided values or fall back to config
     int actual_port = (port > 0) ? port : m_hub_config.listen_port;
     std::string actual_ip = listen_ip.empty() 
@@ -120,10 +125,35 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     
     Log(0, std::format("Starting hub on {}:{}", actual_ip, actual_port));
     
-    // TODO: Start the cServerDC when it's refactored
-    // m_server->Start(actual_port, actual_ip);
+    // Configure the NMDC server
+    m_nmdc_server->SetHubName(m_hub_config.hub_name);
+    m_nmdc_server->SetHubTopic(m_hub_config.hub_topic);
+    m_nmdc_server->SetHubSecurity(m_hub_config.hub_security);
+    m_nmdc_server->SetMaxUsers(m_hub_config.max_users);
+    m_nmdc_server->SetCallback(m_event_callback);
+    
+    // Set the listen address on the server
+    if (!actual_ip.empty()) {
+        m_nmdc_server->mAddr = actual_ip;
+    }
+    
+    // Start listening on the NMDC port
+    if (!m_nmdc_server->StartListening(actual_port)) {
+        Log(0, std::format("Failed to start listening on port {}", actual_port));
+        return false;
+    }
+    
+    Log(0, std::format("Listening on {}:{}", actual_ip, actual_port));
     
     m_running.store(true, std::memory_order_release);
+    
+    // Run the server event loop in a background thread
+    m_server_thread = std::thread([this]() {
+        Log(0, "Server event loop starting");
+        int result = m_nmdc_server->run();
+        Log(0, std::format("Server event loop exited with code {}", result));
+        m_running.store(false, std::memory_order_release);
+    });
     
     // Start timer thread using C++20 jthread
     m_timer_thread = std::jthread([this](std::stop_token stop_token) {
@@ -160,8 +190,23 @@ void HubContext::Stop() {
         m_timer_thread.join();
     }
     
-    // TODO: Stop the cServerDC when it's refactored
-    // m_server->Stop();
+    // Stop the NMDCHubServer event loop
+    if (m_nmdc_server) {
+        Log(0, "Stopping NMDCHubServer...");
+        m_nmdc_server->stop(0, 0);  // Signal the run() loop to exit immediately
+    }
+    
+    // Wait for the server thread to finish
+    if (m_server_thread.joinable()) {
+        Log(0, "Waiting for server thread to finish...");
+        m_server_thread.join();
+        Log(0, "Server thread finished");
+    }
+    
+    // Close all connections
+    if (m_nmdc_server) {
+        m_nmdc_server->close();
+    }
     
     m_running.store(false, std::memory_order_release);
     
@@ -173,11 +218,16 @@ void HubContext::Stop() {
 // =============================================================================
 
 std::vector<std::string> HubContext::GetUserNicks() const {
+    if (m_nmdc_server) {
+        return m_nmdc_server->GetNickList();
+    }
     return m_users.GetNicks();
 }
 
 cUser* HubContext::FindUser(std::string_view nick) const {
-    return m_users.FindUser(nick);
+    // NMDCHubServer doesn't use cUser objects - return nullptr
+    // Use IsNickOnline() or GetUserNicks() instead
+    return nullptr;
 }
 
 // =============================================================================
@@ -185,34 +235,32 @@ cUser* HubContext::FindUser(std::string_view nick) const {
 // =============================================================================
 
 bool HubContext::SendToUser(std::string_view nick, std::string_view message) {
-    // TODO: Implement when cServerDC is refactored
-    cUser* user = FindUser(nick);
-    if (!user) {
-        return false;
-    }
+    if (!m_nmdc_server) return false;
     
-    // user->SendRaw(message);
-    return true;
+    return m_nmdc_server->SendToNick(std::string(nick), std::string(message));
 }
 
 bool HubContext::SendToAll(std::string_view message) {
-    // TODO: Implement when cServerDC is refactored
-    ForEachUser([&message](cUser* user) {
-        // user->SendRaw(message);
-    });
+    if (!m_nmdc_server) return false;
+    
+    m_nmdc_server->SendToAll(std::string(message));
     return true;
 }
 
 bool HubContext::SendToClass(std::string_view message, int min_class, int max_class) {
-    // TODO: Implement when cServerDC is refactored
-    ForEachUserInClass([&message](cUser* user) {
-        // user->SendRaw(message);
-    }, min_class, max_class);
+    // NMDCHubServer doesn't have class-based filtering yet
+    // For now, send to all
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToAll(std::string(message));
     return true;
 }
 
 bool HubContext::SendToOpChat(std::string_view message, std::string_view from) {
-    // TODO: Implement when cServerDC is refactored
+    if (!m_nmdc_server) return false;
+    
+    std::string from_str(from.empty() ? m_hub_config.hub_security : std::string(from));
+    // Send as chat from the hub security bot
+    m_nmdc_server->SendChatToAll(from_str, std::string(message));
     return true;
 }
 
@@ -222,25 +270,22 @@ bool HubContext::SendToOpChat(std::string_view message, std::string_view from) {
 
 bool HubContext::KickUser(std::string_view op_nick, std::string_view nick, 
                           std::string_view reason) {
-    // TODO: Implement when cServerDC is refactored
-    cUser* user = FindUser(nick);
-    if (!user) {
-        return false;
-    }
+    if (!m_nmdc_server) return false;
     
-    // server->KickUser(user, op_nick, reason);
-    return true;
+    return m_nmdc_server->KickUser(
+        std::string(nick), std::string(reason), std::string(op_nick));
 }
 
 bool HubContext::AddRobot(std::string_view nick, std::string_view description,
                           int user_class) {
-    // TODO: Implement when cServerDC is refactored
-    return true;
+    // In verlihub-py, bots are managed differently
+    Log(1, "AddRobot: not implemented in verlihub-py mode");
+    return false;
 }
 
 bool HubContext::RemoveRobot(std::string_view nick) {
-    // TODO: Implement when cServerDC is refactored
-    return true;
+    Log(1, "RemoveRobot: not implemented in verlihub-py mode");
+    return false;
 }
 
 // =============================================================================
@@ -377,9 +422,7 @@ void HubContext::Log(int level, std::string_view message,
 // =============================================================================
 
 bool HubContext::LoadConfiguration() {
-    // TODO: Actually load configuration from dbconfig.xml or database
-    // For now, set some defaults
-    
+    // Set defaults - actual values come from Python YAML config via SetConfig()
     std::unique_lock lock(m_config_mutex);
     m_hub_config = HubConfig{
         .hub_name = "Verlihub Hub",
@@ -387,7 +430,7 @@ bool HubContext::LoadConfiguration() {
         .hub_topic = "Welcome!",
         .hub_host = "localhost",
         .hub_owner = "admin",
-        .hub_encoding = "CP1252",
+        .hub_encoding = "UTF-8",
         .hub_security = "Hub-Security",
         .opchat_name = "OpChat",
         .listen_port = 411,
@@ -401,28 +444,51 @@ bool HubContext::LoadConfiguration() {
         .tls_key_file = {}
     };
     
+    // No dbconfig file needed - verlihub-py mode doesn't use MySQL
+    // All database operations are handled by Python
+    
     return true;
 }
 
 bool HubContext::ConnectDatabase() {
-    // TODO: Implement database connection using m_mysql
-    // For now, just return true
+    // Database connection is handled entirely by the Python side
+    // verlihub-py supports SQLite, PostgreSQL, MySQL via Python's async DB layer
     return true;
 }
 
 bool HubContext::InitializeComponents() {
-    // TODO: Create and initialize server, plugin manager, etc.
-    // These will be created once the classes are refactored
-    
-    // m_server = std::make_unique<nSocket::cServerDC>(*this);
-    // m_plugin_mgr = std::make_unique<nPlugin::cVHPluginMgr>(*this);
-    
-    return true;
+    // Create the database-free NMDC hub server
+    try {
+        Log(0, "Creating NMDCHubServer (database-free mode)");
+        m_nmdc_server = new NMDCHubServer(m_config_dir);
+        
+        if (!m_nmdc_server) {
+            Log(0, "Failed to create NMDCHubServer");
+            return false;
+        }
+        
+        Log(0, "NMDCHubServer created successfully");
+        return true;
+    } catch (const std::exception& e) {
+        Log(0, std::string("Failed to create NMDCHubServer: ") + e.what());
+        return false;
+    } catch (...) {
+        Log(0, "Failed to create NMDCHubServer: unknown exception");
+        return false;
+    }
 }
 
 void HubContext::CleanupComponents() {
-    // Components are cleaned up manually (not using unique_ptr currently)
-    // TODO: Add cleanup when components are integrated
+    // Clear cached component pointers
+    m_plugin_mgr = nullptr;
+    m_icu_convert = nullptr;
+    m_geoip = nullptr;
+    
+    // Delete the NMDC server
+    if (m_nmdc_server) {
+        delete m_nmdc_server;
+        m_nmdc_server = nullptr;
+    }
     
     // Clear user collections
     m_users.Clear();
@@ -482,224 +548,55 @@ bool HubContext::LoadPlugin(std::string_view plugin_path) {
     Log(1, "LoadPlugin: Loading plugin from " + path_str);
     
     // The plugin manager's LoadPlugin accepts a full path to a .so file
-    bool result = m_plugin_mgr->LoadPlugin(path_str);
-    
-    if (!result) {
-        Log(0, "Failed to load plugin: " + m_plugin_mgr->GetError());
-    }
-    
-    return result;
+    // Plugin system not available in verlihub-py mode
+    Log(0, "Plugin system not available in verlihub-py mode");
+    return false;
 }
 
 bool HubContext::UnloadPlugin(std::string_view plugin_name) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    std::string name_str(plugin_name);
-    Log(1, "UnloadPlugin: Unloading " + name_str);
-    
-    bool result = m_plugin_mgr->UnloadPlugin(name_str, true);
-    
-    if (!result) {
-        Log(0, "Failed to unload plugin: " + name_str);
-    }
-    
-    return result;
+    Log(0, "Plugin system not available in verlihub-py mode");
+    return false;
 }
 
 bool HubContext::ReloadPlugin(std::string_view plugin_name) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    std::string name_str(plugin_name);
-    Log(1, "ReloadPlugin: Reloading " + name_str);
-    
-    bool result = m_plugin_mgr->ReloadPlugin(name_str);
-    
-    if (!result) {
-        Log(0, "Failed to reload plugin: " + name_str);
-    }
-    
-    return result;
+    Log(0, "Plugin system not available in verlihub-py mode");
+    return false;
 }
 
 std::vector<PluginInfo> HubContext::GetLoadedPlugins() const {
-    std::vector<PluginInfo> result;
-    
-    if (!m_plugin_mgr) {
-        return result;
-    }
-    
-    // Iterate through loaded plugins using the plugin manager's list
-    // The mPlugins map uses plugin names as keys
-    std::ostringstream listing;
-    m_plugin_mgr->List(listing);
-    
-    // Parse the listing to extract plugin info
-    // The List() method outputs plugins with their names
-    // For a more robust implementation, we could modify cPluginManager
-    // to provide direct access to plugin info
-    
-    // For now, check known plugin names
-    const char* known_plugins[] = {"Lua", "Python", "Plugman", nullptr};
-    for (int i = 0; known_plugins[i]; ++i) {
-        nPlugin::cPluginBase* plugin = m_plugin_mgr->GetPlugin(known_plugins[i]);
-        if (plugin) {
-            PluginInfo info;
-            info.name = plugin->Name();
-            info.version = plugin->Version();
-            info.loaded = true;
-            // Path not directly available from cPluginBase
-            result.push_back(info);
-        }
-    }
-    
-    return result;
+    return {};
 }
 
 bool HubContext::IsPluginLoaded(std::string_view plugin_name) const {
-    if (!m_plugin_mgr) {
-        return false;
-    }
-    
-    std::string name_str(plugin_name);
-    nPlugin::cPluginBase* plugin = m_plugin_mgr->GetPlugin(name_str);
-    return (plugin != nullptr);
+    return false;
 }
 
 bool HubContext::ExecuteLuaScript(std::string_view script_path) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    // Check if Lua plugin is loaded
-    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
-    if (!lua_plugin) {
-        Log(0, "Lua plugin not loaded - cannot execute script");
-        return false;
-    }
-    
-    std::string path_str(script_path);
-    Log(1, "ExecuteLuaScript: " + path_str);
-    
-    // Script loading in the Lua plugin is done through its console interface.
-    // To load scripts programmatically, use the hub command interface.
-    // The command format is: !luascript <script_path>
-    // 
-    // For full programmatic control, scripts should be loaded via:
-    // 1. The REST API endpoints for script management
-    // 2. The hub's operator command interface
-    // 3. Auto-loading via the scripts/ directory
-    //
-    // Direct integration with the Lua plugin's internal structures
-    // would require tight coupling that we want to avoid.
-    Log(1, "Note: Use !luascript command or REST API to load Lua scripts");
-    
-    // Return false to indicate the script was not loaded directly
-    // The caller should use the appropriate command interface
+    Log(0, "Lua plugin not available in verlihub-py mode");
     return false;
 }
 
 bool HubContext::UnloadLuaScript(std::string_view script_path) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
-    if (!lua_plugin) {
-        Log(0, "Lua plugin not loaded");
-        return false;
-    }
-    
-    std::string path_str(script_path);
-    Log(1, "UnloadLuaScript: " + path_str);
-    Log(1, "Note: Use !luascript- command or REST API to unload Lua scripts");
-    
+    Log(0, "Lua plugin not available in verlihub-py mode");
     return false;
 }
 
 std::vector<std::string> HubContext::GetLoadedLuaScripts() const {
-    std::vector<std::string> result;
-    
-    if (!m_plugin_mgr) {
-        return result;
-    }
-    
-    nPlugin::cPluginBase* lua_plugin = m_plugin_mgr->GetPlugin("Lua");
-    if (!lua_plugin) {
-        return result;
-    }
-    
-    // The Lua plugin stores scripts in its mLua vector.
-    // Without including the Lua plugin headers, we cannot access
-    // the script list directly. Use !luascript command or REST API.
-    //
-    // Future enhancement: Add a virtual method to cVHPlugin for
-    // script enumeration that plugins can implement.
-    
-    return result;
+    return {};
 }
 
 bool HubContext::ExecutePythonScript(std::string_view script_path) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
-    if (!py_plugin) {
-        Log(0, "Python plugin not loaded - cannot execute script");
-        return false;
-    }
-    
-    std::string path_str(script_path);
-    Log(1, "ExecutePythonScript: " + path_str);
-    Log(1, "Note: Use !pyfile command or REST API to load Python scripts");
-    
+    Log(0, "Python plugin not available in verlihub-py mode");
     return false;
 }
 
 bool HubContext::UnloadPythonScript(std::string_view script_path) {
-    if (!m_plugin_mgr) {
-        Log(0, "Plugin manager not initialized");
-        return false;
-    }
-    
-    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
-    if (!py_plugin) {
-        Log(0, "Python plugin not loaded");
-        return false;
-    }
-    
-    std::string path_str(script_path);
-    Log(1, "UnloadPythonScript: " + path_str);
-    Log(1, "Note: Use !pyunload command or REST API to unload Python scripts");
-    
+    Log(0, "Python plugin not available in verlihub-py mode");
     return false;
 }
 
 std::vector<std::string> HubContext::GetLoadedPythonScripts() const {
-    std::vector<std::string> result;
-    
-    if (!m_plugin_mgr) {
-        return result;
-    }
-    
-    nPlugin::cPluginBase* py_plugin = m_plugin_mgr->GetPlugin("Python");
-    if (!py_plugin) {
-        return result;
-    }
-    
-    // Similar to Lua scripts, Python script list requires plugin headers.
-    // Use !pyfiles command or REST API to list loaded scripts.
-    
-    return result;
+    return {};
 }
 
 }  // namespace nVerliHub

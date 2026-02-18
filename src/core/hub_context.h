@@ -40,7 +40,10 @@
 
 namespace nVerliHub {
 
-// Forward declarations - these will be refactored to not use globals
+// Forward declarations
+class NMDCHubServer;
+
+// Legacy forward declarations (kept for plugin API compatibility)
 namespace nSocket {
     class cServerDC;
     class cConnDC;
@@ -53,10 +56,6 @@ namespace nPlugin {
 namespace nUtils {
     class cICUConvert;
     class cMaxMindDB;
-}
-
-namespace nMySQL {
-    class cMySQL;
 }
 
 class cUser;
@@ -149,6 +148,20 @@ public:
     // Connection events
     virtual bool OnUserConnect(std::string_view nick, std::string_view ip) { return true; }
     virtual void OnUserDisconnect(std::string_view nick) {}
+    
+    // Authentication (verlihub-py: delegates to Python/database)
+    /**
+     * Validate a nickname during NMDC handshake.
+     * @return -1 = reject nick, 0 = allow as guest (no password),
+     *         1-10 = registered user at this class (password required)
+     */
+    virtual int OnValidateNick(std::string_view nick, std::string_view ip) { return 0; }
+    
+    /**
+     * Check a user's password.
+     * @return -1 = wrong password, 0+ = user class (password accepted)
+     */
+    virtual int OnCheckPassword(std::string_view nick, std::string_view password) { return -1; }
     
     // Login/logout
     virtual bool OnUserLogin(std::string_view nick, int user_class) { return true; }
@@ -319,12 +332,20 @@ public:
     // =========================================================================
     
     /**
-     * Get the server instance.
+     * Get the NMDC hub server instance (verlihub-py).
      * 
      * WARNING: Returns borrowed pointer. Do not store long-term.
      */
+    [[nodiscard]] NMDCHubServer* GetNMDCServer() const noexcept {
+        return m_nmdc_server;
+    }
+    
+    /**
+     * Get the legacy server instance (nullptr in verlihub-py mode).
+     * Kept for plugin API compatibility.
+     */
     [[nodiscard]] nSocket::cServerDC* GetServer() const noexcept {
-        return m_server;
+        return nullptr;
     }
     
     /**
@@ -696,15 +717,16 @@ private:
     std::atomic<int> m_shutdown_signal{0};
     
     // =========================================================================
-    // Owned Components (raw pointers for now - will be refactored)
-    // TODO: Change to unique_ptr once the classes are included
+    // Owned Components
     // =========================================================================
     
-    nSocket::cServerDC* m_server{nullptr};
+    /// Database-free NMDC hub server (verlihub-py)
+    NMDCHubServer* m_nmdc_server{nullptr};
+    
+    /// Plugin manager (optional, nullptr if no plugins)
     nPlugin::cVHPluginMgr* m_plugin_mgr{nullptr};
     nUtils::cICUConvert* m_icu_convert{nullptr};
     nUtils::cMaxMindDB* m_geoip{nullptr};
-    nMySQL::cMySQL* m_mysql{nullptr};
     
     // =========================================================================
     // Thread-Safe User Collection
@@ -745,6 +767,12 @@ private:
     // =========================================================================
     
     std::jthread m_timer_thread;
+    
+    // =========================================================================
+    // Server Event Loop Thread
+    // =========================================================================
+    
+    std::thread m_server_thread;
 };
 
 // ============================================================================

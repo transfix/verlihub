@@ -31,11 +31,15 @@ option(BUILD_CORE_TESTS "Build C++20 core library unit tests" ON)
 set(CORE_SOURCES
     hub_context.cpp
     thread_safe_collections.cpp
+    nmdc_protocol.cpp
+    nmdc_hub_server.cpp
 )
 
 set(CORE_HEADERS
     hub_context.h
     thread_safe_collections.h
+    nmdc_protocol.h
+    nmdc_hub_server.h
 )
 
 # Create the core library (static for linking into main app and SWIG module)
@@ -64,10 +68,13 @@ set_target_properties(verlihub_core_lib PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# Link against pthread on Unix
+# Link against pthread on Unix and the main verlihub shared library.
+# NMDCHubServer inherits from cAsyncSocketServer which lives in
+# libverlihub_so. We only use the socket infrastructure (no MySQL).
 if(UNIX)
     target_link_libraries(verlihub_core_lib PUBLIC pthread)
 endif()
+target_link_libraries(verlihub_core_lib PUBLIC libverlihub_so)
 
 # Install headers
 install(FILES ${CORE_HEADERS}

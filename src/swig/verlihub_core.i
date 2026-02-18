@@ -164,6 +164,19 @@ Attributes:
  *           print(f"User connected: {nick} from {ip}")
  *           return True  # Allow connection
  *       
+ *       def OnValidateNick(self, nick, ip):
+ *           # Check database for registered user
+ *           user = db.find_user(nick)
+ *           if user:
+ *               return user.user_class  # Registered, needs password
+ *           return 0  # Allow as guest
+ *       
+ *       def OnCheckPassword(self, nick, password):
+ *           user = db.find_user(nick)
+ *           if user and user.verify_password(password):
+ *               return user.user_class
+ *           return -1  # Wrong password
+ *       
  *       def OnChatMessage(self, nick, message):
  *           if "spam" in message.lower():
  *               return False  # Block message
@@ -178,6 +191,11 @@ Attributes:
 
 %typemap(directorout) bool {
     $result = PyObject_IsTrue($1);
+}
+
+// int return typemap for director methods (OnValidateNick, OnCheckPassword)
+%typemap(directorout) int {
+    $result = (int)PyLong_AsLong($1);
 }
 
 // ============================================================================
@@ -376,6 +394,7 @@ Returns:
 
 // Ignore internal methods not needed in Python
 %ignore nVerliHub::HubContext::GetServer;
+%ignore nVerliHub::HubContext::GetNMDCServer;
 %ignore nVerliHub::HubContext::GetPluginManager;
 %ignore nVerliHub::HubContext::GetICUConverter;
 %ignore nVerliHub::HubContext::GetGeoIP;

@@ -37,32 +37,32 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan manager.
     
     Handles startup and shutdown of:
-    - Database connection
-    - Hub context (C++ core)
+    - Database connection (Python-managed: SQLite, PostgreSQL, or MySQL)
+    - Hub context (C++ core, database-free NMDC protocol server)
     """
     logger.info("Starting Thin Verlihub...")
     
     # Get configuration directory from environment or use default
     config_dir = os.getenv("VH_CONFIG_DIR", "/etc/verlihub")
     
-    # Initialize database
+    # Initialize database (Python-side, supports any backend)
     try:
-        if Path(config_dir).exists() and (Path(config_dir) / "dbconfig.xml").exists():
-            logger.info("Loading database config from %s", config_dir)
-            await init_database(config_dir=config_dir)
-        else:
-            # Use environment variables for database config
-            logger.info("Using environment variables for database config")
-            config = DatabaseConfig()
-            await init_database(config=config)
+        # Use environment variables for database config
+        logger.info("Using environment variables for database config")
+        config = DatabaseConfig()
+        await init_database(config=config)
         logger.info("Database connected")
     except Exception as e:
         logger.error("Failed to connect to database: %s", e)
         # Continue anyway - API will work with limited functionality
     
     # Initialize hub context (if SWIG module is available)
+    # The C++ core is now database-free - it only handles NMDC protocol
     try:
         from verlihub.core import HubContext
+        
+        # Ensure config directory exists
+        Path(config_dir).mkdir(parents=True, exist_ok=True)
         
         ctx = HubContext.create(config_dir)
         if ctx is not None:

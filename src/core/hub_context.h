@@ -32,7 +32,7 @@
 #include <thread>
 #include <stop_token>
 #include <source_location>
-#include <format>
+#include <sstream>
 #include <chrono>
 #include <span>
 
@@ -665,13 +665,14 @@ public:
              std::source_location loc = std::source_location::current()) const;
     
     /**
-     * Log with format string (C++20 std::format).
+     * Log with formatted arguments (streams-based, GCC 11+ compatible).
      */
     template<typename... Args>
-    void LogFmt(int level, std::format_string<Args...> fmt, Args&&... args,
-                std::source_location loc = std::source_location::current()) const {
+    void LogFmt(int level, Args&&... args) const {
         if (level <= m_log_level.load(std::memory_order_relaxed)) {
-            Log(level, std::format(fmt, std::forward<Args>(args)...), loc);
+            std::ostringstream oss;
+            (oss << ... << std::forward<Args>(args));
+            Log(level, oss.str());
         }
     }
 #endif  // SWIG

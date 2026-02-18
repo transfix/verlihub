@@ -68,7 +68,7 @@ target_include_directories(verlihub_core
 target_link_libraries(verlihub_core
     PRIVATE
         verlihub_core_lib  # The refactored core library
-        verlihub           # Main verlihub library for plugin management
+        libverlihub_so     # Main verlihub shared library for plugin management
         Python3::Python
 )
 

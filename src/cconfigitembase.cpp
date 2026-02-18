@@ -176,10 +176,19 @@ DefineReadFromStreamMethod(bool,Bool);
 DefineReadFromStreamMethod(int,Int);
 DefineReadFromStreamMethod(unsigned,UInt);
 DefineReadFromStreamMethod(char,Char);
-DefineReadFromStreamMethod(char*,PChar);
 DefineReadFromStreamMethod(double,Double);
 DefineReadFromStreamMethod(long,Long);
 DefineReadFromStreamMethod(unsigned long,ULong);
+
+// char* overload: operator>>(istream&, char*) was removed in C++20,
+// so we read into a std::string and then copy via ConvertFrom.
+std::istream &cConfigItemBasePChar::ReadFromStream(std::istream& is)
+{
+	string tmp;
+	is >> tmp;
+	this->ConvertFrom(tmp);
+	return is;
+}
 
 std::istream &cConfigItemBaseInt64::ReadFromStream(std::istream& is)
 {

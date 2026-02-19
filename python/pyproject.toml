@@ -39,6 +39,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "httpx>=0.26.0",  # For HubClient remote API access
     "jinja2>=3.1.0",  # For dashboard templates
+    "python-multipart>=0.0.6",  # For form parsing in FastAPI/Starlette
     "pyyaml>=6.0.0",  # For YAML configuration files
 ]
 

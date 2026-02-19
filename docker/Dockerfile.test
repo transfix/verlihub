@@ -40,6 +40,7 @@ RUN pip install --no-cache-dir \
     python-jose>=3.3.0 \
     pyyaml>=6.0 \
     requests>=2.31.0 \
+    python-multipart>=0.0.6 \
     httpx>=0.26.0
 
 # Install the verlihub package in editable mode

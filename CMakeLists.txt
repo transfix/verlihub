@@ -62,6 +62,7 @@ option(USE_CUSTOM_AUTOSPRINTF "Build using custom internal autosprintf implement
 OPTION(DEFINE_DEBUG "Build using debugging code" OFF)
 option(USE_TLS_PROXY "Build Go TLS proxy library" OFF)
 option(USE_FEARTLS_PROXY "Use FearTLS proxy library" OFF)
+option(COVERAGE "Build with code coverage instrumentation (gcov)" OFF)
 
 if(USE_TLS_PROXY AND USE_FEARTLS_PROXY)
 	message(FATAL_ERROR "[ ER ] You can't have both USE_TLS_PROXY and USE_FEARTLS_PROXY at the same time")
@@ -254,7 +255,11 @@ IF(HAVE_ALPINE)
 	# https://github.com/golang/go/issues/13492
 ENDIF(HAVE_ALPINE)
 
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O3 -Wno-overloaded-virtual") # todo: -Woverloaded-virtual -pthread
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-overloaded-virtual") # todo: -Woverloaded-virtual -pthread
+
+if(NOT COVERAGE)
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+endif(NOT COVERAGE)
 
 IF(DEFINE_DEBUG)
 	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g") # -Wextra
@@ -262,6 +267,15 @@ IF(DEFINE_DEBUG)
 ELSE(DEFINE_DEBUG)
 	SET(CMAKE_BUILD_TYPE "RELEASE")
 ENDIF(DEFINE_DEBUG)
+
+# Coverage instrumentation (gcov/lcov)
+if(COVERAGE)
+	message(STATUS "[ OK ] Building with code coverage instrumentation")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g --coverage -fprofile-arcs -ftest-coverage -O0")
+	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g --coverage -fprofile-arcs -ftest-coverage -O0")
+	SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
+	SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
+endif(COVERAGE)
 
 SET(VERLIHUB_USE_LIBS "-lverlihub -lvhapi")
 

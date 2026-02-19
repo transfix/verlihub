@@ -62,6 +62,7 @@ show_help() {
     echo "  -k PATTERN      Only run tests matching PATTERN"
     echo "  --no-build      Skip building Docker images"
     echo "  --keep          Keep containers running after tests"
+    echo "  --coverage      Collect pytest-cov coverage reports (HTML + XML)"
     echo ""
     echo -e "${YELLOW}Database Support:${NC}"
     echo "  Original Verlihub: MySQL only"
@@ -164,11 +165,19 @@ run_py_unit_tests() {
     [ -n "$VERBOSE" ] && pytest_args="-vvs --tb=long"
     [ -n "$PATTERN" ] && pytest_args="$pytest_args -k '$PATTERN'"
     
+    local cov_vol_args=()
+    local cov_pytest_args=""
+    if [ "$COVERAGE_MODE" = "1" ]; then
+        cov_vol_args=(-v "${COVERAGE_DIR}:/app/coverage-reports")
+        cov_pytest_args="--cov=verlihub --cov-config=python/pyproject.toml --cov-report=html:/app/coverage-reports/sqlite --cov-report=xml:/app/coverage-reports/sqlite-coverage.xml"
+    fi
+
     docker compose -f "$COMPOSE_TEST" run --rm \
         -e VH_DB_BACKEND=sqlite \
         -e PYTEST_ARGS="$pytest_args" \
+        "${cov_vol_args[@]}" \
         mysql-tests \
-        pytest python/tests/ $pytest_args \
+        pytest python/tests/ $pytest_args $cov_pytest_args \
             --ignore=python/tests/test_nmdc_stress.py \
             --ignore=python/tests/test_benchmarks.py
     
@@ -187,7 +196,20 @@ run_py_mysql_tests() {
     
     # Run tests
     local exit_code=0
-    docker compose -f "$COMPOSE_TEST" run --rm mysql-tests || exit_code=$?
+    if [ "$COVERAGE_MODE" = "1" ]; then
+        docker compose -f "$COMPOSE_TEST" run --rm \
+            -v "${COVERAGE_DIR}:/app/coverage-reports" \
+            mysql-tests \
+            pytest python/tests/ -v --tb=short \
+                --ignore=python/tests/test_nmdc_stress.py \
+                --ignore=python/tests/test_benchmarks.py \
+                --cov=verlihub --cov-config=python/pyproject.toml \
+                --cov-report=html:/app/coverage-reports/mysql \
+                --cov-report=xml:/app/coverage-reports/mysql-coverage.xml \
+            || exit_code=$?
+    else
+        docker compose -f "$COMPOSE_TEST" run --rm mysql-tests || exit_code=$?
+    fi
     
     if [ "$KEEP_RUNNING" != "1" ]; then
         docker compose -f "$COMPOSE_TEST" stop mysql
@@ -214,7 +236,20 @@ run_py_postgres_tests() {
     
     # Run tests
     local exit_code=0
-    docker compose -f "$COMPOSE_TEST" run --rm postgres-tests || exit_code=$?
+    if [ "$COVERAGE_MODE" = "1" ]; then
+        docker compose -f "$COMPOSE_TEST" run --rm \
+            -v "${COVERAGE_DIR}:/app/coverage-reports" \
+            postgres-tests \
+            pytest python/tests/ -v --tb=short \
+                --ignore=python/tests/test_nmdc_stress.py \
+                --ignore=python/tests/test_benchmarks.py \
+                --cov=verlihub --cov-config=python/pyproject.toml \
+                --cov-report=html:/app/coverage-reports/postgres \
+                --cov-report=xml:/app/coverage-reports/postgres-coverage.xml \
+            || exit_code=$?
+    else
+        docker compose -f "$COMPOSE_TEST" run --rm postgres-tests || exit_code=$?
+    fi
     
     if [ "$KEEP_RUNNING" != "1" ]; then
         docker compose -f "$COMPOSE_TEST" stop postgres
@@ -384,6 +419,8 @@ PATTERN=""
 NO_BUILD=""
 KEEP_RUNNING=""
 RUN_ORIGINAL=""
+COVERAGE_MODE=""
+COVERAGE_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -407,6 +444,10 @@ while [[ $# -gt 0 ]]; do
             RUN_ORIGINAL=1
             shift
             ;;
+        --coverage)
+            COVERAGE_MODE=1
+            shift
+            ;;
         *)
             log_error "Unknown option: $1"
             show_help
@@ -414,6 +455,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Set up coverage directory if coverage mode is enabled
+if [ "$COVERAGE_MODE" = "1" ]; then
+    COVERAGE_DIR="${PROJECT_DIR}/build/coverage-reports"
+    mkdir -p "$COVERAGE_DIR"
+    log_info "Coverage mode enabled — reports will be saved to $COVERAGE_DIR"
+fi
 
 # Check Docker availability
 check_docker

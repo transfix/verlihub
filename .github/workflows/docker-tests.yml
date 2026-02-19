@@ -24,22 +24,40 @@ jobs:
           docker system prune -f 2>/dev/null || true
 
       - name: Run verlihub-py unit tests (SQLite)
-        run: ./docker_test_launcher.sh py-unit
+        run: ./docker_test_launcher.sh py-unit --coverage
 
       - name: Run verlihub-py MySQL tests
-        run: ./docker_test_launcher.sh py-mysql
+        run: ./docker_test_launcher.sh py-mysql --coverage
 
       - name: Run verlihub-py PostgreSQL tests
-        run: ./docker_test_launcher.sh py-postgres
+        run: ./docker_test_launcher.sh py-postgres --coverage
 
       - name: Run SQL semantics comparison
         run: ./docker_test_launcher.sh sql-semantics
 
-      - name: Upload logs on failure
+      - name: Upload Python coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-reports
+          path: build/coverage-reports/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Collect logs on failure
         if: failure()
         run: |
           mkdir -p /tmp/ci-logs
           docker compose -f docker/docker-compose.test.yml logs > /tmp/ci-logs/test-compose.log 2>&1 || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-logs
+          path: /tmp/ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Clean up
         if: always()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,11 +116,14 @@ async def register(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invite code has already been used",
             )
-        if invite.expires_at and invite.expires_at < utc_now():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invite code has expired",
-            )
+        if invite.expires_at:
+            # Normalise to naive UTC for comparison (SQLite returns naive datetimes)
+            exp = invite.expires_at.replace(tzinfo=None) if invite.expires_at.tzinfo else invite.expires_at
+            if exp < datetime.utcnow():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invite code has expired",
+                )
         
         # Use the invite's max_class (never exceed what the invite allows)
         user_class = invite.max_class

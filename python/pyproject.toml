@@ -101,3 +101,34 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["verlihub"]
+concurrency = ["greenlet", "thread"]
+omit = [
+    # SWIG-generated boilerplate — not meaningful for coverage
+    "*/verlihub_core.py",
+    "*/_verlihub_core*",
+    # build artifacts
+    "*/build/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.",
+    "raise NotImplementedError",
+    "pass",
+    "\\.\\.\\.",
+]
+omit = [
+    "*/verlihub_core.py",
+    "*/_verlihub_core*",
+]
+show_missing = true
+skip_covered = false
+fail_under = 0
+
+[tool.coverage.html]
+directory = "../build/coverage_html/python"

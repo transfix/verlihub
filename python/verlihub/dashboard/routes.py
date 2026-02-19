@@ -429,7 +429,7 @@ async def bans_page(
     
     # Get bans from database
     from verlihub.models.database import get_async_session
-    from verlihub.models import BanItem
+    from verlihub.models import Ban
     from sqlmodel import select
     
     per_page = 50
@@ -437,10 +437,10 @@ async def bans_page(
     
     try:
         async with get_async_session() as session:
-            query = select(BanItem)
+            query = select(Ban)
             if search:
                 query = query.where(
-                    BanItem.nick.contains(search) | BanItem.ip.contains(search)
+                    Ban.nick.contains(search) | Ban.ip.contains(search)
                 )
             query = query.offset(offset).limit(per_page)
             result = await session.execute(query)

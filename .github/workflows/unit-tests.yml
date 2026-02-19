@@ -27,13 +27,15 @@ jobs:
             lua5.4 liblua5.4-dev python3-dev \
             libgtest-dev libgmock-dev \
             libcurl4-openssl-dev \
-            rapidjson-dev swig
+            rapidjson-dev swig \
+            lcov
 
       - name: Configure CMake
         run: |
           mkdir -p build && cd build
           cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCOVERAGE=ON \
+            -DDEFINE_DEBUG=ON \
             -DWITH_PLUGINS=ON \
             -DWITH_LUA=ON \
             -DWITH_PYTHON=ON \
@@ -54,3 +56,54 @@ jobs:
         run: |
           cd build
           ctest --output-on-failure --label-regex "integration" --timeout 180 || true
+
+      - name: Generate C++ coverage report
+        if: always()
+        run: |
+          cd build
+          LCOV_COMPAT="--ignore-errors mismatch,gcov,negative,unused"
+
+          # Capture test coverage data
+          lcov --capture --directory . \
+            --output-file coverage.info \
+            $LCOV_COMPAT --quiet
+
+          # Filter out system headers, test files, SWIG boilerplate
+          lcov --remove coverage.info \
+            '/usr/*' '*/build/*' '*/swig/*' '*/test_*' \
+            --output-file coverage_filtered.info \
+            $LCOV_COMPAT --quiet
+
+          # Extract only project source files
+          lcov --extract coverage_filtered.info \
+            '*/src/*.cpp' '*/src/*.h' \
+            '*/src/core/*.cpp' '*/src/core/*.h' \
+            '*/plugins/*/*.cpp' '*/plugins/*/*.h' \
+            --output-file coverage_final.info \
+            $LCOV_COMPAT --quiet 2>/dev/null \
+            || cp coverage_filtered.info coverage_final.info
+
+          # Generate HTML report
+          mkdir -p coverage_html/cpp
+          genhtml coverage_final.info \
+            --output-directory coverage_html/cpp \
+            --title "Verlihub C++ Coverage" \
+            --legend --branch-coverage --function-coverage \
+            --demangle-cpp \
+            --prefix "${{ github.workspace }}" \
+            $LCOV_COMPAT --quiet
+
+          # Print summary
+          echo "### C++ Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
+          lcov --summary coverage_final.info $LCOV_COMPAT 2>&1 \
+            | grep -E "lines|functions|branches" \
+            | sed 's/^/  /' >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload C++ coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-coverage-report
+          path: build/coverage_html/
+          retention-days: 30
+          if-no-files-found: warn

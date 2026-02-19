@@ -33,12 +33,21 @@ jobs:
       - name: Run C++ unit tests (Docker)
         run: ./run_integration_tests.sh --unit
 
-      - name: Upload logs on failure
+      - name: Collect logs on failure
         if: failure()
         run: |
           mkdir -p /tmp/ci-logs
           docker compose logs > /tmp/ci-logs/docker-compose.log 2>&1 || true
           docker compose --profile multi logs >> /tmp/ci-logs/docker-compose.log 2>&1 || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: /tmp/ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Clean up
         if: always()

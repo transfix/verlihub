@@ -175,9 +175,23 @@ async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
     """
     database = await init_database(config=db_config)
     
+    # For persistent backends (MySQL/PostgreSQL), drop and recreate tables
+    # to ensure test isolation even if a previous run left stale data.
+    # SQLite in-memory databases are always fresh, so this is not needed.
+    if not db_config.use_sqlite:
+        async with database._engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.drop_all)
+            await conn.run_sync(SQLModel.metadata.create_all)
+    
     yield database
     
-    # Cleanup
+    # Drop all tables during teardown for persistent backends to
+    # prevent data from leaking into the next test.
+    if not db_config.use_sqlite and database._engine is not None:
+        async with database._engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.drop_all)
+    
+    # Cleanup engine
     await close_database()
 
 

@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.??* 2>/dev/null || true
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -58,7 +61,7 @@ jobs:
           ctest --output-on-failure --label-regex "integration" --timeout 180 || true
 
       - name: Generate C++ coverage report
-        if: always()
+        if: success()
         run: |
           cd build
 
@@ -107,7 +110,7 @@ jobs:
             | sed 's/^/  /' >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload C++ coverage report
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: cpp-coverage-report

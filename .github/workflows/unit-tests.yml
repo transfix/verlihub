@@ -61,7 +61,14 @@ jobs:
         if: always()
         run: |
           cd build
-          LCOV_COMPAT="--ignore-errors mismatch,gcov,negative,unused"
+
+          # lcov 2.x supports --ignore-errors with extended categories; 1.x does not
+          LCOV_VERSION=$(lcov --version | grep -oP '\d+' | head -1)
+          if [ "$LCOV_VERSION" -ge 2 ] 2>/dev/null; then
+            LCOV_COMPAT="--ignore-errors mismatch,gcov,negative,unused"
+          else
+            LCOV_COMPAT=""
+          fi
 
           # Capture test coverage data
           lcov --capture --directory . \

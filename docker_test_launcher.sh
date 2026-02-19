@@ -161,6 +161,8 @@ run_py_unit_tests() {
     log_info "Running verlihub-py unit tests (SQLite)..."
     cd "$PROJECT_DIR"
     
+    build_images
+    
     local pytest_args="-v --tb=short"
     [ -n "$VERBOSE" ] && pytest_args="-vvs --tb=long"
     [ -n "$PATTERN" ] && pytest_args="$pytest_args -k '$PATTERN'"

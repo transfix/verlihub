@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from enum import IntEnum
 from typing import Optional
 
+from sqlalchemy import DateTime as SADateTime
 from sqlmodel import Field, Relationship, SQLModel
+
+# Timezone-aware datetime column type for PostgreSQL compatibility.
+# asyncpg is strict: TIMESTAMP WITHOUT TIME ZONE rejects aware datetimes.
+_TZDateTime = SADateTime(timezone=True)
 
 
 def utc_now() -> datetime:
@@ -57,11 +62,11 @@ class RegUserBase(SQLModel):
     nick: str = Field(index=True, max_length=64)
     login_pwd: str = Field(default="", max_length=128)  # Hashed password
     login_last_ip: str = Field(default="", max_length=45)  # IPv4/IPv6
-    login_last: Optional[datetime] = None
+    login_last: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     login_count: int = 0
     user_class: int = Field(default=UserClass.REGISTERED)
     user_class_ex: int = 0
-    reg_date: datetime = Field(default_factory=utc_now)
+    reg_date: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
     reg_op: str = Field(default="", max_length=64)
     authorised: bool = True
     hide_share: bool = False
@@ -123,11 +128,11 @@ class BanBase(SQLModel):
     ban_type: int = Field(default=BanType.IP)
     host: str = Field(default="", max_length=255)
     share_size: int = 0
-    date_start: datetime = Field(default_factory=utc_now)
-    date_limit: Optional[datetime] = None
+    date_start: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    date_limit: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     nick_op: str = Field(default="", max_length=64)
     reason: str = Field(default="", max_length=512)
-    last_hit: Optional[datetime] = None
+    last_hit: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     this_kick: bool = False
 
 
@@ -189,7 +194,7 @@ class KickBase(SQLModel):
     ip: str = Field(default="", max_length=45)
     op: str = Field(max_length=64, index=True)
     reason: str = Field(default="", max_length=512)
-    time: datetime = Field(default_factory=utc_now)
+    time: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
     drop: bool = False  # Dropped from hub (vs. just warned)
 
 
@@ -292,9 +297,9 @@ class InviteCodeBase(SQLModel):
     max_class: int = Field(default=UserClass.REGISTERED)  # Max class this invite can grant
     used: bool = False
     used_by: Optional[str] = Field(default=None, max_length=64)
-    used_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=utc_now)
-    expires_at: Optional[datetime] = None  # None = never expires
+    used_at: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
+    created_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    expires_at: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)  # None = never expires
 
 
 class InviteCode(InviteCodeBase, table=True):

@@ -17,6 +17,7 @@ from typing import Optional
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import SQLModel
 
 # Add package to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -65,6 +66,19 @@ def get_postgres_config() -> Optional[DatabaseConfig]:
 
 
 # =============================================================================
+# Helpers
+# =============================================================================
+
+async def _clean_tables(db: Database, config: DatabaseConfig) -> None:
+    """Delete all rows from every table for persistent backends."""
+    if config.db_type == "sqlite":
+        return  # in-memory DB is always fresh
+    async with db._engine.begin() as conn:
+        for table in reversed(SQLModel.metadata.sorted_tables):
+            await conn.execute(table.delete())
+
+
+# =============================================================================
 # Test Cases
 # =============================================================================
 
@@ -78,6 +92,8 @@ class TestCaseInsensitiveSearch:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
                 # Create users with different case
                 users = [
@@ -123,34 +139,46 @@ class TestNullHandling:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
-                # Create user with NULL email
-                user = RegUser(
+                # Create user with NULL login_last (a real nullable datetime field)
+                user_null = RegUser(
                     nick="nulltest",
                     login_pwd="pwd",
                     user_class=UserClass.REGISTERED,
                     reg_date=datetime.now(timezone.utc),
                     reg_op="test",
-                    email=None,  # Explicit NULL
+                    login_last=None,  # Explicit NULL
                 )
-                session.add(user)
+                # Create user with non-NULL login_last
+                user_set = RegUser(
+                    nick="settest",
+                    login_pwd="pwd",
+                    user_class=UserClass.REGISTERED,
+                    reg_date=datetime.now(timezone.utc),
+                    reg_op="test",
+                    login_last=datetime.now(timezone.utc),
+                )
+                session.add(user_null)
+                session.add(user_set)
                 await session.commit()
                 
-                # Query for NULL email
+                # Query for NULL login_last
                 from sqlalchemy import select
                 
-                stmt = select(RegUser).where(RegUser.email.is_(None))
+                stmt = select(RegUser).where(RegUser.login_last.is_(None))
                 result = await session.execute(stmt)
                 null_users = result.scalars().all()
                 
-                # Query for non-NULL email
-                stmt = select(RegUser).where(RegUser.email.isnot(None))
+                # Query for non-NULL login_last
+                stmt = select(RegUser).where(RegUser.login_last.isnot(None))
                 result = await session.execute(stmt)
                 non_null_users = result.scalars().all()
                 
                 results["null_count"] = len(null_users)
                 results["non_null_count"] = len(non_null_users)
-                results["passed"] = len(null_users) >= 1
+                results["passed"] = len(null_users) == 1 and len(non_null_users) == 1
                 
         finally:
             await close_database()
@@ -168,6 +196,8 @@ class TestTimestampHandling:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
                 # Create user with specific timestamp
                 test_time = datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone.utc)
@@ -219,6 +249,8 @@ class TestBooleanHandling:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
                 # Create ban with boolean-like flags
                 ban = Ban(
@@ -258,11 +290,14 @@ class TestStringLength:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
-                # Test with various string lengths
+                # Test with various string lengths (all within the 64-char
+                # nick column limit so MySQL doesn't reject them)
                 short_nick = "a" * 10
-                medium_nick = "b" * 50
-                long_nick = "c" * 200
+                medium_nick = "b" * 40
+                long_nick = "c" * 64
                 
                 users = []
                 for nick in [short_nick, medium_nick, long_nick]:
@@ -287,8 +322,8 @@ class TestStringLength:
                 results["long_length"] = len(users[2].nick)
                 results["passed"] = (
                     results["short_length"] == 10 and
-                    results["medium_length"] == 50 and
-                    results["long_length"] == 200
+                    results["medium_length"] == 40 and
+                    results["long_length"] == 64
                 )
                 
         finally:
@@ -307,6 +342,8 @@ class TestUnicodeHandling:
         results = {"backend": config.db_type}
         
         try:
+            await _clean_tables(db, config)
+
             async with db._session_factory() as session:
                 # Test various Unicode strings
                 test_strings = [

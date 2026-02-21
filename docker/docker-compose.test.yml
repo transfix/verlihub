@@ -211,6 +211,16 @@ services:
     environment:
       VH_INTEGRATION_TESTS: "1"
       PYTHONDONTWRITEBYTECODE: "1"
+      VH_MYSQL_HOST: mysql
+      VH_MYSQL_PORT: "3306"
+      VH_MYSQL_USER: verlihub
+      VH_MYSQL_PASSWORD: verlihub
+      VH_MYSQL_DATABASE: verlihub_test
+      VH_POSTGRES_HOST: postgres
+      VH_POSTGRES_PORT: "5432"
+      VH_POSTGRES_USER: verlihub
+      VH_POSTGRES_PASSWORD: verlihub
+      VH_POSTGRES_DATABASE: verlihub_test
     entrypoint: /bin/bash
     command:
       - -c

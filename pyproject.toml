@@ -2,6 +2,18 @@
 # Root pyproject.toml — builds the verlihub Python package WITH native
 # C++ core (_verlihub_core.so) via scikit-build-core + SWIG.
 #
+# Install from a clone (compiles C++ core from source):
+#   pip install .              # regular install
+#   pip install -e .           # editable (dev) install
+#   poetry install             # poetry editable install
+#
+# The build requires system C++ libraries (OpenSSL, MySQL/MariaDB,
+# libmaxminddb, ICU, PCRE, zlib, gettext) plus cmake, swig, g++.
+# On Debian/Ubuntu:
+#   sudo apt install cmake swig g++ libssl-dev libmysqlclient-dev \
+#     libmaxminddb-dev libicu-dev libpcre3-dev zlib1g-dev gettext \
+#     libasprintf-dev
+#
 # For pure-Python development without compiling C++, the lighter
 # python/pyproject.toml (setuptools-based) can still be used.
 #
@@ -85,9 +97,20 @@ wheel.packages = ["python/verlihub"]
 wheel.install-dir = "verlihub"
 install.components = ["PythonModule"]
 
+# Editable installs: rebuild the C++ module when sources change
+editable.mode = "redirect"
+editable.rebuild = true
+
 [tool.scikit-build.cmake.define]
 BUILD_PYTHON_BINDINGS = "ON"
 PYTHON_WHEEL_BUILD = "ON"
+
+# --- Poetry settings ---
+# Poetry uses these to locate packages for editable installs (poetry install).
+# The actual wheel build is handled by scikit-build-core above.
+
+[tool.poetry]
+packages = [{include = "verlihub", from = "python"}]
 
 # --- tool configs ---
 

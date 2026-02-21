@@ -1,0 +1,79 @@
+#
+# Build wheels + sdist for verlihub-py and publish to PyPI
+#
+# Triggers:
+#   - Manual dispatch (workflow_dispatch)
+#   - Git tag push (v*)
+#
+# verlihub-py is a pure-Python package (the optional SWIG core
+# extension is NOT bundled — it's installed separately via CMake).
+# A simple `python -m build` is sufficient; no cibuildwheel needed.
+#
+name: Wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Build wheel + sdist ────────────────────────────────────────
+  build:
+    name: Build wheel & sdist
+    runs-on: [self-hosted, linux, x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel & sdist
+        run: python -m build --outdir dist
+        working-directory: python
+
+      - name: Verify wheel contents
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          python -c "import verlihub; print(f'verlihub {verlihub.__version__} OK')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: python/dist/*
+
+  # ─── Publish to PyPI (only on tag push) ─────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: [build]
+    runs-on: [self-hosted, linux, x64]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    # PyPI trusted publishing (OIDC) — no API tokens needed
+    # Configure at https://pypi.org/manage/project/verlihub/settings/publishing/
+    permissions:
+      id-token: write
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/verlihub
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

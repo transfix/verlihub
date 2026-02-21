@@ -94,7 +94,7 @@ add_custom_command(TARGET verlihub_core POST_BUILD
     COMMENT "SWIG Python module built: verlihub_core"
 )
 
-# Install the Python module
+# Install the Python module (system-wide, for non-wheel builds)
 install(TARGETS verlihub_core
     LIBRARY DESTINATION ${Python3_SITEARCH}/verlihub
 )
@@ -102,6 +102,18 @@ install(TARGETS verlihub_core
 install(FILES 
     ${CMAKE_BINARY_DIR}/python/verlihub/verlihub_core.py
     DESTINATION ${Python3_SITEARCH}/verlihub
+)
+
+# Install for Python wheel (scikit-build-core picks up this component)
+install(TARGETS verlihub_core
+    COMPONENT PythonModule
+    LIBRARY DESTINATION verlihub
+)
+
+install(FILES
+    ${CMAKE_BINARY_DIR}/python/verlihub/verlihub_core.py
+    COMPONENT PythonModule
+    DESTINATION verlihub
 )
 
 # Add Python SWIG wrapper tests

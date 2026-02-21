@@ -242,32 +242,44 @@ endif()
 
 target_link_libraries(libverlihub_so ${VERLIHUB_LIBS}) # pthread dl execinfo
 
-add_library(vhapi_so SHARED "script_api.cpp")
-set_target_properties(vhapi_so PROPERTIES OUTPUT_NAME "vhapi")
-target_link_libraries(vhapi_so libverlihub_so)
+# ----------------------------------------------------------------------------------------------------
+# Python wheel build: install libverlihub.so into the wheel so auditwheel can
+# bundle it (and its transitive deps) alongside _verlihub_core.so.
 
-add_executable(verlihub "verlihub.cpp")
-target_link_libraries(verlihub libverlihub_so)
+if(PYTHON_WHEEL_BUILD)
+	install(TARGETS libverlihub_so
+		COMPONENT PythonModule
+		LIBRARY DESTINATION verlihub
+	)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
-# generate verlihub_config
+# Targets only needed for the full server install (not the Python wheel)
 
-MESSAGE(STATUS "[ .. ] Generating configuration executable: ${CMAKE_BINARY_DIR}/verlihub_config")
-STRING(REPLACE ";" " " VERLIHUB_USE_LIBS "${VERLIHUB_LIBS}")
-string(STRIP "${VERLIHUB_USE_LIBS}" VERLIHUB_USE_LIBS)
-CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/verlihub_config.cm" "${CMAKE_BINARY_DIR}/verlihub_config")
+if(NOT PYTHON_WHEEL_BUILD)
+	add_library(vhapi_so SHARED "script_api.cpp")
+	set_target_properties(vhapi_so PROPERTIES OUTPUT_NAME "vhapi")
+	target_link_libraries(vhapi_so libverlihub_so)
 
-# ----------------------------------------------------------------------------------------------------
+	add_executable(verlihub "verlihub.cpp")
+	target_link_libraries(verlihub libverlihub_so)
 
-install(TARGETS vhapi_so libverlihub_so verlihub RUNTIME DESTINATION "bin" LIBRARY DESTINATION ${LIBDIR})
+	# generate verlihub_config
+	MESSAGE(STATUS "[ .. ] Generating configuration executable: ${CMAKE_BINARY_DIR}/verlihub_config")
+	STRING(REPLACE ";" " " VERLIHUB_USE_LIBS "${VERLIHUB_LIBS}")
+	string(STRIP "${VERLIHUB_USE_LIBS}" VERLIHUB_USE_LIBS)
+	CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/verlihub_config.cm" "${CMAKE_BINARY_DIR}/verlihub_config")
 
-INSTALL(
-	FILES "${VERLIHUB_BINARY_DIR}/verlihub_config"
-	DESTINATION "bin"
-	PERMISSIONS OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
-	WORLD_READ WORLD_EXECUTE
-)
+	install(TARGETS vhapi_so libverlihub_so verlihub RUNTIME DESTINATION "bin" LIBRARY DESTINATION ${LIBDIR})
 
-INSTALL(FILES ${VERLIHUB_HDRS} "${VERLIHUB_BINARY_DIR}/dirsettings.h" DESTINATION "include/${PROJECT_NAME}")
+	INSTALL(
+		FILES "${VERLIHUB_BINARY_DIR}/verlihub_config"
+		DESTINATION "bin"
+		PERMISSIONS OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+		WORLD_READ WORLD_EXECUTE
+	)
+
+	INSTALL(FILES ${VERLIHUB_HDRS} "${VERLIHUB_BINARY_DIR}/dirsettings.h" DESTINATION "include/${PROJECT_NAME}")
+endif()
 
 # end of file

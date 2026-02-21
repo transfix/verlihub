@@ -1,13 +1,13 @@
 #
-# Build wheels + sdist for verlihub-py and publish to PyPI
+# Build manylinux wheels with cibuildwheel + publish to PyPI
 #
 # Triggers:
 #   - Manual dispatch (workflow_dispatch)
 #   - Git tag push (v*)
 #
-# verlihub-py is a pure-Python package (the optional SWIG core
-# extension is NOT bundled — it's installed separately via CMake).
-# A simple `python -m build` is sufficient; no cibuildwheel needed.
+# The wheel build compiles the full verlihub C++ core + SWIG bindings
+# inside the manylinux container.  auditwheel repair bundles all
+# non-standard shared libraries (libverlihub, libmysqlclient, etc.).
 #
 name: Wheels
 
@@ -22,9 +22,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ─── Build wheel + sdist ────────────────────────────────────────
-  build:
-    name: Build wheel & sdist
+  # ─── Build wheels ───────────────────────────────────────────────
+  build-wheels:
+    name: Wheel ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: [self-hosted, linux, x64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.23.0
+
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          # Build for CPython 3.10-3.13 on x86_64
+          CIBW_BUILD: "cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
+          CIBW_SKIP: "*-musllinux_*"
+
+          # Use manylinux_2_28 image (AlmaLinux 8 based)
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+
+          # Install C++ build dependencies inside the container
+          CIBW_BEFORE_ALL_LINUX: >
+            dnf install -y epel-release &&
+            dnf install -y
+            openssl-devel zlib-devel
+            mariadb-connector-c-devel
+            libmaxminddb-devel
+            libicu-devel
+            pcre-devel
+            gettext-devel
+            libxcrypt-devel
+            swig cmake gcc-c++ ninja-build
+
+          # auditwheel repair is run by cibuildwheel automatically
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+
+          # Quick smoke test inside the container
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_TEST_COMMAND: >
+            python -c "from verlihub import verlihub_core; print('verlihub_core OK')"
+
+          # Tell scikit-build-core to build the SWIG module
+          CIBW_ENVIRONMENT: >
+            CMAKE_ARGS="-DBUILD_PYTHON_BINDINGS=ON -DPYTHON_WHEEL_BUILD=ON -DUSE_CUSTOM_AUTOSPRINTF=ON"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  # ─── Build source distribution ──────────────────────────────────
+  build-sdist:
+    name: Source distribution
     runs-on: [self-hosted, linux, x64]
 
     steps:
@@ -34,27 +96,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: python -m pip install --upgrade pip build
-
-      - name: Build wheel & sdist
-        run: python -m build --outdir dist
-        working-directory: python
-
-      - name: Verify wheel contents
-        run: |
-          python -m pip install --force-reinstall dist/*.whl
-          python -c "import verlihub; print(f'verlihub {verlihub.__version__} OK')"
+      - name: Build sdist
+        run: python -m pip install build && python -m build --sdist --outdir dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: python/dist/*
+          name: sdist
+          path: dist/*.tar.gz
 
   # ─── Publish to PyPI (only on tag push) ─────────────────────────
   publish:
     name: Publish to PyPI
-    needs: [build]
+    needs: [build-wheels, build-sdist]
     runs-on: [self-hosted, linux, x64]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
@@ -70,8 +123,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
           path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

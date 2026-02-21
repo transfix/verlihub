@@ -63,6 +63,7 @@ OPTION(DEFINE_DEBUG "Build using debugging code" OFF)
 option(USE_TLS_PROXY "Build Go TLS proxy library" OFF)
 option(USE_FEARTLS_PROXY "Use FearTLS proxy library" OFF)
 option(COVERAGE "Build with code coverage instrumentation (gcov)" OFF)
+option(PYTHON_WHEEL_BUILD "Build only targets needed for the Python wheel (skips plugins, scripts, etc.)" OFF)
 
 if(USE_TLS_PROXY AND USE_FEARTLS_PROXY)
 	message(FATAL_ERROR "[ ER ] You can't have both USE_TLS_PROXY and USE_FEARTLS_PROXY at the same time")
@@ -457,11 +458,14 @@ if(USE_TLS_PROXY)
 endif()
 
 ADD_SUBDIRECTORY(src)
-ADD_SUBDIRECTORY(plugins)
-ADD_SUBDIRECTORY(share)
-ADD_SUBDIRECTORY(scripts)
-ADD_SUBDIRECTORY(po)
-ADD_SUBDIRECTORY(man)
+
+if(NOT PYTHON_WHEEL_BUILD)
+	ADD_SUBDIRECTORY(plugins)
+	ADD_SUBDIRECTORY(share)
+	ADD_SUBDIRECTORY(scripts)
+	ADD_SUBDIRECTORY(po)
+	ADD_SUBDIRECTORY(man)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
 # todo: build a cpack driven installer package

@@ -69,6 +69,9 @@ const static cProtoCommand /*cMessageDC::*/sDC_Commands[] = // this list corresp
 	cProtoCommand("$MyNick "),
 	cProtoCommand("$Lock "),
 	cProtoCommand("$IN "),
+	cProtoCommand("$PB "),
+	cProtoCommand("$PBB "),
+	cProtoCommand("$PBR "),
 	cProtoCommand("<") // note: must always be last
 };
 
@@ -415,6 +418,42 @@ bool cMessageDC::SplitChunks()
 
 			if (!SplitOnTwo(mKWSize, '$', eCH_IN_NICK, eCH_IN_DATA))
 				mError = true;
+
+			break;
+
+		case eDC_PB:
+			/*
+				$PB <nick> <base64data>
+				eCH_PB_ALL, eCH_PB_NICK, eCH_PB_DATA
+			*/
+
+			if (!SplitOnTwo(mKWSize, ' ', eCH_PB_NICK, eCH_PB_DATA))
+				mError = true;
+
+			break;
+
+		case eDC_PBB:
+			/*
+				$PBB <nick> <base64data>
+				eCH_PBB_ALL, eCH_PBB_NICK, eCH_PBB_DATA
+			*/
+
+			if (!SplitOnTwo(mKWSize, ' ', eCH_PBB_NICK, eCH_PBB_DATA))
+				mError = true;
+
+			break;
+
+		case eDC_PBR:
+			/*
+				$PBR <to_nick> <from_nick> <base64data>
+				eCH_PBR_ALL, eCH_PBR_TO, eCH_PBR_FROM, eCH_PBR_DATA
+			*/
+
+			if (!SplitOnTwo(mKWSize, ' ', eCH_PBR_TO, eCH_PBR_DATA)) {
+				mError = true;
+			} else if (!SplitOnTwo(' ', eCH_PBR_DATA, eCH_PBR_FROM, eCH_PBR_DATA)) {
+				mError = true;
+			}
 
 			break;
 

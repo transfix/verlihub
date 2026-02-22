@@ -172,6 +172,12 @@ protected:
 	int DC_IN(cMessageDC *msg, nSocket::cConnDC *conn);
 	// $ExtJSON
 	int DC_ExtJSON(cMessageDC *msg, nSocket::cConnDC *conn);
+	// $PB - NMDCpb protobuf text mode
+	int DC_PB(cMessageDC *msg, nSocket::cConnDC *conn);
+	// $PBB - NMDCpb protobuf binary mode
+	int DC_PBB(cMessageDC *msg, nSocket::cConnDC *conn);
+	// $PBR - NMDCpb relay data
+	int DC_PBR(cMessageDC *msg, nSocket::cConnDC *conn);
 	/** Treat the DC message in a appropriate way */
 	int DCO_Kick(cMessageDC * msg, nSocket::cConnDC * conn);
 	/** Treat the DC message in a appropriate way */

@@ -187,6 +187,33 @@ SET(VERLIHUB_SRCS
 	#verlihub.cpp
 )
 
+# NMDCpb protobuf extension
+if(Protobuf_FOUND)
+	set(NMDCPB_PROTO_DIR "${CMAKE_SOURCE_DIR}/../nmdcpb/proto")
+	set(NMDCPB_PROTO_FILE "${NMDCPB_PROTO_DIR}/nmdcpb.proto")
+	set(NMDCPB_GENERATED_DIR "${CMAKE_BINARY_DIR}/nmdcpb_generated")
+	file(MAKE_DIRECTORY ${NMDCPB_GENERATED_DIR})
+
+	# Generate C++ sources from proto file
+	add_custom_command(
+		OUTPUT "${NMDCPB_GENERATED_DIR}/nmdcpb.pb.cc" "${NMDCPB_GENERATED_DIR}/nmdcpb.pb.h"
+		COMMAND protobuf::protoc
+			--cpp_out=${NMDCPB_GENERATED_DIR}
+			-I${NMDCPB_PROTO_DIR}
+			${NMDCPB_PROTO_FILE}
+		DEPENDS ${NMDCPB_PROTO_FILE}
+		COMMENT "Generating NMDCpb protobuf C++ sources"
+	)
+
+	list(APPEND VERLIHUB_SRCS
+		"${NMDCPB_GENERATED_DIR}/nmdcpb.pb.cc"
+		cpbtranslate.cpp
+	)
+
+	include_directories(${NMDCPB_GENERATED_DIR})
+	include_directories(${Protobuf_INCLUDE_DIRS})
+endif()
+
 add_library(libverlihub_so SHARED ${VERLIHUB_SRCS})
 set_target_properties(libverlihub_so PROPERTIES OUTPUT_NAME ${PROJECT_NAME})
 
@@ -241,6 +268,11 @@ elseif(USE_FEARTLS_PROXY)
 endif()
 
 target_link_libraries(libverlihub_so ${VERLIHUB_LIBS}) # pthread dl execinfo
+
+# Link protobuf for NMDCpb extension
+if(Protobuf_FOUND)
+	target_link_libraries(libverlihub_so protobuf::libprotobuf)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
 # Python wheel build: install libverlihub.so into the wheel so auditwheel can

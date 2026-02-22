@@ -192,6 +192,15 @@ Find_Package(Threads REQUIRED)
 Find_Package(Gettext REQUIRED)
 Find_Package(Libintl REQUIRED)
 
+# NMDCpb protobuf extension (optional)
+find_package(Protobuf 3.0)
+if(Protobuf_FOUND)
+	message(STATUS "[ OK ] Protobuf found: ${Protobuf_VERSION} — NMDCpb protocol extension enabled")
+	add_definitions(-DWITH_NMDCPB)
+else()
+	message(STATUS "[ !! ] Protobuf not found — NMDCpb protocol extension disabled")
+endif()
+
 if(USE_CUSTOM_AUTOSPRINTF)
 	message(STATUS "[ OK ] Using custom internal autosprintf implementation")
 else(USE_CUSTOM_AUTOSPRINTF)
@@ -458,6 +467,7 @@ if(USE_TLS_PROXY)
 endif()
 
 ADD_SUBDIRECTORY(src)
+ADD_SUBDIRECTORY(tests)
 
 if(PYTHON_WHEEL_BUILD)
 	# Wheel builds: only build plugins (lua + python + plugman), skip install-only assets

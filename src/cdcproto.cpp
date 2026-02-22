@@ -29,6 +29,10 @@
 #include "cdcconsole.h"
 #include "i18n.h"
 
+#ifdef WITH_NMDCPB
+#include "cpbtranslate.h"
+#endif
+
 #include <string>
 #include <string.h>
 #include <stdio.h>
@@ -304,6 +308,18 @@ int cDCProto::TreatMsg(cMessageParser *pMsg, cAsyncConn *pConn)
 			this->DC_IN(msg, conn);
 			break;
 
+		case eDC_PB:
+			this->DC_PB(msg, conn);
+			break;
+
+		case eDC_PBB:
+			this->DC_PBB(msg, conn);
+			break;
+
+		case eDC_PBR:
+			this->DC_PBR(msg, conn);
+			break;
+
 		default:
 			if (Log(1))
 				LogStream() << "Incoming untreated command: " << msg->mStr << endl;
@@ -513,6 +529,10 @@ int cDCProto::DC_Supports(cMessageDC *msg, cConnDC *conn)
 
 			if (!mS->mC.disable_extjson)
 				pars.append("ExtJSON2 ");
+
+		} else if ((feature.size() == 6) && (StrCompare(feature, 0, 6, "NMDCpb") == 0)) {
+			conn->mFeatures |= eSF_NMDCPB;
+			pars.append("NMDCpb ");
 		}
 	}
 
@@ -1649,6 +1669,197 @@ int cDCProto::DC_ExtJSON(cMessageDC *msg, cConnDC *conn)
 				conn->mpUser->mExtJSON = msg->mStr;
 			}
 		}
+	}
+
+	return 0;
+}
+
+/*
+	$PB <nick> <base64data>
+	NMDCpb unicast: sender broadcasts a protobuf-encoded message to all NMDCpb-capable users.
+	Hub also translates to legacy NMDC for non-NMDCpb users when possible.
+*/
+int cDCProto::DC_PB(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) { // check support
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &nick = msg->ChunkString(eCH_PB_NICK);
+
+	if (CheckUserNick(conn, nick))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB)) // protocol flood
+		return -1;
+
+	if ((conn->mpUser->mClass < eUC_OPERATOR) && (mS->mSysLoad >= eSL_CAPACITY)) { // check hub load
+		if (mS->Log(3))
+			mS->LogStream() << "Hub load is too high for NMDCpb: " << mS->mSysLoad << endl;
+
+		return -2;
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		// forward to all users who support NMDCpb
+		string omsg(msg->mStr);
+		mS->mUserList.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+
+		#ifdef WITH_NMDCPB
+		// translation layer: decode protobuf, if PbChat, translate to legacy format
+		// and send to users without NMDCpb support
+		{
+			const string &base64data = msg->ChunkString(eCH_PB_DATA);
+			string legacy;
+
+			if (cPbTranslate::PbToLegacy(base64data, nick, legacy)) {
+				mS->mUserList.SendToAllWithoutFeature(legacy, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+			}
+		}
+		#endif
+	}
+
+	return 0;
+}
+
+/*
+	$PBB <nick> <base64data>
+	NMDCpb broadcast: binary broadcast message (bulk data, file metadata, etc).
+	Only forwarded to NMDCpb-capable users. No legacy translation.
+*/
+int cDCProto::DC_PBB(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) {
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &nick = msg->ChunkString(eCH_PBB_NICK);
+
+	if (CheckUserNick(conn, nick))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB))
+		return -1;
+
+	if ((conn->mpUser->mClass < eUC_OPERATOR) && (mS->mSysLoad >= eSL_CAPACITY)) {
+		if (mS->Log(3))
+			mS->LogStream() << "Hub load is too high for NMDCpb broadcast: " << mS->mSysLoad << endl;
+
+		return -2;
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		// forward only to NMDCpb users, no legacy translation for binary broadcasts
+		string omsg(msg->mStr);
+		mS->mUserList.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+	}
+
+	return 0;
+}
+
+/*
+	$PBR <to_nick> <from_nick> <base64data>
+	NMDCpb routed: protobuf message sent to a specific user (like PM but binary).
+	Requires recipient to also support NMDCpb.
+*/
+int cDCProto::DC_PBR(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) {
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &from = msg->ChunkString(eCH_PBR_FROM);
+
+	if (CheckUserNick(conn, from))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB))
+		return -1;
+
+	string &to = msg->ChunkString(eCH_PBR_TO);
+	cUser *other = mS->mUserList.GetUserByNick(to); // find target user
+
+	if (!other) {
+		os << autosprintf(_("You're trying to send NMDCpb routed message to an offline user: %s"), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	if (!other->mxConn) {
+		os << autosprintf(_("You're trying to send NMDCpb routed message to a bot: %s"), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	if (!(other->mxConn->mFeatures & eSF_NMDCPB)) { // recipient must support NMDCpb
+		os << autosprintf(_("User %s does not support NMDCpb protocol."), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		string omsg(msg->mStr);
+		other->mxConn->Send(omsg, true); // send to target user
 	}
 
 	return 0;

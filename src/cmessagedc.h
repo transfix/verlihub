@@ -69,6 +69,9 @@ namespace nVerliHub {
 			eDCC_MYNICK,
 			eDCC_LOCK,
 			eDC_IN,
+			eDC_PB,
+			eDC_PBB,
+			eDC_PBR,
 			eDC_CHAT, // note: must always be before unknown
 			eDC_UNKNOWN
 		} tDCMsg;
@@ -101,6 +104,12 @@ namespace nVerliHub {
 		enum { eCH_MYIP_ALL, eCH_MYIP_IP, eCH_MYIP_VERS };
 		// ExtJSON
 		enum { eCH_EJ_ALL, eCH_EJ_NICK, eCH_EJ_PARS };
+		// PB (NMDCpb unicast): $PB <nick> <base64data>
+		enum { eCH_PB_ALL, eCH_PB_NICK, eCH_PB_DATA };
+		// PBB (NMDCpb broadcast): $PBB <nick> <base64data>
+		enum { eCH_PBB_ALL, eCH_PBB_NICK, eCH_PBB_DATA };
+		// PBR (NMDCpb routed): $PBR <to_nick> <from_nick> <base64data>
+		enum { eCH_PBR_ALL, eCH_PBR_TO, eCH_PBR_FROM, eCH_PBR_DATA };
 		/// connecttome   $ConnectToMe <remoteNick> <senderIp>:<senderPort>
 		enum {eCH_CM_ALL, eCH_CM_NICK, eCH_CM_ACTIVE, eCH_CM_IP, eCH_CM_PORT};
 		//OpForce move

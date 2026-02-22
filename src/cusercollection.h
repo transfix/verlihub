@@ -123,6 +123,18 @@ public:
 		void operator()(cUserBase *user);
 	};
 
+	struct ufSendWithoutFeature: public ufSendBase // unary function for sending data to all users without feature in supports
+	{
+		unsigned mFeature;
+
+		ufSendWithoutFeature(string &data, const unsigned feature, const bool cache):
+			ufSendBase(data, cache),
+			mFeature(feature)
+		{}
+
+		void operator()(cUserBase *user);
+	};
+
 	struct ufSendWithMyFlag: public ufSendBase // unary function for sending data to all users with flag in myinfo
 	{
 		unsigned short mFlag;
@@ -209,6 +221,21 @@ public:
 		bool mCache;
 
 		ufSendWithFeature(string &data, const unsigned feature, const bool cache):
+			mData(data),
+			mFeature(feature),
+			mCache(cache)
+		{}
+
+		void operator()(cUserBase *user);
+	};
+
+	struct ufSendWithoutFeature: public unary_function<void, iterator>
+	{
+		string &mData;
+		unsigned mFeature;
+		bool mCache;
+
+		ufSendWithoutFeature(string &data, const unsigned feature, const bool cache):
 			mData(data),
 			mFeature(feature),
 			mCache(cache)
@@ -460,6 +487,7 @@ public:
 	void SendToAllWithNick(string &start, string &end);
 	void SendToAllWithClass(string &data, const int min_class, const int max_class, const bool cache, const bool pipe);
 	void SendToAllWithFeature(string &data, const unsigned feature, const bool cache, const bool pipe);
+	void SendToAllWithoutFeature(string &data, const unsigned feature, const bool cache, const bool pipe);
 	void SendToAllWithMyFlag(string &data, const unsigned short flag, const bool cache, const bool pipe);
 	void SendToAllWithoutMyFlag(string &data, const unsigned short flag, const bool cache, const bool pipe);
 	void SendToAllWithClassFeature(string &data, const int min_class, const int max_class, const unsigned feature, const bool cache, const bool pipe);

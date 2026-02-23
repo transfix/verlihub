@@ -34,6 +34,19 @@ from __future__ import annotations
 from verlihub.client.nmdc import NMDCClient, NMDCError, NMDCConnectionError
 from verlihub.client.api import HubClient, AsyncHubClient, HubClientError
 
+# NMDCpb extension — optional, requires protobuf + cryptography
+try:
+    from verlihub.client.nmdcpb import (
+        WireCodec,
+        NMDCpbClient,
+        E2EPMSession,
+        E2EPMManager,
+    )
+
+    _NMDCPB_AVAILABLE = True
+except ImportError:
+    _NMDCPB_AVAILABLE = False
+
 __all__ = [
     "NMDCClient",
     "NMDCError",
@@ -43,6 +56,14 @@ __all__ = [
     "HubClientError",
     "build_mcp_server",
 ]
+
+if _NMDCPB_AVAILABLE:
+    __all__ += [
+        "WireCodec",
+        "NMDCpbClient",
+        "E2EPMSession",
+        "E2EPMManager",
+    ]
 
 
 def build_mcp_server(*args, **kwargs):

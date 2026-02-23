@@ -64,7 +64,7 @@ services:
       - "30000:30000" # FastAPI port for integration tests
     volumes:
       - verlihub-config:/etc/verlihub
-      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
+      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts
     networks:
       - verlihub-net
     restart: unless-stopped

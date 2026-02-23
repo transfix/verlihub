@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     pkg-config \
     libgtest-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -97,6 +99,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     netcat-openbsd \
     git \
+    libprotobuf32t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed files from builder

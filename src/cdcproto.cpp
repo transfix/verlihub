@@ -2202,7 +2202,30 @@ int cDCProto::DC_Chat(cMessageDC *msg, cConnDC *conn)
 	#endif
 
 	string omsg(msg->mStr);
+
+	#ifdef WITH_NMDCPB
+	// reverse translation: send legacy chat to non-NMDCpb users,
+	// and a protobuf-wrapped version to NMDCpb-capable users
+	mS->mChatUsers.SendToAllWithoutFeature(omsg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+
+	{
+		// detect /me action prefix
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		const string chat_text = is_action ? text.substr(4) : text;
+		string pb_out;
+
+		if (cPbTranslate::LegacyToPb(nick, chat_text, is_action, false, "", pb_out)) {
+			string pb_msg = "$PB " + nick + " " + pb_out;
+			mS->mChatUsers.SendToAllWithFeature(pb_msg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+		} else {
+			// fallback: send legacy format to NMDCpb users too
+			mS->mChatUsers.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+		}
+	}
+	#else
 	mS->mChatUsers.SendToAll(omsg, mS->mC.delayed_chat, true); // send it
+	#endif
+
 	return 0;
 }
 

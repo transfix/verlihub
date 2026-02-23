@@ -52,6 +52,14 @@ static int g_tests_passed = 0;
 		} \
 	} while(0)
 
+#define ASSERT_FALSE(cond) \
+	do { \
+		if ((cond)) { \
+			FAIL(#cond " is true"); \
+			return; \
+		} \
+	} while(0)
+
 #define ASSERT_EQ(a, b) \
 	do { \
 		if ((a) != (b)) { \
@@ -474,6 +482,98 @@ void test_special_chars_in_text()
 }
 
 // ============================================================================
+// DC_Chat reverse translation simulation tests
+// These test the exact logic from DC_Chat() for legacy→PB translation
+// ============================================================================
+
+void test_dc_chat_action_detection()
+{
+	TEST(dc_chat_action_detection);
+
+	// Simulate the /me detection logic from DC_Chat()
+	// When a legacy client sends "<Alice> /me waves", the hub receives
+	// text = "/me waves" (after nick extraction from eCH_CH_MSG chunk)
+	{
+		string text = "/me waves hello";
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		const string chat_text = is_action ? text.substr(4) : text;
+
+		ASSERT_TRUE(is_action);
+		ASSERT_EQ(chat_text, "waves hello");
+
+		string pb_out;
+		ASSERT_TRUE(cPbTranslate::LegacyToPb("Alice", chat_text, is_action, false, "", pb_out));
+
+		// Verify round-trip: PbToLegacy should produce "* Alice waves hello"
+		string legacy;
+		ASSERT_TRUE(cPbTranslate::PbToLegacy(pb_out, "Alice", legacy));
+		ASSERT_EQ(legacy, "* Alice waves hello");
+	}
+
+	// Non-action: normal chat, no /me prefix
+	{
+		string text = "Hello world";
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		ASSERT_FALSE(is_action);
+	}
+
+	// Edge case: "/me" without trailing space is not an action
+	{
+		string text = "/me";
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		ASSERT_FALSE(is_action);
+	}
+
+	// Edge case: "/me " with just a space is an action with empty text
+	{
+		string text = "/me ";
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		const string chat_text = is_action ? text.substr(4) : text;
+		ASSERT_TRUE(is_action);
+		ASSERT_EQ(chat_text, "");
+	}
+
+	PASS();
+}
+
+void test_dc_chat_reverse_roundtrip()
+{
+	TEST(dc_chat_reverse_roundtrip);
+
+	// Full roundtrip: legacy chat text → LegacyToPb → PbToLegacy → same text
+	// This is what DC_Chat does: translate for NMDCpb users, and if they then
+	// see legacy users, the hub translates back.
+	string texts[] = {
+		"Hello world",
+		"/me dances",
+		"Привет! 🌍",
+		"/me shrugs 🤷",
+		"a",
+		"test with pipe | and dollar $ chars",
+	};
+
+	for (const auto &text : texts) {
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		const string chat_text = is_action ? text.substr(4) : text;
+		string nick = "TestUser";
+
+		string pb_out;
+		ASSERT_TRUE(cPbTranslate::LegacyToPb(nick, chat_text, is_action, false, "", pb_out));
+
+		string legacy;
+		ASSERT_TRUE(cPbTranslate::PbToLegacy(pb_out, nick, legacy));
+
+		if (is_action) {
+			ASSERT_EQ(legacy, "* " + nick + " " + chat_text);
+		} else {
+			ASSERT_EQ(legacy, "<" + nick + "> " + text);
+		}
+	}
+
+	PASS();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -513,6 +613,10 @@ int main()
 	test_unicode_chat();
 	test_empty_text();
 	test_special_chars_in_text();
+
+	cout << endl << "DC_Chat reverse translation:" << endl;
+	test_dc_chat_action_detection();
+	test_dc_chat_reverse_roundtrip();
 
 	cout << endl << "=====================" << endl;
 	cout << g_tests_passed << "/" << g_tests_run << " tests passed" << endl;

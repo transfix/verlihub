@@ -4,7 +4,6 @@ on:
   push:
     branches: [master, main, develop, verlihub-py]
   pull_request:
-    branches: [master, main, develop, verlihub-py]
 
 jobs:
   cpp-unit-tests:

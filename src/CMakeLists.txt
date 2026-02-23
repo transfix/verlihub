@@ -189,7 +189,7 @@ SET(VERLIHUB_SRCS
 
 # NMDCpb protobuf extension
 if(Protobuf_FOUND)
-	set(NMDCPB_PROTO_DIR "${CMAKE_SOURCE_DIR}/../nmdcpb/proto")
+	set(NMDCPB_PROTO_DIR "${CMAKE_SOURCE_DIR}/python/verlihub/client/nmdcpb/proto")
 	set(NMDCPB_PROTO_FILE "${NMDCPB_PROTO_DIR}/nmdcpb.proto")
 	set(NMDCPB_GENERATED_DIR "${CMAKE_BINARY_DIR}/nmdcpb_generated")
 	file(MAKE_DIRECTORY ${NMDCPB_GENERATED_DIR})

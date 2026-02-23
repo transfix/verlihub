@@ -187,12 +187,16 @@ class TestWireCodecBinary(unittest.TestCase):
 
     def test_length_header(self):
         env = PbEnvelope()
+        env.from_nick = "test"
         env.chat.text = "x" * 100
         wire = WireCodec.encode_binary(env)
-        # Parse the length from the header
+        # Parse: $PBB <nick> <length_hex>\n<raw>|
         header_end = wire.index(b"\n")
         header = wire[5:header_end].decode("ascii")  # after "$PBB "
-        length = int(header, 16)
+        # header = "test <hex_len>"
+        parts = header.split(" ")
+        self.assertEqual(parts[0], "test")
+        length = int(parts[-1], 16)
 
         # The protobuf payload should be 'length' bytes after the newline
         payload = wire[header_end + 1:-1]  # strip trailing |
@@ -222,46 +226,58 @@ class TestWireCodecBinary(unittest.TestCase):
 
 
 class TestWireCodecRelay(unittest.TestCase):
-    """Test $PBR relay mode encoding/decoding."""
+    """Test $PBR routed mode encoding/decoding."""
+
+    def _make_routed_envelope(self, from_nick="Alice", to_nick="Bob",
+                               text="Routed message") -> PbEnvelope:
+        env = PbEnvelope()
+        env.route = PbEnvelope.DIRECT
+        env.from_nick = from_nick
+        env.to_nick = to_nick
+        env.chat.text = text
+        env.chat.is_pm = True
+        env.timestamp = 1700000000000
+        env.sequence = 1
+        return env
 
     def test_encode_decode_roundtrip(self):
-        relay_id = 0xABCD
-        data = os.urandom(64)
+        env = self._make_routed_envelope()
+        wire = WireCodec.encode_routed(env)
+        self.assertTrue(wire.startswith("$PBR "))
+        self.assertTrue(wire.endswith("|"))
 
-        wire = WireCodec.encode_relay(relay_id, data)
-        self.assertTrue(wire.startswith(b"$PBR "))
-        self.assertTrue(wire.endswith(b"|"))
+        decoded = WireCodec.decode(wire)
+        self.assertIsInstance(decoded, PbEnvelope)
+        self.assertEqual(decoded.from_nick, "Alice")
+        self.assertEqual(decoded.to_nick, "Bob")
+        self.assertEqual(decoded.chat.text, "Routed message")
 
-        result = WireCodec.decode_bytes(wire)
-        self.assertIsInstance(result, tuple)
-        decoded_id, decoded_data = result
-        self.assertEqual(decoded_id, relay_id)
-        self.assertEqual(decoded_data, data)
+    def test_encode_routed_explicit_nicks(self):
+        env = PbEnvelope()
+        env.chat.text = "test"
+        wire = WireCodec.encode_routed(env, from_nick="Sender", to_nick="Receiver")
+        self.assertIn("$PBR Receiver Sender ", wire)
 
-    def test_relay_id_zero(self):
-        data = b"\x01\x02\x03"
-        wire = WireCodec.encode_relay(0, data)
-        decoded_id, decoded_data = WireCodec.decode_bytes(wire)
-        self.assertEqual(decoded_id, 0)
-        self.assertEqual(decoded_data, data)
+        decoded = WireCodec.decode(wire)
+        self.assertEqual(decoded.from_nick, "Sender")
+        self.assertEqual(decoded.to_nick, "Receiver")
 
-    def test_relay_large_id(self):
-        data = b"test"
-        wire = WireCodec.encode_relay(0xFFFFFFFF, data)
-        decoded_id, decoded_data = WireCodec.decode_bytes(wire)
-        self.assertEqual(decoded_id, 0xFFFFFFFF)
+    def test_routed_bytes_decode(self):
+        env = self._make_routed_envelope()
+        wire = WireCodec.encode_routed(env)
+        wire_bytes = wire.encode("ascii")
 
-    def test_relay_string_decode(self):
-        relay_id = 42
-        data = b"safe-ascii-test"
-        wire_bytes = WireCodec.encode_relay(relay_id, data)
-        wire_str = wire_bytes.decode("latin-1")
+        decoded = WireCodec.decode_bytes(wire_bytes)
+        self.assertIsInstance(decoded, PbEnvelope)
+        self.assertEqual(decoded.from_nick, "Alice")
+        self.assertEqual(decoded.to_nick, "Bob")
 
-        result = WireCodec.decode(wire_str)
-        self.assertIsInstance(result, tuple)
-        decoded_id, decoded_data = result
-        self.assertEqual(decoded_id, 42)
-        self.assertEqual(decoded_data, data)
+    def test_backward_compat_alias(self):
+        """encode_relay is an alias for encode_routed."""
+        env = self._make_routed_envelope()
+        wire_routed = WireCodec.encode_routed(env)
+        wire_relay = WireCodec.encode_relay(env)
+        self.assertEqual(wire_routed, wire_relay)
 
 
 class TestWireCodecHelpers(unittest.TestCase):

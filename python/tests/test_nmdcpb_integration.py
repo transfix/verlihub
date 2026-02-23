@@ -60,15 +60,10 @@ class MockHub:
 
     def route_message(self, sender: str, wire: str) -> None:
         """Route a NMDCpb wire message like the hub plugin would."""
-        result = WireCodec.decode(wire)
-        if result is None:
+        env = WireCodec.decode(wire)
+        if env is None:
             return
 
-        if isinstance(result, tuple):
-            # Relay data — forward opaquely (not implemented in mock)
-            return
-
-        env = result
         env.from_nick = sender  # Hub is authoritative
 
         route = env.route

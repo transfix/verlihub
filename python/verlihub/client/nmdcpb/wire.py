@@ -2,15 +2,14 @@
 Wire protocol codec for NMDCpb.
 
 Handles encoding/decoding of protobuf messages to/from NMDC wire format:
-    $PB <base64url>|          — text mode (control messages)
-    $PBB <length_hex>\\n<raw>|  — binary mode (bulk data)
-    $PBR <relay_id> <len>\\n<data>|  — relay data
+    $PB <nick> <base64url>|            — text mode (control messages)
+    $PBB <nick> <length_hex>\n<raw>|   — binary mode (bulk data)
+    $PBR <to_nick> <from_nick> <base64url>|  — routed (direct) message
 """
 
 from __future__ import annotations
 
 import base64
-import struct
 import time
 from typing import Optional
 
@@ -47,49 +46,74 @@ class WireCodec:
     # --- Encoding ---
 
     @staticmethod
-    def encode_text(envelope: PbEnvelope) -> str:
+    def encode_text(envelope: PbEnvelope, nick: str = "") -> str:
         """Encode a PbEnvelope as a $PB text-mode NMDC command.
+
+        Wire format: ``$PB <nick> <base64url>|``
+
+        Args:
+            envelope: The protobuf envelope to encode.
+            nick: Sender nick. If empty, uses ``envelope.from_nick``.
 
         Returns the full wire string including $PB prefix and | terminator.
         """
+        sender = nick or envelope.from_nick
         raw = envelope.SerializeToString()
         b64 = _b64url_encode(raw)
-        return f"{PREFIX_PB}{b64}{TERMINATOR}"
+        return f"{PREFIX_PB}{sender} {b64}{TERMINATOR}"
 
     @staticmethod
-    def encode_binary(envelope: PbEnvelope) -> bytes:
+    def encode_binary(envelope: PbEnvelope, nick: str = "") -> bytes:
         """Encode a PbEnvelope as a $PBB binary-mode NMDC command.
 
-        Returns bytes: $PBB <length_hex>\\n<raw_protobuf>|
+        Wire format: ``$PBB <nick> <length_hex>\n<raw_protobuf>|``
+
+        Args:
+            envelope: The protobuf envelope to encode.
+            nick: Sender nick. If empty, uses ``envelope.from_nick``.
+
+        Returns bytes.
         """
+        sender = nick or envelope.from_nick
         raw = envelope.SerializeToString()
         length_hex = format(len(raw), "x")
-        header = f"{PREFIX_PBB}{length_hex}\n".encode("ascii")
+        header = f"{PREFIX_PBB}{sender} {length_hex}\n".encode("ascii")
         return header + raw + TERMINATOR.encode("ascii")
 
     @staticmethod
-    def encode_relay(relay_id: int, encrypted_data: bytes) -> bytes:
-        """Encode relay data as a $PBR command.
+    def encode_routed(envelope: PbEnvelope, from_nick: str = "",
+                      to_nick: str = "") -> str:
+        """Encode a PbEnvelope as a $PBR routed NMDC command.
 
-        Returns bytes: $PBR <relay_id_hex> <length_hex>\\n<data>|
+        Wire format: ``$PBR <to_nick> <from_nick> <base64url>|``
+
+        Args:
+            envelope: The protobuf envelope to encode.
+            from_nick: Sender nick. If empty, uses ``envelope.from_nick``.
+            to_nick: Recipient nick. If empty, uses ``envelope.to_nick``.
+
+        Returns the full wire string.
         """
-        relay_hex = format(relay_id, "x")
-        length_hex = format(len(encrypted_data), "x")
-        header = f"{PREFIX_PBR}{relay_hex} {length_hex}\n".encode("ascii")
-        return header + encrypted_data + TERMINATOR.encode("ascii")
+        sender = from_nick or envelope.from_nick
+        target = to_nick or envelope.to_nick
+        raw = envelope.SerializeToString()
+        b64 = _b64url_encode(raw)
+        return f"{PREFIX_PBR}{target} {sender} {b64}{TERMINATOR}"
+
+    # Backward-compat alias
+    encode_relay = encode_routed
 
     # --- Decoding ---
 
     @staticmethod
-    def decode(line: str | bytes) -> PbEnvelope | tuple[int, bytes] | None:
-        """Decode an NMDC line into a PbEnvelope or relay data.
+    def decode(line: str | bytes) -> PbEnvelope | None:
+        """Decode an NMDC line into a PbEnvelope.
 
         Args:
             line: Raw NMDC line (with or without trailing |)
 
         Returns:
-            PbEnvelope for $PB/$PBB messages,
-            (relay_id, encrypted_data) tuple for $PBR messages,
+            PbEnvelope for $PB/$PBB/$PBR messages,
             None if the line is not an NMDCpb command.
         """
         if isinstance(line, bytes):
@@ -106,79 +130,108 @@ class WireCodec:
         elif line_str.startswith(PREFIX_PBB):
             return WireCodec._decode_binary_str(line_str[len(PREFIX_PBB):])
         elif line_str.startswith(PREFIX_PBR):
-            return WireCodec._decode_relay_str(line_str[len(PREFIX_PBR):])
+            return WireCodec._decode_routed_str(line_str[len(PREFIX_PBR):])
         return None
 
     @staticmethod
-    def decode_bytes(data: bytes) -> PbEnvelope | tuple[int, bytes] | None:
+    def decode_bytes(data: bytes) -> PbEnvelope | None:
         """Decode raw bytes (needed for binary mode where payload may contain
         chars that aren't valid UTF-8).
 
         For $PBB and $PBR, this handles the binary payload correctly.
         """
+        # Strip trailing terminator
+        if data.endswith(b"|"):
+            data = data[:-1]
+
         if data.startswith(b"$PBR "):
-            return WireCodec._decode_relay_bytes(data[5:])
+            return WireCodec._decode_routed_bytes(data[5:])
         elif data.startswith(b"$PBB "):
             return WireCodec._decode_binary_bytes(data[5:])
-        elif data.startswith(b"$PB "):
+        elif data.startswith(b"$PB ") and not data.startswith(b"$PBB ") and not data.startswith(b"$PBR "):
             # Text mode — safe to decode as string
-            line_str = data.decode("ascii", errors="replace")
-            if line_str.endswith("|"):
-                line_str = line_str[:-1]
-            return WireCodec._decode_text(line_str[4:])
+            return WireCodec._decode_text(data[4:].decode("ascii", errors="replace"))
         return None
 
+    # --- Internal decoders ---
+
     @staticmethod
-    def _decode_text(payload_b64: str) -> PbEnvelope:
-        """Decode base64url payload into PbEnvelope."""
-        raw = _b64url_decode(payload_b64)
+    def _decode_text(nick_and_b64: str) -> PbEnvelope:
+        """Decode ``<nick> <base64url>`` payload into PbEnvelope.
+
+        The hub sends ``$PB <nick> <b64>|``, so after stripping the
+        ``$PB `` prefix we receive ``<nick> <b64>``.
+        """
+        parts = nick_and_b64.split(" ", 1)
+        if len(parts) == 2:
+            wire_nick, b64 = parts
+        else:
+            # Fallback: entire string is b64 (e.g. legacy format)
+            wire_nick, b64 = "", parts[0]
+
+        raw = _b64url_decode(b64)
         env = PbEnvelope()
         env.ParseFromString(raw)
+
+        # Wire nick is authoritative (hub-validated)
+        if wire_nick and not env.from_nick:
+            env.from_nick = wire_nick
         return env
 
     @staticmethod
-    def _decode_binary_str(header_and_body: str) -> PbEnvelope:
-        """Decode $PBB payload from string (works when body is valid text)."""
-        newline_idx = header_and_body.index("\n")
-        length = int(header_and_body[:newline_idx], 16)
-        body = header_and_body[newline_idx + 1:]
-        # For string representation, encode back to bytes for protobuf
+    def _decode_binary_str(nick_header_body: str) -> PbEnvelope:
+        """Decode ``<nick> <length_hex>\\n<raw>`` from $PBB string."""
+        space_idx = nick_header_body.index(" ")
+        wire_nick = nick_header_body[:space_idx]
+        rest = nick_header_body[space_idx + 1:]
+        newline_idx = rest.index("\n")
+        length = int(rest[:newline_idx], 16)
+        body = rest[newline_idx + 1:]
         raw = body[:length].encode("latin-1")
         env = PbEnvelope()
         env.ParseFromString(raw)
+        if wire_nick and not env.from_nick:
+            env.from_nick = wire_nick
         return env
 
     @staticmethod
     def _decode_binary_bytes(data: bytes) -> PbEnvelope:
-        """Decode $PBB payload from raw bytes."""
-        newline_idx = data.index(b"\n")
-        length = int(data[:newline_idx].decode("ascii"), 16)
-        raw = data[newline_idx + 1: newline_idx + 1 + length]
-        env = PbEnvelope()
-        env.ParseFromString(raw)
-        return env
-
-    @staticmethod
-    def _decode_relay_str(data: str) -> tuple[int, bytes]:
-        """Decode $PBR relay data from string."""
-        space_idx = data.index(" ")
-        relay_id = int(data[:space_idx], 16)
-        rest = data[space_idx + 1:]
-        newline_idx = rest.index("\n")
-        length = int(rest[:newline_idx], 16)
-        encrypted = rest[newline_idx + 1: newline_idx + 1 + length].encode("latin-1")
-        return relay_id, encrypted
-
-    @staticmethod
-    def _decode_relay_bytes(data: bytes) -> tuple[int, bytes]:
-        """Decode $PBR relay data from raw bytes."""
+        """Decode $PBB payload from raw bytes: ``<nick> <len_hex>\\n<raw>``."""
         space_idx = data.index(b" ")
-        relay_id = int(data[:space_idx].decode("ascii"), 16)
+        wire_nick = data[:space_idx].decode("ascii", errors="replace")
         rest = data[space_idx + 1:]
         newline_idx = rest.index(b"\n")
         length = int(rest[:newline_idx].decode("ascii"), 16)
-        encrypted = rest[newline_idx + 1: newline_idx + 1 + length]
-        return relay_id, encrypted
+        raw = rest[newline_idx + 1: newline_idx + 1 + length]
+        env = PbEnvelope()
+        env.ParseFromString(raw)
+        if wire_nick and not env.from_nick:
+            env.from_nick = wire_nick
+        return env
+
+    @staticmethod
+    def _decode_routed_str(data: str) -> PbEnvelope:
+        """Decode ``<to_nick> <from_nick> <base64url>`` from $PBR string."""
+        parts = data.split(" ", 2)
+        if len(parts) < 3:
+            raise ValueError(f"Malformed $PBR payload: {data!r}")
+        to_nick, from_nick, b64 = parts
+        raw = _b64url_decode(b64)
+        env = PbEnvelope()
+        env.ParseFromString(raw)
+        # Wire nicks are authoritative
+        if to_nick and not env.to_nick:
+            env.to_nick = to_nick
+        if from_nick and not env.from_nick:
+            env.from_nick = from_nick
+        return env
+
+    @staticmethod
+    def _decode_routed_bytes(data: bytes) -> PbEnvelope:
+        """Decode $PBR from raw bytes."""
+        return WireCodec._decode_routed_str(
+            data.decode("ascii", errors="replace")
+        )
 
     # --- Helpers ---
 

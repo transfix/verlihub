@@ -63,6 +63,10 @@ def _nmdc_lock_to_key(lock: str) -> str:
         0, lock_bytes[0] ^ lock_bytes[n - 1] ^ lock_bytes[n - 2] ^ 5
     )
 
+    # Nibble-swap
+    for i in range(len(key_bytes)):
+        key_bytes[i] = ((key_bytes[i] << 4) & 0xF0) | ((key_bytes[i] >> 4) & 0x0F)
+
     escape_chars = {0, 5, 36, 96, 124, 126}
     result = []
     for b in key_bytes:

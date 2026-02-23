@@ -255,13 +255,10 @@ class MockNMDCpbHub:
     def _handle_pb(self, sender: str, wire: str) -> None:
         if not sender:
             return
-        result = WireCodec.decode(wire)
-        if result is None:
+        env = WireCodec.decode(wire)
+        if env is None:
             return
-        if isinstance(result, tuple):
-            return  # Relay not implemented
 
-        env = result
         env.from_nick = sender  # Hub is authoritative
 
         route = env.route

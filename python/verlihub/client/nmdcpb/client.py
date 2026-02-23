@@ -228,12 +228,9 @@ class NMDCpbClient:
 
         # Check for NMDCpb commands first
         if WireCodec.is_nmdcpb_command(line + "|"):
-            result = WireCodec.decode(line + "|")
-            if isinstance(result, PbEnvelope):
-                await self._handle_pb_envelope(result)
-            elif isinstance(result, tuple):
-                relay_id, encrypted_data = result
-                await self._handle_relay_data(relay_id, encrypted_data)
+            env = WireCodec.decode(line + "|")
+            if env is not None:
+                await self._handle_pb_envelope(env)
             return
 
         # Standard NMDC dispatch
@@ -316,6 +313,12 @@ class NMDCpbClient:
         if nick == self.nick:
             self._logged_in = True
             log.info(f"Logged in as {self.nick}")
+
+            # Send $Version (required by hub login state machine)
+            await self._send_raw("$Version 1,0091|")
+
+            # Request nick list
+            await self._send_raw("$GetNickList|")
 
             # Send MyINFO
             tag = f"<NMDCpb V:0.1.0,M:P,H:1/0/0,S:{self.slots}>"

@@ -44,6 +44,8 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import (
     PbRelayData,
     PbRelayClosed,
     PbRelayStatus,
+    PbPrivateSearch,
+    PbPrivateSearchResult,
 )
 from verlihub.client.nmdcpb.wire import WireCodec, FEATURE_NMDCPB, FEATURE_HUBRELAY
 from verlihub.client.nmdcpb.e2epm import E2EPMManager
@@ -139,6 +141,9 @@ class NMDCpbClient:
         self.on_relay_data: Optional[Callable[[int, bytes, int], None]] = None  # (relay_id, data, offset)
         self.on_relay_closed: Optional[Callable[[int, str], None]] = None  # (relay_id, reason)
         self.on_relay_status: Optional[Callable[[PbRelayStatus], None]] = None
+        # PrivateSearch callbacks
+        self.on_private_search: Optional[Callable[[str, PbPrivateSearch], None]] = None  # (from_nick, search)
+        self.on_private_search_result: Optional[Callable[[str, PbPrivateSearchResult], None]] = None  # (from_nick, result)
 
     @property
     def hub_supports_nmdcpb(self) -> bool:
@@ -448,6 +453,17 @@ class NMDCpbClient:
         elif payload == "relay_status":
             if self.on_relay_status:
                 self.on_relay_status(env.relay_status)
+
+        elif payload == "private_search":
+            log.debug(f"PrivateSearch from {env.from_nick}: id={env.private_search.search_id}")
+            if self.on_private_search:
+                self.on_private_search(env.from_nick, env.private_search)
+
+        elif payload == "private_search_result":
+            log.debug(f"PrivateSearchResult from {env.from_nick}: id={env.private_search_result.search_id}, "
+                       f"{len(env.private_search_result.results)} results")
+            if self.on_private_search_result:
+                self.on_private_search_result(env.from_nick, env.private_search_result)
 
     async def _handle_e2epm_key_exchange(self, env: PbEnvelope) -> None:
         """Handle incoming E2EPM key exchange."""
@@ -786,6 +802,92 @@ class NMDCpbClient:
             return True
 
         return False
+
+    async def send_private_search(
+        self,
+        target: str,
+        query: str = "",
+        tth: str = "",
+        file_type: int = 0,
+        min_size: int = 0,
+        max_size: int = 0,
+        max_results: int = 10,
+        extensions: list[str] | None = None,
+    ) -> str:
+        """Send a private search to a specific user (invisible to search spy).
+
+        Either ``query`` or ``tth`` must be provided.  Returns the search_id
+        which can be correlated with the response callback.
+        """
+        import uuid
+        search_id = uuid.uuid4().hex[:16]
+
+        if not self._hub_nmdcpb:
+            log.warning("Hub doesn't support NMDCpb — cannot send private search")
+            return ""
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=target,
+        )
+        ps = env.private_search
+        ps.search_id = search_id
+        if tth:
+            ps.tth = tth
+            ps.file_type = PbPrivateSearch.TTH
+        else:
+            ps.query = query
+            ps.file_type = file_type
+        ps.min_size = min_size
+        ps.max_size = max_size
+        ps.max_results = min(max(max_results, 1), 100)
+        if extensions:
+            ps.extensions.extend(extensions)
+
+        await self._send_pb(env)
+        log.info(f"PrivateSearch sent to {target}: id={search_id}, q='{query}', tth='{tth}'")
+        return search_id
+
+    async def send_private_search_result(
+        self,
+        target: str,
+        search_id: str,
+        results: list[dict],
+        is_partial: bool = False,
+        error: str = "",
+    ) -> None:
+        """Send private search results back to a requester.
+
+        Each result dict should have keys: filename, path, size, tth,
+        free_slots, total_slots, is_directory.
+        """
+        if not self._hub_nmdcpb:
+            return
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=target,
+        )
+        psr = env.private_search_result
+        psr.search_id = search_id
+        psr.is_partial = is_partial
+        if error:
+            psr.error = error
+
+        for r in results:
+            item = psr.results.add()
+            item.filename = r.get("filename", "")
+            item.path = r.get("path", "")
+            item.size = r.get("size", 0)
+            item.tth = r.get("tth", "")
+            item.free_slots = r.get("free_slots", 0)
+            item.total_slots = r.get("total_slots", 0)
+            item.is_directory = r.get("is_directory", False)
+
+        await self._send_pb(env)
+        log.debug(f"PrivateSearchResult sent to {target}: id={search_id}, {len(results)} results")
 
     async def send_legacy_chat(self, text: str) -> None:
         """Send a legacy NMDC public chat message."""

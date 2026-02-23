@@ -44,6 +44,7 @@ from verlihub.client.nmdcpb.e2epm import (
     E2EPM_SALT,
 )
 from verlihub.client.nmdcpb.client import _nmdc_lock_to_key
+from verlihub.client.nmdcpb.client import NMDCpbClient
 
 
 # ==========================================================================
@@ -862,6 +863,312 @@ class TestWireE2EPMIntegration(unittest.TestCase):
         self.assertEqual(decoded.WhichOneof("payload"), "pm_session_end")
         bob_mgr.handle_session_end("Alice", decoded.pm_session_end)
         self.assertFalse(bob_mgr.has_session("Alice"))
+
+
+# =========================================================================
+# PrivateSearch Tests
+# =========================================================================
+
+class TestPrivateSearchProto(unittest.TestCase):
+    """Tests for PbPrivateSearch and PbPrivateSearchResult proto messages."""
+
+    def test_private_search_query_roundtrip(self):
+        """PbPrivateSearch with query serializes/deserializes correctly."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearch, PbPrivateSearchResult
+
+        ps = PbPrivateSearch()
+        ps.search_id = "search-42"
+        ps.query = "ubuntu iso"
+        ps.file_type = PbPrivateSearch.COMPRESSED
+        ps.min_size = 1024
+        ps.max_size = 5 * 1024 * 1024 * 1024  # 5 GiB
+        ps.max_results = 25
+        ps.extensions.extend(["iso", "img"])
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick="Alice", to_nick="Bob",
+        )
+        env.private_search.CopyFrom(ps)
+
+        wire = WireCodec.encode_text(env)
+        decoded = WireCodec.decode(wire)
+        self.assertEqual(decoded.WhichOneof("payload"), "private_search")
+        ps2 = decoded.private_search
+        self.assertEqual(ps2.search_id, "search-42")
+        self.assertEqual(ps2.query, "ubuntu iso")
+        self.assertEqual(ps2.file_type, PbPrivateSearch.COMPRESSED)
+        self.assertEqual(ps2.min_size, 1024)
+        self.assertEqual(ps2.max_results, 25)
+        self.assertEqual(list(ps2.extensions), ["iso", "img"])
+
+    def test_private_search_tth_roundtrip(self):
+        """PbPrivateSearch with TTH serializes/deserializes correctly."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearch
+
+        ps = PbPrivateSearch()
+        ps.search_id = "tth-1"
+        ps.tth = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567AAAABBBB"
+        ps.file_type = PbPrivateSearch.TTH
+        ps.max_results = 1
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick="Alice", to_nick="Bob",
+        )
+        env.private_search.CopyFrom(ps)
+
+        wire = WireCodec.encode_text(env)
+        decoded = WireCodec.decode(wire)
+        ps2 = decoded.private_search
+        self.assertEqual(ps2.tth, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567AAAABBBB")
+        self.assertEqual(ps2.file_type, PbPrivateSearch.TTH)
+        self.assertTrue(not ps2.query)
+
+    def test_private_search_result_roundtrip(self):
+        """PbPrivateSearchResult roundtrips correctly."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearchResult
+
+        psr = PbPrivateSearchResult()
+        psr.search_id = "search-42"
+        psr.is_partial = True
+
+        r1 = psr.results.add()
+        r1.filename = "ubuntu-24.04.iso"
+        r1.path = "Shared/ISOs/"
+        r1.size = 4_700_000_000
+        r1.tth = "AAABBBCCC111222333444555666777888999AABBB"
+        r1.free_slots = 3
+        r1.total_slots = 5
+        r1.is_directory = False
+
+        r2 = psr.results.add()
+        r2.filename = "ISOs"
+        r2.path = "Shared/"
+        r2.is_directory = True
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick="Bob", to_nick="Alice",
+        )
+        env.private_search_result.CopyFrom(psr)
+
+        wire = WireCodec.encode_text(env)
+        decoded = WireCodec.decode(wire)
+        self.assertEqual(decoded.WhichOneof("payload"), "private_search_result")
+        psr2 = decoded.private_search_result
+        self.assertEqual(psr2.search_id, "search-42")
+        self.assertTrue(psr2.is_partial)
+        self.assertEqual(len(psr2.results), 2)
+
+        self.assertEqual(psr2.results[0].filename, "ubuntu-24.04.iso")
+        self.assertEqual(psr2.results[0].size, 4_700_000_000)
+        self.assertFalse(psr2.results[0].is_directory)
+
+        self.assertEqual(psr2.results[1].filename, "ISOs")
+        self.assertTrue(psr2.results[1].is_directory)
+
+    def test_private_search_result_error(self):
+        """PbPrivateSearchResult with error."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearchResult
+
+        psr = PbPrivateSearchResult()
+        psr.search_id = "fail-1"
+        psr.error = "search disabled"
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick="Bob", to_nick="Alice",
+        )
+        env.private_search_result.CopyFrom(psr)
+
+        wire = WireCodec.encode_text(env)
+        decoded = WireCodec.decode(wire)
+        psr2 = decoded.private_search_result
+        self.assertEqual(psr2.error, "search disabled")
+        self.assertEqual(len(psr2.results), 0)
+
+    def test_private_search_routed_encoding(self):
+        """PrivateSearch uses $PBR (routed) wire encoding for DIRECT route."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearch
+
+        ps = PbPrivateSearch()
+        ps.search_id = "routed-1"
+        ps.query = "test"
+        ps.max_results = 5
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick="Alice", to_nick="Bob",
+        )
+        env.private_search.CopyFrom(ps)
+
+        wire = WireCodec.encode_routed(env)
+        self.assertTrue(wire.startswith("$PBR "))
+        # Should contain both nicks
+        self.assertIn("Bob", wire)
+        self.assertIn("Alice", wire)
+
+        # Decode and verify
+        decoded = WireCodec.decode(wire)
+        self.assertEqual(decoded.private_search.search_id, "routed-1")
+
+    def test_private_search_filetype_values(self):
+        """FileType enum values match standard NMDC SearchManager::TypeModes."""
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearch
+
+        self.assertEqual(PbPrivateSearch.ANY, 0)
+        self.assertEqual(PbPrivateSearch.AUDIO, 1)
+        self.assertEqual(PbPrivateSearch.COMPRESSED, 2)
+        self.assertEqual(PbPrivateSearch.DOCUMENT, 3)
+        self.assertEqual(PbPrivateSearch.EXECUTABLE, 4)
+        self.assertEqual(PbPrivateSearch.PICTURE, 5)
+        self.assertEqual(PbPrivateSearch.VIDEO, 6)
+        self.assertEqual(PbPrivateSearch.DIRECTORY, 7)
+        self.assertEqual(PbPrivateSearch.TTH, 8)
+
+
+class TestPrivateSearchClient(unittest.TestCase):
+    """Tests for NMDCpbClient private search send methods."""
+
+    def test_send_private_search_creates_envelope(self):
+        """Verify send_private_search builds a correct envelope."""
+        import asyncio
+
+        sent_envs = []
+
+        async def run():
+            client = NMDCpbClient("Alice", "pass")
+            client._hub_nmdcpb = True
+            client._connected = True
+
+            # Monkey-patch _send_pb to capture sent envelopes
+            async def capture_send(env):
+                sent_envs.append(env)
+            client._send_pb = capture_send
+
+            sid = await client.send_private_search(
+                "Bob", query="linux", file_type=2, max_results=20,
+                extensions=["iso"]
+            )
+            return sid
+
+        sid = asyncio.run(run())
+        self.assertTrue(len(sid) > 0)
+        self.assertEqual(len(sent_envs), 1)
+
+        env = sent_envs[0]
+        self.assertEqual(env.WhichOneof("payload"), "private_search")
+        self.assertEqual(env.private_search.query, "linux")
+        self.assertEqual(env.private_search.file_type, 2)
+        self.assertEqual(env.private_search.max_results, 20)
+        self.assertEqual(list(env.private_search.extensions), ["iso"])
+        self.assertEqual(env.to_nick, "Bob")
+        self.assertEqual(env.route, PbEnvelope.DIRECT)
+
+    def test_send_private_search_result_creates_envelope(self):
+        """Verify send_private_search_result builds a correct envelope."""
+        import asyncio
+
+        sent_envs = []
+
+        async def run():
+            client = NMDCpbClient("Bob", "pass")
+            client._hub_nmdcpb = True
+            client._connected = True
+
+            async def capture_send(env):
+                sent_envs.append(env)
+            client._send_pb = capture_send
+
+            await client.send_private_search_result(
+                "Alice", "search-42",
+                results=[
+                    {"filename": "song.mp3", "path": "Music/", "size": 5000000,
+                     "tth": "AAA", "free_slots": 2, "total_slots": 4},
+                ],
+                is_partial=False,
+            )
+
+        asyncio.run(run())
+        self.assertEqual(len(sent_envs), 1)
+        env = sent_envs[0]
+        self.assertEqual(env.WhichOneof("payload"), "private_search_result")
+        psr = env.private_search_result
+        self.assertEqual(psr.search_id, "search-42")
+        self.assertEqual(len(psr.results), 1)
+        self.assertEqual(psr.results[0].filename, "song.mp3")
+        self.assertEqual(psr.results[0].size, 5000000)
+        self.assertFalse(psr.is_partial)
+
+    def test_send_private_search_no_nmdcpb_returns_empty(self):
+        """send_private_search returns empty string when hub doesn't support NMDCpb."""
+        import asyncio
+
+        async def run():
+            client = NMDCpbClient("Alice", "pass")
+            client._hub_nmdcpb = False
+            client._connected = True
+            return await client.send_private_search("Bob", query="test")
+
+        sid = asyncio.run(run())
+        self.assertEqual(sid, "")
+
+    def test_callback_on_private_search(self):
+        """on_private_search callback fires when receiving a private_search envelope."""
+        import asyncio
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearch
+
+        received = []
+
+        async def run():
+            client = NMDCpbClient("Bob", "pass")
+            client._hub_nmdcpb = True
+            client._connected = True
+            client.on_private_search = lambda nick, ps: received.append((nick, ps))
+
+            # Simulate receiving an envelope
+            env = PbEnvelope()
+            env.route = PbEnvelope.DIRECT
+            env.from_nick = "Alice"
+            env.to_nick = "Bob"
+            ps = env.private_search
+            ps.search_id = "cb-1"
+            ps.query = "test file"
+            ps.max_results = 5
+
+            await client._handle_pb_envelope(env)
+
+        asyncio.run(run())
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0][0], "Alice")
+        self.assertEqual(received[0][1].search_id, "cb-1")
+
+    def test_callback_on_private_search_result(self):
+        """on_private_search_result callback fires when receiving results."""
+        import asyncio
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbPrivateSearchResult
+
+        received = []
+
+        async def run():
+            client = NMDCpbClient("Alice", "pass")
+            client._hub_nmdcpb = True
+            client._connected = True
+            client.on_private_search_result = lambda nick, psr: received.append((nick, psr))
+
+            env = PbEnvelope()
+            env.route = PbEnvelope.DIRECT
+            env.from_nick = "Bob"
+            env.to_nick = "Alice"
+            psr = env.private_search_result
+            psr.search_id = "cb-1"
+            r = psr.results.add()
+            r.filename = "data.zip"
+            r.size = 1024
+
+            await client._handle_pb_envelope(env)
+
+        asyncio.run(run())
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0][0], "Bob")
+        self.assertEqual(received[0][1].search_id, "cb-1")
+        self.assertEqual(len(received[0][1].results), 1)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,8 @@ message PbEnvelope {
     PbCallEnd call_end = 53;
     PbCallMediaControl call_media_control = 54;
     PbHubStream hub_stream = 55;
+    PbPrivateSearch private_search = 60;
+    PbPrivateSearchResult private_search_result = 61;
   }
 }
 
@@ -497,4 +499,55 @@ message PbHubStream {
   uint32 max_viewers = 8;
   uint32 bitrate = 9;
   string description = 10;
+}
+
+// ============================================================================
+// Private Search (targeted search against a specific user's shares)
+// ============================================================================
+
+// Private search request — sent DIRECT to a specific user via $PBR.
+// The hub routes it without broadcasting, so search spy tools cannot see it.
+// Optionally encrypted inside PbEncryptedPM for full privacy from hub.
+message PbPrivateSearch {
+  string search_id = 1;           // Unique ID to correlate request/response
+  string query = 2;               // Search string (filename pattern or keywords)
+  string tth = 3;                 // TTH root hash (base32) — mutually exclusive with query
+
+  // Re-use PbSearch.FileType enum values
+  enum FileType {
+    ANY = 0;
+    AUDIO = 1;
+    COMPRESSED = 2;
+    DOCUMENT = 3;
+    EXECUTABLE = 4;
+    PICTURE = 5;
+    VIDEO = 6;
+    DIRECTORY = 7;
+    TTH = 8;
+  }
+  FileType file_type = 4;
+
+  uint64 min_size = 5;            // Minimum file size bytes (0 = no limit)
+  uint64 max_size = 6;            // Maximum file size bytes (0 = no limit)
+  uint32 max_results = 7;         // Maximum results to return (default: 10, max: 100)
+  repeated string extensions = 8; // File extension filter (e.g., ["mp3", "flac"])
+}
+
+// Private search results — sent back via $PBR to the requester only.
+message PbPrivateSearchResult {
+  string search_id = 1;           // Matches the request's search_id
+
+  message Result {
+    string filename = 1;
+    string path = 2;              // Full path within share
+    uint64 size = 3;
+    string tth = 4;               // Tiger Tree Hash (base32)
+    uint32 free_slots = 5;
+    uint32 total_slots = 6;
+    bool is_directory = 7;
+  }
+  repeated Result results = 2;
+
+  bool is_partial = 3;            // true if results were truncated by max_results
+  string error = 4;               // Non-empty if search failed (e.g., "search disabled")
 }

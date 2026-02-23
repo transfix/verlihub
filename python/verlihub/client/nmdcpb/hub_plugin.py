@@ -344,7 +344,8 @@ def _route_direct(sender: str, env: PbEnvelope) -> None:
         return
 
     payload = env.WhichOneof("payload")
-    if payload in ("pm_key_exchange", "encrypted_pm", "pm_session_end"):
+    if payload in ("pm_key_exchange", "encrypted_pm", "pm_session_end",
+                    "private_search", "private_search_result"):
         if ENABLE_E2EPM_FORWARD:
             _forward_e2epm(sender, target, env)
         else:

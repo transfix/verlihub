@@ -56,6 +56,10 @@ extern volatile sig_atomic_t pending_signal_crash;  // SIGSEGV and other crashes
 #include "czlib.h"
 #include "cconndc.h"
 
+#ifdef WITH_NMDCPB
+#include "crelay.h"
+#endif
+
 #define USER_ZONES 6
 
 #define BAD_NICK_CHARS_NMDC " $|"
@@ -258,6 +262,10 @@ class cServerDC : public cAsyncSocketServer
 		cZLib *mZLib;
 		cMaxMindDB *mMaxMindDB; // maxminddb class
 		cICUConvert *mICUConvert; // icu converter and transliterator
+
+		#ifdef WITH_NMDCPB
+		nProtocol::cRelayManager *mRelayManager; // NMDCpb relay session manager
+		#endif
 		// Process name
 		string mExecPath;
 

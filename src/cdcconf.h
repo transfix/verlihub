@@ -282,6 +282,21 @@ public:
 	unsigned int zlib_min_len;
 	bool detect_ctmtohub; // ctm2hub
 	bool disable_extjson; // extjson
+
+	// NMDCpb relay and E2EPM settings
+	bool relay_enabled;
+	unsigned int relay_max_sessions_per_user;
+	unsigned int relay_max_bandwidth_per_user;
+	unsigned int relay_max_total_bandwidth;
+	int relay_min_class;
+	unsigned int relay_max_payload;
+	unsigned int relay_idle_timeout;
+	bool relay_passive_only;
+	bool e2epm_enabled;
+	int e2epm_min_class;
+	unsigned int e2epm_max_msg_size;
+	unsigned int e2epm_flood_period;
+	unsigned int e2epm_flood_count;
 	bool myinfo_tls_filter;
 	string mmdb_names_lang; // mmdb
 	unsigned int mmdb_conv_depth;

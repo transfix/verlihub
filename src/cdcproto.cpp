@@ -533,6 +533,12 @@ int cDCProto::DC_Supports(cMessageDC *msg, cConnDC *conn)
 		} else if ((feature.size() == 6) && (StrCompare(feature, 0, 6, "NMDCpb") == 0)) {
 			conn->mFeatures |= eSF_NMDCPB;
 			pars.append("NMDCpb ");
+
+		} else if ((feature.size() == 8) && (StrCompare(feature, 0, 8, "HubRelay") == 0)) {
+			conn->mFeatures |= eSF_HUBRELAY;
+
+			if (mS->mC.relay_enabled)
+				pars.append("HubRelay ");
 		}
 	}
 
@@ -1852,6 +1858,27 @@ int cDCProto::DC_PBR(cMessageDC *msg, cConnDC *conn)
 		os << autosprintf(_("User %s does not support NMDCpb protocol."), to.c_str());
 		mS->DCPublicHS(os.str(), conn);
 		return -2;
+	}
+
+	// E2EPM permission and size checks
+	// Routed messages may carry E2EPM payloads (key exchange, encrypted PM).
+	// We don't deserialize the protobuf — we check config permissions and size.
+	if (mS->mC.e2epm_enabled) {
+		// Check minimum class for E2EPM
+		if (conn->mpUser->mClass < mS->mC.e2epm_min_class) {
+			os << autosprintf(_("Your user class (%d) is too low to use encrypted PM (minimum: %d)."), conn->mpUser->mClass, mS->mC.e2epm_min_class);
+			mS->DCPublicHS(os.str(), conn);
+			return -2;
+		}
+
+		// Check message size limit
+		const string &data = msg->ChunkString(eCH_PBR_DATA);
+
+		if (data.size() > mS->mC.e2epm_max_msg_size) {
+			os << autosprintf(_("NMDCpb routed message too large: %zu bytes (maximum: %u)."), data.size(), mS->mC.e2epm_max_msg_size);
+			mS->DCPublicHS(os.str(), conn);
+			return -2;
+		}
 	}
 
 	#ifndef WITHOUT_PLUGINS

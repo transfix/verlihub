@@ -146,6 +146,10 @@ cServerDC::cServerDC(string CfgBase, const string &ExecPath):
 	mMaxMindDB = new cMaxMindDB(this);
 	mICUConvert = new cICUConvert(this);
 
+	#ifdef WITH_NMDCPB
+	mRelayManager = new nProtocol::cRelayManager();
+	#endif
+
 	unsigned int i, j;
 
 	for (i = 0; i < 2; i++) {
@@ -343,6 +347,13 @@ cServerDC::~cServerDC()
 		delete mICUConvert;
 		mICUConvert = NULL;
 	}
+
+	#ifdef WITH_NMDCPB
+	if (mRelayManager) {
+		delete mRelayManager;
+		mRelayManager = NULL;
+	}
+	#endif
 
 	mMySQL.Close();
 
@@ -1913,6 +1924,18 @@ int cServerDC::OnTimer(const cTime &now)
 
 	if (mC.mmdb_cache && mC.mmdb_cache_mins && ((mTime.Sec() - mMaxMindDB->mClean.Sec()) >= 60)) // clean mmdb cache every minute
 		mMaxMindDB->MMDBCacheClean(); // do not confuse with MMDBCacheClear
+
+	#ifdef WITH_NMDCPB
+	// Clean up timed-out relay sessions every 60 seconds
+	if (mRelayManager && mC.relay_enabled && mC.relay_idle_timeout) {
+		static time_t sLastRelayCleanup = 0;
+
+		if ((mTime.Sec() - sLastRelayCleanup) >= 60) {
+			mRelayManager->CleanupTimedOut(mTime.Sec(), mC.relay_idle_timeout);
+			sLastRelayCleanup = mTime.Sec();
+		}
+	}
+	#endif
 
 	if (mC.detect_ctmtohub && ((mTime.Sec() - mCtmToHubConf.mTime.Sec()) >= 60)) { // ctm2hub
 		unsigned long total = mCtmToHubList.size();

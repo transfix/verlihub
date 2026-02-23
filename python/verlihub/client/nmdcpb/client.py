@@ -463,12 +463,20 @@ class NMDCpbClient:
         return self._sequence
 
     async def _send_pb(self, env: PbEnvelope) -> None:
-        """Send a PbEnvelope via $PB text mode."""
+        """Send a PbEnvelope via appropriate wire command.
+
+        Uses $PBR for DIRECT-routed messages, $PB for everything else.
+        """
         if not env.sequence:
             env.sequence = self._next_seq()
         if not env.timestamp:
             env.timestamp = int(time.time() * 1000)
-        wire = WireCodec.encode_text(env)
+
+        if env.route == PbEnvelope.DIRECT and env.to_nick:
+            wire = WireCodec.encode_routed(env)
+        else:
+            wire = WireCodec.encode_text(env)
+
         await self._send_raw(wire)
 
     async def send_pb_chat(self, text: str, is_action: bool = False) -> None:

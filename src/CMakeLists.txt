@@ -208,6 +208,7 @@ if(Protobuf_FOUND)
 	list(APPEND VERLIHUB_SRCS
 		"${NMDCPB_GENERATED_DIR}/nmdcpb.pb.cc"
 		cpbtranslate.cpp
+		crelay.cpp
 	)
 
 	include_directories(${NMDCPB_GENERATED_DIR})

@@ -381,6 +381,21 @@ void cDCConf::AddVars()
 	Add("zlib_min_len", zlib_min_len, 100);
 	Add("detect_ctmtohub", detect_ctmtohub, true); // ctm2hub
 	Add("disable_extjson", disable_extjson, true); // extjson
+
+	// NMDCpb relay and E2EPM
+	Add("relay_enabled", relay_enabled, false);
+	Add("relay_max_sessions_per_user", relay_max_sessions_per_user, 3);
+	Add("relay_max_bandwidth_per_user", relay_max_bandwidth_per_user, 1048576);
+	Add("relay_max_total_bandwidth", relay_max_total_bandwidth, 10485760);
+	Add("relay_min_class", relay_min_class, 1);
+	Add("relay_max_payload", relay_max_payload, 65536);
+	Add("relay_idle_timeout", relay_idle_timeout, 300);
+	Add("relay_passive_only", relay_passive_only, true);
+	Add("e2epm_enabled", e2epm_enabled, true);
+	Add("e2epm_min_class", e2epm_min_class, 0);
+	Add("e2epm_max_msg_size", e2epm_max_msg_size, 32768);
+	Add("e2epm_flood_period", e2epm_flood_period, 1);
+	Add("e2epm_flood_count", e2epm_flood_count, 5);
 	Add("myinfo_tls_filter", myinfo_tls_filter, false);
 	Add("mmdb_names_lang", mmdb_names_lang, ""); // maxminddb names language, empty means english
 	Add("mmdb_conv_depth", mmdb_conv_depth, 2); // conversion depth, 0 = do nothing, 1 = utf8 to hub_encoding conversion, 2 = transliteration

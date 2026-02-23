@@ -52,30 +52,8 @@ def _hub_reachable() -> bool:
         return False
 
 
-def _nmdc_lock_to_key(lock: str) -> str:
-    """Standard NMDC $Lock → $Key algorithm."""
-    key_bytes = []
-    lock_bytes = [ord(c) for c in lock]
-    n = len(lock_bytes)
-    for i in range(1, n):
-        key_bytes.append(lock_bytes[i] ^ lock_bytes[i - 1])
-    key_bytes.insert(
-        0, lock_bytes[0] ^ lock_bytes[n - 1] ^ lock_bytes[n - 2] ^ 5
-    )
-
-    # Nibble-swap
-    for i in range(len(key_bytes)):
-        key_bytes[i] = ((key_bytes[i] << 4) & 0xF0) | ((key_bytes[i] >> 4) & 0x0F)
-
-    escape_chars = {0, 5, 36, 96, 124, 126}
-    result = []
-    for b in key_bytes:
-        b &= 0xFF
-        if b in escape_chars:
-            result.append(f"/%DCN{b:03d}%/")
-        else:
-            result.append(chr(b))
-    return "".join(result)
+# Reuse the library's lock-to-key instead of duplicating
+from verlihub.client.nmdcpb.client import _nmdc_lock_to_key
 
 
 class NMDCTestClient:
@@ -603,3 +581,241 @@ class TestNmdcPbLiveMixed:
                 assert found_translated, (
                     "Legacy client didn't receive translated PB chat"
                 )
+
+
+# ============================================================================
+# Phase 2: E2EPM Live Tests (NMDCpbClient library ↔ real verlihub)
+# ============================================================================
+
+
+class TestNmdcPbLiveE2EPM:
+    """Test E2EPM key exchange and encrypted messaging through a real verlihub.
+
+    Uses the full NMDCpbClient library (not the lightweight NMDCTestClient)
+    to exercise the complete E2EPM flow through the hub's DC_PBR handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_e2epm_key_exchange_through_hub(self):
+        """Two NMDCpbClient instances complete E2EPM key exchange via hub."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("kexA")
+        nick_b = _unique_nick("kexB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: alice_est.set()
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)  # Let handshake complete
+
+            # Alice initiates E2EPM with Bob (triggers key exchange)
+            result = await alice.send_encrypted_pm(nick_b, "init")
+            assert not result, "First send should return False (kex in progress)"
+
+            # Wait for both sides to establish session
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+
+            assert alice.e2epm.has_session(nick_b), \
+                "Alice should have E2EPM session with Bob"
+            assert bob.e2epm.has_session(nick_a), \
+                "Bob should have E2EPM session with Alice"
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_encrypted_pm_through_hub(self):
+        """Full E2EPM flow: key exchange → encrypted PM → decryption."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("epmA")
+        nick_b = _unique_nick("epmB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        decrypted: list[tuple[str, str, bool]] = []
+        bob.on_encrypted_pm = lambda fn, text, ia: decrypted.append((fn, text, ia))
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: alice_est.set()
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            # Initiate key exchange
+            await alice.send_encrypted_pm(nick_b, "trigger kex")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            # Now send the real encrypted message
+            sent = await alice.send_encrypted_pm(nick_b, "Top secret via hub!")
+            assert sent, "Message should have been sent after kex complete"
+
+            await asyncio.sleep(2.0)
+
+            assert any(
+                text == "Top secret via hub!" for _, text, _ in decrypted
+            ), f"Bob didn't decrypt. Got: {decrypted}"
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_bidirectional(self):
+        """Both clients can send encrypted PMs to each other once established."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("bidA")
+        nick_b = _unique_nick("bidB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        alice_msgs: list[tuple[str, str, bool]] = []
+        bob_msgs: list[tuple[str, str, bool]] = []
+        alice.on_encrypted_pm = lambda fn, text, ia: alice_msgs.append((fn, text, ia))
+        bob.on_encrypted_pm = lambda fn, text, ia: bob_msgs.append((fn, text, ia))
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: alice_est.set()
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            # Establish session
+            await alice.send_encrypted_pm(nick_b, "init")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            # Alice → Bob
+            sent1 = await alice.send_encrypted_pm(nick_b, "From Alice")
+            assert sent1
+
+            # Bob → Alice
+            sent2 = await bob.send_encrypted_pm(nick_a, "From Bob")
+            assert sent2
+
+            await asyncio.sleep(2.0)
+
+            assert any(t == "From Alice" for _, t, _ in bob_msgs), \
+                f"Bob didn't receive Alice's msg: {bob_msgs}"
+            assert any(t == "From Bob" for _, t, _ in alice_msgs), \
+                f"Alice didn't receive Bob's msg: {alice_msgs}"
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_fingerprint_consistency(self):
+        """Both peers compute matching fingerprints after key exchange."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("fpA")
+        nick_b = _unique_nick("fpB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        alice_fp = None
+        bob_fp = None
+
+        def on_alice_est(n, fp):
+            nonlocal alice_fp
+            alice_fp = fp
+
+        def on_bob_est(n, fp):
+            nonlocal bob_fp
+            bob_fp = fp
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+
+        alice.on_e2epm_established = lambda n, fp: (on_alice_est(n, fp), alice_est.set())
+        bob.on_e2epm_established = lambda n, fp: (on_bob_est(n, fp), bob_est.set())
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            await alice.send_encrypted_pm(nick_b, "fp check")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            assert alice_fp is not None, "Alice fingerprint not set"
+            assert bob_fp is not None, "Bob fingerprint not set"
+            assert alice_fp == bob_fp, \
+                f"Fingerprints mismatch: {alice_fp} != {bob_fp}"
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_third_party_cannot_decrypt(self):
+        """A third NMDCpb client cannot see E2EPM plaintext between two peers."""
+        nick_a = _unique_nick("secA")
+        nick_b = _unique_nick("secB")
+        nick_c = _unique_nick("secC")
+
+        async with NMDCTestClient(nick_c, nmdcpb=True) as carol:
+            from verlihub.client.nmdcpb.client import NMDCpbClient
+
+            alice = NMDCpbClient(nick_a)
+            bob = NMDCpbClient(nick_b)
+
+            bob_msgs: list[tuple[str, str, bool]] = []
+            bob.on_encrypted_pm = lambda fn, t, ia: bob_msgs.append((fn, t, ia))
+
+            a_est = asyncio.Event()
+            b_est = asyncio.Event()
+            alice.on_e2epm_established = lambda n, fp: a_est.set()
+            bob.on_e2epm_established = lambda n, fp: b_est.set()
+
+            try:
+                await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+                await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+                await asyncio.sleep(1.0)
+
+                await alice.send_encrypted_pm(nick_b, "init")
+                await asyncio.wait_for(a_est.wait(), timeout=MSG_TIMEOUT)
+                await asyncio.wait_for(b_est.wait(), timeout=MSG_TIMEOUT)
+
+                await alice.send_encrypted_pm(nick_b, "Secret message")
+                await asyncio.sleep(2.0)
+
+                # Bob got it
+                assert any(t == "Secret message" for _, t, _ in bob_msgs)
+
+                # Carol should NOT have any $PBR lines (E2EPM is point-to-point)
+                assert len(carol.pbr_raw_lines) == 0, \
+                    f"Carol received E2EPM traffic: {carol.pbr_raw_lines}"
+
+                # Also no $PB lines from this exchange
+                # (E2EPM uses $PBR, not $PB)
+                epm_in_pb = [
+                    l for l in carol.pb_raw_lines
+                    if nick_a in l or nick_b in l
+                ]
+                assert len(epm_in_pb) == 0, \
+                    f"Carol received E2EPM as $PB: {epm_in_pb}"
+            finally:
+                await alice.disconnect()
+                await bob.disconnect()

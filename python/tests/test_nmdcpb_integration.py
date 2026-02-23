@@ -158,7 +158,7 @@ class TestHubRoutingIntegration(unittest.TestCase):
         )
         env.chat.text = "Private message"
         env.chat.is_pm = True
-        wire = WireCodec.encode_text(env)
+        wire = WireCodec.encode_routed(env)
 
         self.hub.route_message("Alice", wire)
 
@@ -197,7 +197,7 @@ class TestHubRoutingIntegration(unittest.TestCase):
             to_nick="OfflineUser",
         )
         env.chat.text = "Hello?"
-        wire = WireCodec.encode_text(env)
+        wire = WireCodec.encode_routed(env)
 
         self.hub.route_message("Alice", wire)
         # No crash, message just not delivered
@@ -232,7 +232,10 @@ class TestE2EPMIntegration(unittest.TestCase):
         self.bob_mgr = E2EPMManager("Bob")
 
     def _send_via_hub(self, sender: str, env: PbEnvelope) -> None:
-        wire = WireCodec.encode_text(env)
+        if env.route == PbEnvelope.DIRECT and env.to_nick:
+            wire = WireCodec.encode_routed(env)
+        else:
+            wire = WireCodec.encode_text(env)
         self.hub.route_message(sender, wire)
 
     def _recv_one(self, nick: str) -> PbEnvelope:

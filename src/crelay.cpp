@@ -32,13 +32,16 @@ namespace nVerliHub {
 cRelayManager::cRelayManager():
 	mNextId(1),
 	mTotalBytesRelayed(0)
-{}
+{
+	mGlobalBandwidth.Init(10485760, time(NULL)); // 10 MB/s default
+}
 
 cRelayManager::~cRelayManager()
 {
 	lock_guard<mutex> lock(mMutex);
 	mSessions.clear();
 	mPendingByToken.clear();
+	mUserBandwidth.clear();
 }
 
 uint32_t cRelayManager::RequestRelay(nSocket::cConnDC *from, const string &targetNick,
@@ -61,6 +64,7 @@ uint32_t cRelayManager::RequestRelay(nSocket::cConnDC *from, const string &targe
 	sess.mNickA = from->mpUser ? from->mpUser->mNick : "";
 	sess.mNickB = targetNick;
 	sess.mToken = token;
+	sess.mPurpose = purpose;
 	sess.mCreated = time(NULL);
 	sess.mLastActivity = sess.mCreated;
 	sess.mBytesRelayed = 0;
@@ -108,7 +112,9 @@ uint32_t cRelayManager::AckRelay(nSocket::cConnDC *from, const string &token, bo
 	return id;
 }
 
-int cRelayManager::RelayData(nSocket::cConnDC *from, uint32_t relayId, const string &data)
+int cRelayManager::RelayData(nSocket::cConnDC *from, uint32_t relayId,
+                             const string &data, uint64_t maxPayload,
+                             uint64_t perUserRate, uint64_t globalRate)
 {
 	if (!from || data.empty())
 		return -1;
@@ -125,6 +131,10 @@ int cRelayManager::RelayData(nSocket::cConnDC *from, uint32_t relayId, const str
 	if (!sess.mEstablished)
 		return -1;
 
+	// Check payload size
+	if (maxPayload > 0 && data.size() > maxPayload)
+		return -4;
+
 	// Determine which peer to forward to
 	nSocket::cConnDC *target = NULL;
 
@@ -138,15 +148,35 @@ int cRelayManager::RelayData(nSocket::cConnDC *from, uint32_t relayId, const str
 	if (!target)
 		return -1;
 
+	time_t now = time(NULL);
+	uint64_t sz = data.size();
+
+	// Per-user bandwidth throttle
+	if (perUserRate > 0) {
+		cBandwidthBucket &ub = GetUserBucket(from, perUserRate);
+		ub.Refill(now, perUserRate);
+
+		if (!ub.Consume(sz))
+			return -2; // per-user limit exceeded
+	}
+
+	// Global bandwidth throttle
+	if (globalRate > 0) {
+		mGlobalBandwidth.Refill(now, globalRate);
+
+		if (!mGlobalBandwidth.Consume(sz))
+			return -3; // global limit exceeded
+	}
+
 	// Forward the data
 	string omsg(data);
 	target->Send(omsg, true);
 
-	sess.mBytesRelayed += data.size();
-	sess.mLastActivity = time(NULL);
-	mTotalBytesRelayed += data.size();
+	sess.mBytesRelayed += sz;
+	sess.mLastActivity = now;
+	mTotalBytesRelayed += sz;
 
-	return (int)data.size();
+	return (int)sz;
 }
 
 int cRelayManager::CloseRelay(uint32_t relayId, int reason)
@@ -292,19 +322,110 @@ uint64_t cRelayManager::GetTotalBytesRelayed()
 void cRelayManager::SendRelayClosed(nSocket::cConnDC *conn, uint32_t sessionId,
                                      int reason, const string &nick)
 {
-	// Build a minimal PbRelayClosed notification as $PB message.
-	// For now, send as a hub status message since we don't have
-	// protobuf serialization in the relay manager itself.
-	// Phase 2 implementation note: When the hub has full protobuf
-	// serialization available, this should construct a proper
-	// PbEnvelope with PbRelayClosed payload and send as $PB.
-	//
-	// For now, the relay close is communicated via the DC_PBR handler
-	// returning an error, and clients detect closed sessions via timeout.
-	(void)conn;
-	(void)sessionId;
-	(void)reason;
-	(void)nick;
+	if (!conn)
+		return;
+
+	// Build a simple relay-closed JSON notification sent as $PBR
+	// Format: $PBR <to> Hub RELAY_CLOSED:<id>:<reason>|
+	// Clients parse this to detect session closure before timeout.
+	string toNick;
+
+	if (conn->mpUser)
+		toNick = conn->mpUser->mNick;
+
+	if (toNick.empty())
+		return;
+
+	ostringstream os;
+	os << "$PBR " << toNick << " Hub RELAY_CLOSED:" << sessionId << ":" << reason << "|";
+	string msg = os.str();
+	conn->Send(msg, true);
+}
+
+cBandwidthBucket &cRelayManager::GetUserBucket(nSocket::cConnDC *conn, uint64_t defaultRate)
+{
+	auto it = mUserBandwidth.find(conn);
+
+	if (it == mUserBandwidth.end()) {
+		cBandwidthBucket &bkt = mUserBandwidth[conn];
+		bkt.Init(defaultRate, time(NULL));
+		return bkt;
+	}
+
+	return it->second;
+}
+
+void cRelayManager::SetUserBandwidthCap(nSocket::cConnDC *conn, uint64_t rate)
+{
+	if (!conn)
+		return;
+
+	lock_guard<mutex> lock(mMutex);
+
+	if (rate == 0) {
+		// Remove custom cap — fall back to global default
+		mUserBandwidth.erase(conn);
+		return;
+	}
+
+	cBandwidthBucket &bkt = mUserBandwidth[conn];
+	bkt.Init(rate, time(NULL));
+}
+
+cRelayStats cRelayManager::GetStats()
+{
+	lock_guard<mutex> lock(mMutex);
+
+	cRelayStats stats;
+	stats.mActiveSessions = 0;
+	stats.mPendingSessions = 0;
+	stats.mTotalBytesRelayed = mTotalBytesRelayed;
+	stats.mGlobalBandwidthUsed = mGlobalBandwidth.mTotalBytes;
+
+	// Per-user aggregation
+	map<string, cRelayStats::UserRelayStat> perUser;
+
+	for (auto &kv : mSessions) {
+		const cRelaySession &sess = kv.second;
+
+		if (sess.mEstablished)
+			stats.mActiveSessions++;
+		else
+			stats.mPendingSessions++;
+
+		// Count for nick A
+		if (!sess.mNickA.empty()) {
+			auto &u = perUser[sess.mNickA];
+			u.mNick = sess.mNickA;
+			u.mSessions++;
+			u.mBytesRelayed += sess.mBytesRelayed / 2; // split evenly
+		}
+
+		// Count for nick B
+		if (!sess.mNickB.empty()) {
+			auto &u = perUser[sess.mNickB];
+			u.mNick = sess.mNickB;
+			u.mSessions++;
+			u.mBytesRelayed += sess.mBytesRelayed / 2;
+		}
+	}
+
+	// Add per-user bandwidth info from buckets
+	for (auto &kv : mUserBandwidth) {
+		string nick;
+
+		if (kv.first && kv.first->mpUser)
+			nick = kv.first->mpUser->mNick;
+
+		if (!nick.empty() && perUser.count(nick)) {
+			perUser[nick].mBandwidthUsed = kv.second.mTotalBytes;
+		}
+	}
+
+	for (auto &kv : perUser)
+		stats.mPerUser.push_back(kv.second);
+
+	return stats;
 }
 
 	} // namespace nProtocol

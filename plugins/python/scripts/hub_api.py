@@ -216,11 +216,16 @@ data_cache = {
     "geo_stats": {},
     "share_stats": {},
     "hub_encoding": "cp1251",  # Default to CP1251 (common for DC++ hubs)
-    "last_update": 0
+    "last_update": 0,
+    "relay_settings": {},
 }
 data_cache_lock = threading.Lock()
 CACHE_UPDATE_INTERVAL = 5.0  # Update cache every 5 seconds (not every timer tick!)
 last_cache_update = 0  # Track when cache was last updated
+
+# Thread-safe command queue for config writes (drained by OnTimer in main thread)
+import queue
+pending_config_commands = queue.Queue()
 
 # Initialize FastAPI app
 if FASTAPI_AVAILABLE:
@@ -288,6 +293,7 @@ def update_data_cache():
         bots = _get_bot_list_unsafe()
         geo_stats = _get_geographic_stats_unsafe()
         share_stats = _get_share_stats_unsafe(users)
+        relay_settings = _get_relay_settings_unsafe()
         
         # Update cache atomically
         with data_cache_lock:
@@ -297,6 +303,7 @@ def update_data_cache():
             data_cache["geo_stats"] = geo_stats
             data_cache["share_stats"] = share_stats
             data_cache["hub_encoding"] = hub_encoding
+            data_cache["relay_settings"] = relay_settings
             data_cache["last_update"] = time.time()
     except Exception as e:
         import traceback
@@ -1300,6 +1307,53 @@ def _get_share_stats_unsafe(users: List[Dict[str, Any]] = None) -> Dict[str, Any
         "average_formatted": format_bytes(total_share // len(users)) if users else "0 B"
     }
 
+
+# Relay/E2EPM configuration keys and their defaults
+RELAY_CONFIG_KEYS = {
+    "relay_enabled": ("config", "0"),
+    "relay_max_sessions_per_user": ("config", "3"),
+    "relay_max_bandwidth_per_user": ("config", "1048576"),
+    "relay_max_total_bandwidth": ("config", "10485760"),
+    "relay_min_class": ("config", "1"),
+    "relay_max_payload": ("config", "65536"),
+    "relay_idle_timeout": ("config", "300"),
+    "relay_passive_only": ("config", "1"),
+    "e2epm_enabled": ("config", "1"),
+    "e2epm_min_class": ("config", "0"),
+    "e2epm_max_msg_size": ("config", "32768"),
+    "e2epm_flood_period": ("config", "1"),
+    "e2epm_flood_count": ("config", "5"),
+}
+
+
+def _get_relay_settings_unsafe() -> Dict[str, Any]:
+    """Get relay/E2EPM configuration (UNSAFE - call only from main thread)"""
+    settings = {}
+    for key, (section, default) in RELAY_CONFIG_KEYS.items():
+        val = vh.GetConfig(section, key, default)
+        # Convert to appropriate type
+        if key in ("relay_enabled", "relay_passive_only", "e2epm_enabled"):
+            settings[key] = bool(int(val)) if val else False
+        elif key in ("relay_min_class", "e2epm_min_class"):
+            settings[key] = int(val) if val else 0
+        else:
+            settings[key] = int(val) if val else int(default)
+    return settings
+
+
+def _apply_pending_config_commands():
+    """Apply pending SetConfig commands (UNSAFE - call only from main thread)"""
+    applied = 0
+    while not pending_config_commands.empty():
+        try:
+            section, key, value = pending_config_commands.get_nowait()
+            vh.SetConfig(section, key, str(value))
+            applied += 1
+            print(f"[Hub API] Config applied: {section}.{key} = {value}")
+        except Exception as e:
+            print(f"[Hub API] Error applying config: {e}")
+    return applied
+
 # =============================================================================
 # FastAPI Routes
 # =============================================================================
@@ -1677,6 +1731,67 @@ if FASTAPI_AVAILABLE:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error loading app: {str(e)}")
 
+    # =============================================================================
+    # Relay & E2EPM Settings Endpoints
+    # =============================================================================
+
+    @app.get("/settings/relay")
+    async def get_relay_settings():
+        """Get relay and E2EPM configuration settings"""
+        settings = get_cached_data("relay_settings")
+        if not settings:
+            return {"error": "Settings not yet cached", "settings": {}}
+        return {"settings": settings}
+
+    @app.put("/settings/relay")
+    async def update_relay_settings(body: dict):
+        """Update relay and E2EPM configuration settings.
+
+        Accepts a JSON body with key/value pairs matching RELAY_CONFIG_KEYS.
+        Changes are queued and applied on the next OnTimer tick (main thread).
+        """
+        updated = []
+        errors = []
+
+        for key, value in body.items():
+            if key not in RELAY_CONFIG_KEYS:
+                errors.append(f"Unknown setting: {key}")
+                continue
+
+            section, _ = RELAY_CONFIG_KEYS[key]
+
+            # Validate types
+            if key in ("relay_enabled", "relay_passive_only", "e2epm_enabled"):
+                value = "1" if value in (True, 1, "1", "true", "on") else "0"
+            else:
+                try:
+                    value = str(int(value))
+                except (ValueError, TypeError):
+                    errors.append(f"Invalid value for {key}: {value}")
+                    continue
+
+            pending_config_commands.put((section, key, value))
+            updated.append(key)
+
+        return {
+            "updated": updated,
+            "errors": errors,
+            "message": f"{len(updated)} setting(s) queued for update"
+        }
+
+    @app.get("/relay/stats")
+    async def get_relay_stats():
+        """Get relay session statistics"""
+        settings = get_cached_data("relay_settings") or {}
+        return {
+            "relay_enabled": settings.get("relay_enabled", False),
+            "e2epm_enabled": settings.get("e2epm_enabled", True),
+            "max_bandwidth_per_user": settings.get("relay_max_bandwidth_per_user", 1048576),
+            "max_total_bandwidth": settings.get("relay_max_total_bandwidth", 10485760),
+            "max_sessions_per_user": settings.get("relay_max_sessions_per_user", 3),
+            "max_payload": settings.get("relay_max_payload", 65536),
+        }
+
 # =============================================================================
 # Server Management
 # =============================================================================
@@ -1836,6 +1951,12 @@ def hub_api_timer_handler(msec):
     
     last_cache_update = current_time
     update_data_cache()
+
+    # Drain pending config commands (SetConfig must run on main thread)
+    try:
+        _apply_pending_config_commands()
+    except Exception as e:
+        print(f"[Hub API] Error applying config commands: {e}")
     
     # Periodically update pings for online users
     # Do this frequently (every 15 seconds) as network conditions change quickly

@@ -204,7 +204,7 @@ void test_relay_data_before_established()
 
 	uint32_t id = mgr.RequestRelay(&g_connA, "Bob", "tok_notyet", "e2epm");
 	// Session exists but not established (no ack yet)
-	int result = mgr.RelayData(&g_connA, id, "test data");
+	int result = mgr.RelayData(&g_connA, id, "test data", 0, 0, 0);
 	ASSERT_EQ(result, -1); // should fail
 	PASS();
 }
@@ -222,7 +222,7 @@ void test_relay_data_after_established()
 	// The relay manager returns data.size() on success internally,
 	// but Send() may "fail" in test. We check that the session was found
 	// and the right peer was selected.
-	int result = mgr.RelayData(&g_connA, id, "encrypted_data");
+	int result = mgr.RelayData(&g_connA, id, "encrypted_data", 0, 0, 0);
 	ASSERT_GT(result, 0);
 	ASSERT_EQ(mgr.GetTotalBytesRelayed(), (uint64_t)14); // "encrypted_data" = 14 bytes
 	PASS();
@@ -237,7 +237,7 @@ void test_relay_data_wrong_peer()
 	uint32_t id = mgr.RequestRelay(&g_connA, "Bob", "tok_wp", "e2epm");
 	mgr.AckRelay(&g_connB, "tok_wp", true);
 
-	int result = mgr.RelayData(&g_connC, id, "spoof data"); // connC is not in session
+	int result = mgr.RelayData(&g_connC, id, "spoof data", 0, 0, 0); // connC is not in session
 	ASSERT_EQ(result, -1);
 	PASS();
 }
@@ -375,7 +375,7 @@ void test_multiple_sessions_independent()
 	ASSERT_EQ(mgr.GetTotalSessions(), 1u);
 
 	// The other is still alive
-	int result = mgr.RelayData(&g_connA, id2, "still works");
+	int result = mgr.RelayData(&g_connA, id2, "still works", 0, 0, 0);
 	ASSERT_GT(result, 0);
 
 	PASS();
@@ -393,6 +393,104 @@ void test_session_ids_unique()
 	ASSERT_TRUE(id1 != id2);
 	ASSERT_TRUE(id1 > 0);
 	ASSERT_TRUE(id2 > 0);
+	PASS();
+}
+
+// --- Throttle & bandwidth tests ---
+
+void test_relay_payload_too_large()
+{
+	TEST(relay_payload_too_large);
+	cRelayManager mgr;
+	setup_fake_conns();
+
+	uint32_t id = mgr.RequestRelay(&g_connA, "Bob", "tok_pl", "file_transfer");
+	mgr.AckRelay(&g_connB, "tok_pl", true);
+
+	string big(100, 'X'); // 100 bytes
+	int result = mgr.RelayData(&g_connA, id, big, 50, 0, 0); // max 50 bytes
+	ASSERT_EQ(result, -4);
+	PASS();
+}
+
+void test_relay_per_user_throttle()
+{
+	TEST(relay_per_user_throttle);
+	cRelayManager mgr;
+	setup_fake_conns();
+
+	uint32_t id = mgr.RequestRelay(&g_connA, "Bob", "tok_put", "file_transfer");
+	mgr.AckRelay(&g_connB, "tok_put", true);
+
+	// Per-user rate = 10 bytes/sec. First 10 bytes should succeed (bucket starts full).
+	string data10(10, 'A');
+	int r1 = mgr.RelayData(&g_connA, id, data10, 0, 10, 0);
+	ASSERT_EQ(r1, 10);
+
+	// Next call should be throttled (bucket empty, same second)
+	string data5(5, 'B');
+	int r2 = mgr.RelayData(&g_connA, id, data5, 0, 10, 0);
+	ASSERT_EQ(r2, -2);
+	PASS();
+}
+
+void test_relay_global_throttle()
+{
+	TEST(relay_global_throttle);
+	cRelayManager mgr;
+	setup_fake_conns();
+
+	uint32_t id = mgr.RequestRelay(&g_connA, "Bob", "tok_gt", "file_transfer");
+	mgr.AckRelay(&g_connB, "tok_gt", true);
+
+	// Global bucket starts at 10MB. Send more than that via globalRate=20.
+	// First send of 20 bytes passes (bucket starts with 20).
+	string data20(20, 'G');
+	int r1 = mgr.RelayData(&g_connA, id, data20, 0, 0, 20);
+	ASSERT_EQ(r1, 20);
+
+	// Next should be throttled
+	string data1(1, 'H');
+	int r2 = mgr.RelayData(&g_connA, id, data1, 0, 0, 20);
+	ASSERT_EQ(r2, -3);
+	PASS();
+}
+
+void test_relay_set_user_bandwidth_cap()
+{
+	TEST(relay_set_user_bandwidth_cap);
+	cRelayManager mgr;
+	setup_fake_conns();
+
+	// Set a custom cap
+	mgr.SetUserBandwidthCap(&g_connA, 500);
+
+	// Remove cap
+	mgr.SetUserBandwidthCap(&g_connA, 0);
+
+	// Set null conn should not crash
+	mgr.SetUserBandwidthCap(NULL, 100);
+	PASS();
+}
+
+void test_relay_get_stats()
+{
+	TEST(relay_get_stats);
+	cRelayManager mgr;
+	setup_fake_conns();
+
+	uint32_t id1 = mgr.RequestRelay(&g_connA, "Bob", "tok_gs1", "file_transfer");
+	mgr.AckRelay(&g_connB, "tok_gs1", true);
+	mgr.RelayData(&g_connA, id1, "twelve_bytes", 0, 0, 0);
+
+	// One pending session
+	mgr.RequestRelay(&g_connA, "Charlie", "tok_gs2", "e2epm");
+
+	cRelayStats stats = mgr.GetStats();
+	ASSERT_EQ(stats.mActiveSessions, 1u);
+	ASSERT_EQ(stats.mPendingSessions, 1u);
+	ASSERT_EQ(stats.mTotalBytesRelayed, (uint64_t)12);
+	ASSERT_TRUE(stats.mPerUser.size() >= 1);
 	PASS();
 }
 
@@ -419,6 +517,11 @@ int main()
 	test_get_session_count();
 	test_multiple_sessions_independent();
 	test_session_ids_unique();
+	test_relay_payload_too_large();
+	test_relay_per_user_throttle();
+	test_relay_global_throttle();
+	test_relay_set_user_bandwidth_cap();
+	test_relay_get_stats();
 
 	cout << endl << "=== Results: " << g_tests_passed << "/" << g_tests_run << " passed ===" << endl;
 

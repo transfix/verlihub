@@ -124,6 +124,7 @@
             <span class="tab" data-tab="asns">ASNs</span>
             <span class="tab" data-tab="ips">IPs</span>
             <span class="tab" data-tab="chat">💬 Chat</span>
+            <span class="tab" data-tab="settings">Relay & E2EPM</span>
         </div>
         <div id="content">Loading...</div>
     </div>
@@ -679,6 +680,103 @@
             return html;
         }
 
+        function renderRelaySettings(s) {
+            function boolChecked(val) { return val ? 'checked' : ''; }
+            function fmtBytes(n) {
+                if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB/s';
+                if (n >= 1024) return (n / 1024).toFixed(0) + ' KB/s';
+                return n + ' B/s';
+            }
+
+            let html = '<div style="max-width:700px">';
+            html += '<h2 style="margin-bottom:12px">Relay & E2EPM Settings</h2>';
+            html += '<p style="margin-bottom:16px;color:#888">Relay enables file transfer through the hub for passive users. E2EPM provides end-to-end encrypted private messages.</p>';
+
+            // E2EPM section
+            html += '<fieldset style="border:1px solid #555;padding:16px;margin-bottom:16px;border-radius:6px">';
+            html += '<legend style="color:#0af;font-weight:bold"> E2EPM (Encrypted PM) </legend>';
+            html += '<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+            html += `<input type="checkbox" id="set-e2epm_enabled" ${boolChecked(s.e2epm_enabled)}> Enabled`;
+            html += '</label>';
+            html += `<label>Min user class: <input type="number" id="set-e2epm_min_class" value="${s.e2epm_min_class ?? 0}" min="0" max="10" style="width:60px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"></label>`;
+            html += `<label style="margin-left:16px">Max msg size: <input type="number" id="set-e2epm_max_msg_size" value="${s.e2epm_max_msg_size ?? 32768}" min="1024" max="1048576" style="width:90px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"> bytes</label>`;
+            html += '<br><label style="margin-top:8px;display:inline-block">Flood period: ';
+            html += `<input type="number" id="set-e2epm_flood_period" value="${s.e2epm_flood_period ?? 1}" min="1" max="60" style="width:50px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"> sec</label>`;
+            html += `<label style="margin-left:16px">Flood count: <input type="number" id="set-e2epm_flood_count" value="${s.e2epm_flood_count ?? 5}" min="1" max="100" style="width:50px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"></label>`;
+            html += '</fieldset>';
+
+            // Relay section
+            html += '<fieldset style="border:1px solid #555;padding:16px;margin-bottom:16px;border-radius:6px">';
+            html += '<legend style="color:#0af;font-weight:bold"> Hub Relay (File Transfer) </legend>';
+            html += '<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+            html += `<input type="checkbox" id="set-relay_enabled" ${boolChecked(s.relay_enabled)}> Enabled`;
+            html += '</label>';
+            html += '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+            html += `<input type="checkbox" id="set-relay_passive_only" ${boolChecked(s.relay_passive_only)}> Passive users only`;
+            html += '</label>';
+
+            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+            html += `<label>Min user class:<br><input type="number" id="set-relay_min_class" value="${s.relay_min_class ?? 1}" min="0" max="10" style="width:60px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"></label>`;
+            html += `<label>Max sessions/user:<br><input type="number" id="set-relay_max_sessions_per_user" value="${s.relay_max_sessions_per_user ?? 3}" min="1" max="50" style="width:60px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"></label>`;
+            html += `<label>Max payload:<br><input type="number" id="set-relay_max_payload" value="${s.relay_max_payload ?? 65536}" min="1024" max="1048576" style="width:90px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"> bytes</label>`;
+            html += `<label>Idle timeout:<br><input type="number" id="set-relay_idle_timeout" value="${s.relay_idle_timeout ?? 300}" min="30" max="3600" style="width:70px;background:#333;color:#eee;border:1px solid #555;padding:2px 6px;border-radius:4px"> sec</label>`;
+            html += '</div>';
+
+            // Bandwidth section
+            html += '<h3 style="margin-top:16px;margin-bottom:8px;color:#ccc">Bandwidth Limits</h3>';
+            let perUserBw = s.relay_max_bandwidth_per_user ?? 1048576;
+            let totalBw = s.relay_max_total_bandwidth ?? 10485760;
+            html += `<label>Per-user bandwidth cap:<br>`;
+            html += `<input type="range" id="set-relay_max_bandwidth_per_user" min="65536" max="52428800" step="65536" value="${perUserBw}" oninput="document.getElementById('bw-user-label').textContent=this.value>=1048576?(this.value/1048576).toFixed(1)+' MB/s':(this.value/1024).toFixed(0)+' KB/s'" style="width:100%">`;
+            html += ` <span id="bw-user-label">${fmtBytes(perUserBw)}</span></label>`;
+            html += `<label style="margin-top:8px;display:block">Total hub bandwidth cap:<br>`;
+            html += `<input type="range" id="set-relay_max_total_bandwidth" min="1048576" max="104857600" step="1048576" value="${totalBw}" oninput="document.getElementById('bw-total-label').textContent=this.value>=1048576?(this.value/1048576).toFixed(1)+' MB/s':(this.value/1024).toFixed(0)+' KB/s'" style="width:100%">`;
+            html += ` <span id="bw-total-label">${fmtBytes(totalBw)}</span></label>`;
+            html += '</fieldset>';
+
+            // Save button
+            html += '<button onclick="saveRelaySettings()" style="background:#0af;color:#000;border:none;padding:10px 24px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:14px">Save Settings</button>';
+            html += '<span id="settings-status" style="margin-left:12px;color:#0f0"></span>';
+            html += '</div>';
+            return html;
+        }
+
+        async function saveRelaySettings() {
+            const keys = [
+                'relay_enabled', 'relay_passive_only', 'e2epm_enabled',
+                'relay_min_class', 'relay_max_sessions_per_user', 'relay_max_payload',
+                'relay_idle_timeout', 'relay_max_bandwidth_per_user', 'relay_max_total_bandwidth',
+                'e2epm_min_class', 'e2epm_max_msg_size', 'e2epm_flood_period', 'e2epm_flood_count'
+            ];
+            const boolKeys = ['relay_enabled', 'relay_passive_only', 'e2epm_enabled'];
+            const body = {};
+            for (const k of keys) {
+                const el = document.getElementById('set-' + k);
+                if (!el) continue;
+                body[k] = boolKeys.includes(k) ? el.checked : parseInt(el.value);
+            }
+            try {
+                const resp = await fetch(API_BASE + '/settings/relay', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                const result = await resp.json();
+                const statusEl = document.getElementById('settings-status');
+                if (result.errors && result.errors.length) {
+                    statusEl.style.color = '#f55';
+                    statusEl.textContent = 'Errors: ' + result.errors.join(', ');
+                } else {
+                    statusEl.style.color = '#0f0';
+                    statusEl.textContent = 'Saved! Changes apply within 5 seconds.';
+                    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+                }
+            } catch(e) {
+                document.getElementById('settings-status').textContent = 'Error: ' + e.message;
+                document.getElementById('settings-status').style.color = '#f55';
+            }
+        }
+
         function setSort(tab, key) {
             if (sortState[tab].key === key) {
                 sortState[tab].asc = !sortState[tab].asc;
@@ -939,6 +1037,15 @@
                     case 'chat':
                         html = renderChat();
                         shouldUpdate = true;
+                        break;
+                    case 'settings':
+                        console.log('Loading settings tab...');
+                        try {
+                            const settingsData = await fetchData('/settings/relay');
+                            html = renderRelaySettings(settingsData.settings || {});
+                        } catch(e) {
+                            html = '<div class="notification is-warning">Could not load relay settings. Hub may not support this feature yet.</div>';
+                        }
                         break;
                 }
 

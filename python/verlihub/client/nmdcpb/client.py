@@ -39,6 +39,11 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import (
     PbEncryptedPM,
     PbHubInfo,
     PbStatus,
+    PbRelayRequest,
+    PbRelayAck,
+    PbRelayData,
+    PbRelayClosed,
+    PbRelayStatus,
 )
 from verlihub.client.nmdcpb.wire import WireCodec, FEATURE_NMDCPB, FEATURE_HUBRELAY
 from verlihub.client.nmdcpb.e2epm import E2EPMManager
@@ -107,6 +112,13 @@ class NMDCpbClient:
         self.e2epm = E2EPMManager(nick)
         self._sequence = 0
 
+        # Relay session state
+        # _relay_sessions: relay_id -> {token, peer_nick, purpose, established,
+        #                               bytes_sent, bytes_received, our_key, shared_key}
+        self._relay_sessions: dict[int, dict] = {}
+        # _pending_relay_tokens: token -> {target_nick, purpose, estimated_size, our_privkey, our_pubkey}
+        self._pending_relay_tokens: dict[str, dict] = {}
+
         # Known users
         self.users: dict[str, dict] = {}
 
@@ -121,6 +133,12 @@ class NMDCpbClient:
         self.on_user_quit: Optional[Callable[[str], None]] = None
         self.on_connected: Optional[Callable[[], None]] = None
         self.on_disconnected: Optional[Callable[[str], None]] = None
+        # Relay callbacks
+        self.on_relay_request: Optional[Callable[[str, str, str, int], None]] = None  # (from_nick, token, purpose, est_size)
+        self.on_relay_established: Optional[Callable[[int, str], None]] = None  # (relay_id, peer_nick)
+        self.on_relay_data: Optional[Callable[[int, bytes, int], None]] = None  # (relay_id, data, offset)
+        self.on_relay_closed: Optional[Callable[[int, str], None]] = None  # (relay_id, reason)
+        self.on_relay_status: Optional[Callable[[PbRelayStatus], None]] = None
 
     @property
     def hub_supports_nmdcpb(self) -> bool:
@@ -415,6 +433,22 @@ class NMDCpbClient:
         elif payload == "pm_session_end":
             self.e2epm.handle_session_end(env.from_nick, env.pm_session_end)
 
+        elif payload == "relay_request":
+            await self._handle_relay_request(env)
+
+        elif payload == "relay_ack":
+            await self._handle_relay_ack(env)
+
+        elif payload == "relay_data":
+            await self._handle_relay_data(env.relay_data.relay_id, env.relay_data.data)
+
+        elif payload == "relay_closed":
+            self._handle_relay_closed(env)
+
+        elif payload == "relay_status":
+            if self.on_relay_status:
+                self.on_relay_status(env.relay_status)
+
     async def _handle_e2epm_key_exchange(self, env: PbEnvelope) -> None:
         """Handle incoming E2EPM key exchange."""
         from_nick = env.from_nick
@@ -452,9 +486,204 @@ class NMDCpbClient:
             log.error(f"E2EPM decrypt failed from {from_nick}: {e}")
 
     async def _handle_relay_data(self, relay_id: int, data: bytes) -> None:
-        """Handle incoming relay data."""
-        log.debug(f"Relay data: id={relay_id}, {len(data)} bytes")
-        # TODO: Route to relay session handler
+        """Handle incoming relay data chunk."""
+        sess = self._relay_sessions.get(relay_id)
+        if not sess:
+            log.warning(f"Relay data for unknown session {relay_id}")
+            return
+        sess["bytes_received"] = sess.get("bytes_received", 0) + len(data)
+        log.debug(f"Relay data: id={relay_id}, {len(data)} bytes (total recv: {sess['bytes_received']})")
+        if self.on_relay_data:
+            self.on_relay_data(relay_id, data, 0)
+
+    async def _handle_relay_request(self, env: PbEnvelope) -> None:
+        """Handle incoming relay session request from another user."""
+        req = env.relay_request
+        from_nick = env.from_nick
+        token = req.token
+        purpose = PbRelayRequest.RelayPurpose.Name(req.purpose)
+        est_size = req.estimated_size
+
+        log.info(f"Relay request from {from_nick}: token={token}, purpose={purpose}, size={est_size}")
+
+        # Store pending request info (for auto-accept or callback)
+        self._pending_relay_tokens[token] = {
+            "from_nick": from_nick,
+            "purpose": purpose,
+            "estimated_size": est_size,
+            "peer_pubkey": bytes(req.public_key) if req.public_key else b"",
+        }
+
+        if self.on_relay_request:
+            self.on_relay_request(from_nick, token, purpose, est_size)
+
+    async def _handle_relay_ack(self, env: PbEnvelope) -> None:
+        """Handle relay acknowledgment from peer or hub."""
+        ack = env.relay_ack
+        token = ack.token
+        from_nick = env.from_nick
+
+        pending = self._pending_relay_tokens.pop(token, None)
+        if not pending:
+            log.warning(f"Relay ack for unknown token {token}")
+            return
+
+        if not ack.accepted:
+            log.info(f"Relay rejected by {from_nick}: {ack.reject_reason}")
+            return
+
+        relay_id = ack.relay_id
+        peer_nick = pending.get("target_nick", from_nick)
+        purpose = pending.get("purpose", "")
+
+        self._relay_sessions[relay_id] = {
+            "token": token,
+            "peer_nick": peer_nick,
+            "purpose": purpose,
+            "established": True,
+            "bytes_sent": 0,
+            "bytes_received": 0,
+            "peer_pubkey": bytes(ack.public_key) if ack.public_key else b"",
+        }
+
+        log.info(f"Relay session established: id={relay_id}, peer={peer_nick}")
+        if self.on_relay_established:
+            self.on_relay_established(relay_id, peer_nick)
+
+    def _handle_relay_closed(self, env: PbEnvelope) -> None:
+        """Handle relay session closure notification."""
+        rc = env.relay_closed
+        relay_id = rc.relay_id
+        reason = PbRelayClosed.CloseReason.Name(rc.reason)
+
+        sess = self._relay_sessions.pop(relay_id, None)
+        if sess:
+            log.info(f"Relay session {relay_id} closed: {reason}")
+        else:
+            log.debug(f"Relay close for unknown session {relay_id}: {reason}")
+
+        if self.on_relay_closed:
+            self.on_relay_closed(relay_id, reason)
+
+    # --- Relay Send Methods ---
+
+    async def request_relay(
+        self, target_nick: str, purpose: str = "FILE_TRANSFER",
+        estimated_size: int = 0, public_key: bytes = b""
+    ) -> str:
+        """Request a relay session with a target user.
+
+        Returns the token used for this request.
+        """
+        import secrets
+        token = secrets.token_hex(16)
+
+        self._pending_relay_tokens[token] = {
+            "target_nick": target_nick,
+            "purpose": purpose,
+            "estimated_size": estimated_size,
+        }
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=target_nick,
+        )
+
+        purpose_enum = PbRelayRequest.RelayPurpose.Value(purpose)
+        env.relay_request.target_nick = target_nick
+        env.relay_request.token = token
+        env.relay_request.purpose = purpose_enum
+        env.relay_request.estimated_size = estimated_size
+        if public_key:
+            env.relay_request.public_key = public_key
+
+        await self._send_pb(env)
+        log.info(f"Relay request sent to {target_nick}: token={token}")
+        return token
+
+    async def accept_relay(self, token: str, public_key: bytes = b"") -> None:
+        """Accept a pending relay request."""
+        pending = self._pending_relay_tokens.get(token)
+        if not pending:
+            log.warning(f"No pending relay request for token {token}")
+            return
+
+        from_nick = pending["from_nick"]
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=from_nick,
+        )
+        env.relay_ack.token = token
+        env.relay_ack.accepted = True
+        if public_key:
+            env.relay_ack.public_key = public_key
+
+        await self._send_pb(env)
+        log.info(f"Relay accepted for token {token} from {from_nick}")
+
+    async def reject_relay(self, token: str, reason: str = "") -> None:
+        """Reject a pending relay request."""
+        pending = self._pending_relay_tokens.pop(token, None)
+        if not pending:
+            return
+
+        from_nick = pending["from_nick"]
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=from_nick,
+        )
+        env.relay_ack.token = token
+        env.relay_ack.accepted = False
+        env.relay_ack.reject_reason = reason
+
+        await self._send_pb(env)
+        log.info(f"Relay rejected for token {token}")
+
+    async def send_relay_data(self, relay_id: int, data: bytes, offset: int = 0) -> bool:
+        """Send data through an established relay session.
+
+        Returns True if sent, False if session not found.
+        """
+        sess = self._relay_sessions.get(relay_id)
+        if not sess or not sess.get("established"):
+            log.warning(f"Cannot send relay data: session {relay_id} not established")
+            return False
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=sess["peer_nick"],
+        )
+        env.relay_data.relay_id = relay_id
+        env.relay_data.data = data
+        env.relay_data.offset = offset
+
+        await self._send_pb(env)
+        sess["bytes_sent"] = sess.get("bytes_sent", 0) + len(data)
+        return True
+
+    async def close_relay(self, relay_id: int, reason: str = "NORMAL") -> None:
+        """Close a relay session."""
+        sess = self._relay_sessions.pop(relay_id, None)
+        if not sess:
+            return
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=sess["peer_nick"],
+        )
+        reason_enum = PbRelayClosed.CloseReason.Value(reason)
+        env.relay_closed.relay_id = relay_id
+        env.relay_closed.reason = reason_enum
+
+        await self._send_pb(env)
+        log.info(f"Relay session {relay_id} closed: {reason}")
 
     # --- Sending ---
 

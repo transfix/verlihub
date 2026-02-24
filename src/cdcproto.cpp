@@ -539,6 +539,12 @@ int cDCProto::DC_Supports(cMessageDC *msg, cConnDC *conn)
 
 			if (mS->mC.relay_enabled)
 				pars.append("HubRelay ");
+
+		} else if ((feature.size() == 9) && (StrCompare(feature, 0, 9, "RelayOnly") == 0)) {
+			conn->mFeatures |= eSF_RELAYONLY;
+
+			if (mS->mC.relay_enabled)
+				pars.append("RelayOnly ");
 		}
 	}
 
@@ -2267,6 +2273,13 @@ int cDCProto::DC_ConnectToMe(cMessageDC *msg, cConnDC *conn)
 	if (conn->CheckProtoFlood(msg->mStr, ePF_CTM)) // protocol flood
 		return -1;
 
+	// Relay-only users must not send or receive $ConnectToMe (IP leakage)
+	if (conn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $ConnectToMe from relay-only user" << endl;
+		return -1;
+	}
+
 	ostringstream os;
 	string &nick = msg->ChunkString(eCH_CM_NICK); // find other user
 	const string &port = msg->ChunkString(eCH_CM_PORT);
@@ -2504,6 +2517,14 @@ int cDCProto::DC_ConnectToMe(cMessageDC *msg, cConnDC *conn)
 
 	string ctm;
 	Create_ConnectToMe(ctm, nick, temp, StringFrom(iport), extra);
+
+	// Don't deliver CTM to relay-only users
+	if (other->mxConn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $ConnectToMe to relay-only target: " << nick << endl;
+		return -1;
+	}
+
 	other->mxConn->Send(ctm, true); // send it
 	return 0;
 }
@@ -2523,6 +2544,13 @@ int cDCProto::DC_RevConnectToMe(cMessageDC *msg, cConnDC *conn)
 
 	if (conn->CheckProtoFlood(msg->mStr, ePF_RCTM)) // protocol flood
 		return -1;
+
+	// Relay-only users must not send or receive $RevConnectToMe (triggers CTM with IP)
+	if (conn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $RevConnectToMe from relay-only user" << endl;
+		return -1;
+	}
 
 	ostringstream os;
 	const string &nick = msg->ChunkString(eCH_RC_OTHER); // find other user
@@ -2641,6 +2669,14 @@ int cDCProto::DC_RevConnectToMe(cMessageDC *msg, cConnDC *conn)
 	#endif
 
 	string _str(msg->mStr);
+
+	// Don't deliver RCTM to relay-only users
+	if (other->mxConn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $RevConnectToMe to relay-only target: " << nick << endl;
+		return -1;
+	}
+
 	other->mxConn->Send(_str, true); // send it
 	return 0;
 }
@@ -2689,6 +2725,13 @@ int cDCProto::DC_Search(cMessageDC *msg, cConnDC *conn)
 
 		default:
 			break;
+	}
+
+	// Relay-only users must use passive search only (active search leaks IP)
+	if (!passive && (conn->mFeatures & eSF_RELAYONLY)) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked active $Search from relay-only user" << endl;
+		return -1;
 	}
 
 	string nick, saddr, addr;

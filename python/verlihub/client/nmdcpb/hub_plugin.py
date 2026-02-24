@@ -131,12 +131,17 @@ def _get_all_nicks() -> list[str]:
 
 def OnParsedMsgSupports(ip: str, msg_str: str, back: str) -> int:
     """Handle $Supports from connecting clients."""
-    has_nmdcpb, has_relay = WireCodec.check_supports(msg_str)
+    has_nmdcpb, has_relay, has_relayonly = WireCodec.check_supports(msg_str)
 
     if has_nmdcpb:
         _ip_to_nick[ip] = ""
+        features = []
+        if has_relay:
+            features.append("HubRelay")
+        if has_relayonly:
+            features.append("RelayOnly")
         log.info(f"Client {ip} supports NMDCpb" +
-                 (" + HubRelay" if has_relay else ""))
+                 (f" + {', '.join(features)}" if features else ""))
     return 1
 
 

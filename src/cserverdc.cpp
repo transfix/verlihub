@@ -975,6 +975,9 @@ unsigned int cServerDC::SearchToAll(cConnDC *conn, string &data, string &tths, b
 				if (!other || !other->ok || !other->mpUser || !other->mpUser->mInList) // base condition
 					continue;
 
+				if (other->mFeatures & eSF_RELAYONLY) // dont send active search to relay-only user (would leak IP via UDP response)
+					continue;
+
 				if (tth && !(other->mFeatures & eSF_TTHSEARCH)) // dont send to user without tth search support
 					continue;
 
@@ -1012,6 +1015,9 @@ unsigned int cServerDC::SearchToAll(cConnDC *conn, string &data, string &tths, b
 				other = (cConnDC*)(*i);
 
 				if (!other || !other->ok || !other->mpUser || !other->mpUser->mInList) // base condition
+					continue;
+
+				if (other->mFeatures & eSF_RELAYONLY) // dont send active search to relay-only user (would leak IP via UDP response)
 					continue;
 
 				if (tth && !(other->mFeatures & eSF_TTHSEARCH)) // dont send to user without tth search support
@@ -1457,8 +1463,10 @@ bool cServerDC::ShowUserToAll(cUser *user)
 	}
 
 	if (mC.send_user_ip) { // send userip to operators
-		if (user->mxConn) // real user
+		if (user->mxConn && !(user->mxConn->mFeatures & eSF_RELAYONLY)) // real user, not relay-only
 			mP.Create_UserIP(data, user->mNick, user->mxConn->AddrIP());
+		else if (user->mxConn && (user->mxConn->mFeatures & eSF_RELAYONLY)) // relay-only: redact IP
+			mP.Create_UserIP(data, user->mNick, "0.0.0.0");
 		else // bots have local ip
 			mP.Create_UserIP(data, user->mNick, "127.0.0.1");
 
@@ -1487,6 +1495,10 @@ void cServerDC::ShowUserIP(cAsyncConn *conn)
 		return;
 
 	if (!conc->mpUser->mT.login) // only after login
+		return;
+
+	// Don't broadcast IP for relay-only users
+	if (conc->mFeatures & eSF_RELAYONLY)
 		return;
 
 	if (mC.send_user_ip) { // send userip to operators

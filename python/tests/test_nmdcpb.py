@@ -317,15 +317,20 @@ class TestWireCodecHelpers(unittest.TestCase):
     def test_check_supports(self):
         self.assertEqual(
             WireCodec.check_supports("$Supports UserCommand NMDCpb HubRelay"),
-            (True, True),
+            (True, True, False),
         )
         self.assertEqual(
             WireCodec.check_supports("$Supports UserCommand NMDCpb"),
-            (True, False),
+            (True, False, False),
         )
         self.assertEqual(
             WireCodec.check_supports("$Supports UserCommand NoGetINFO"),
-            (False, False),
+            (False, False, False),
+        )
+        # RelayOnly
+        self.assertEqual(
+            WireCodec.check_supports("$Supports NMDCpb HubRelay RelayOnly"),
+            (True, True, True),
         )
 
     def test_inject_supports(self):
@@ -343,6 +348,14 @@ class TestWireCodecHelpers(unittest.TestCase):
         # Don't duplicate
         result = WireCodec.inject_supports("$Supports NMDCpb|")
         self.assertEqual(result.count("NMDCpb"), 1)
+
+        # With RelayOnly
+        result = WireCodec.inject_supports(
+            "$Supports UserCommand|", nmdcpb=True, hubrelay=True, relayonly=True,
+        )
+        self.assertIn("NMDCpb", result)
+        self.assertIn("HubRelay", result)
+        self.assertIn("RelayOnly", result)
 
 
 # ==========================================================================

@@ -25,6 +25,7 @@ TERMINATOR = "|"
 # $Supports feature tokens
 FEATURE_NMDCPB = "NMDCpb"
 FEATURE_HUBRELAY = "HubRelay"
+FEATURE_RELAYONLY = "RelayOnly"
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -266,29 +267,32 @@ class WireCodec:
         return env
 
     @staticmethod
-    def check_supports(supports_line: str) -> tuple[bool, bool]:
-        """Parse a $Supports line and check for NMDCpb and HubRelay.
+    def check_supports(supports_line: str) -> tuple[bool, bool, bool]:
+        """Parse a $Supports line and check for NMDCpb, HubRelay, RelayOnly.
 
         Args:
             supports_line: Raw $Supports line from hub/client
 
         Returns:
-            (has_nmdcpb, has_hubrelay) tuple
+            (has_nmdcpb, has_hubrelay, has_relayonly) tuple
         """
         tokens = supports_line.strip().split()
         has_nmdcpb = FEATURE_NMDCPB in tokens
         has_hubrelay = FEATURE_HUBRELAY in tokens
-        return has_nmdcpb, has_hubrelay
+        has_relayonly = FEATURE_RELAYONLY in tokens
+        return has_nmdcpb, has_hubrelay, has_relayonly
 
     @staticmethod
     def inject_supports(supports_line: str, nmdcpb: bool = True,
-                        hubrelay: bool = False) -> str:
-        """Add NMDCpb/HubRelay tokens to a $Supports line.
+                        hubrelay: bool = False,
+                        relayonly: bool = False) -> str:
+        """Add NMDCpb/HubRelay/RelayOnly tokens to a $Supports line.
 
         Args:
             supports_line: Original $Supports line
             nmdcpb: Add NMDCpb token
             hubrelay: Add HubRelay token
+            relayonly: Add RelayOnly token
 
         Returns:
             Modified $Supports line with added tokens
@@ -299,4 +303,6 @@ class WireCodec:
             line += f" {FEATURE_NMDCPB}"
         if hubrelay and FEATURE_HUBRELAY not in line:
             line += f" {FEATURE_HUBRELAY}"
+        if relayonly and FEATURE_RELAYONLY not in line:
+            line += f" {FEATURE_RELAYONLY}"
         return line + "|"

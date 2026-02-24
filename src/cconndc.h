@@ -141,7 +141,8 @@ namespace nVerliHub {
 			eSF_SALTPASS = 1 << 28,
 			eSF_NICKRULE = 1 << 29,
 			eSF_NMDCPB = 1 << 30,
-			eSF_HUBRELAY = 1UL << 31
+			eSF_HUBRELAY = 1UL << 31,
+			eSF_RELAYONLY = 1UL << 32
 		} tSupportFeature;
 
 		typedef enum

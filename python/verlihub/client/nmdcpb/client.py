@@ -47,7 +47,7 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import (
     PbPrivateSearch,
     PbPrivateSearchResult,
 )
-from verlihub.client.nmdcpb.wire import WireCodec, FEATURE_NMDCPB, FEATURE_HUBRELAY
+from verlihub.client.nmdcpb.wire import WireCodec, FEATURE_NMDCPB, FEATURE_HUBRELAY, FEATURE_RELAYONLY
 from verlihub.client.nmdcpb.e2epm import E2EPMManager
 
 log = logging.getLogger(__name__)
@@ -108,6 +108,8 @@ class NMDCpbClient:
         self._logged_in = False
         self._hub_nmdcpb = False  # Hub supports NMDCpb
         self._hub_hubrelay = False  # Hub supports HubRelay
+        self._hub_relayonly = False  # Hub supports RelayOnly
+        self._relay_only_mode = False  # Client relay-only privacy mode
         self._recv_task: Optional[asyncio.Task] = None
 
         # NMDCpb state
@@ -152,6 +154,27 @@ class NMDCpbClient:
     @property
     def hub_supports_hubrelay(self) -> bool:
         return self._hub_hubrelay
+
+    @property
+    def hub_supports_relayonly(self) -> bool:
+        return self._hub_relayonly
+
+    @property
+    def relay_only_mode(self) -> bool:
+        """Whether relay-only privacy mode is enabled."""
+        return self._relay_only_mode
+
+    @relay_only_mode.setter
+    def relay_only_mode(self, value: bool) -> None:
+        """Enable or disable relay-only privacy mode.
+
+        Must be set before connect(). When enabled:
+        - $Supports includes RelayOnly
+        - $MyINFO shows M:R (relay-only)
+        - All transfers go through hub relay
+        - No IP address is leaked to other clients
+        """
+        self._relay_only_mode = value
 
     # --- Connection ---
 
@@ -312,8 +335,10 @@ class NMDCpbClient:
         # Compute key
         key = _nmdc_lock_to_key(lock)
 
-        # Send $Supports with NMDCpb and HubRelay
+        # Send $Supports with NMDCpb and HubRelay (and RelayOnly if in privacy mode)
         features = "UserCommand NoGetINFO NoHello UserIP2 TTHSearch NMDCpb HubRelay"
+        if self._relay_only_mode:
+            features += " RelayOnly"
         await self._send_raw(f"$Supports {features}|")
 
         # Send $Key
@@ -323,12 +348,14 @@ class NMDCpbClient:
         await self._send_raw(f"$ValidateNick {self.nick}|")
 
     async def _handle_supports(self, line: str) -> None:
-        """Handle $Supports from hub — check for NMDCpb support."""
-        self._hub_nmdcpb, self._hub_hubrelay = WireCodec.check_supports(line)
+        """Handle $Supports from hub — check for NMDCpb/HubRelay/RelayOnly support."""
+        self._hub_nmdcpb, self._hub_hubrelay, self._hub_relayonly = WireCodec.check_supports(line)
         if self._hub_nmdcpb:
             log.info("Hub supports NMDCpb!")
         if self._hub_hubrelay:
             log.info("Hub supports HubRelay!")
+        if self._hub_relayonly:
+            log.info("Hub supports RelayOnly!")
 
     async def _handle_hello(self, line: str) -> None:
         """Handle $Hello — we're logged in, send $MyINFO."""
@@ -344,7 +371,8 @@ class NMDCpbClient:
             await self._send_raw("$GetNickList|")
 
             # Send MyINFO
-            tag = f"<NMDCpb V:0.1.0,M:P,H:1/0/0,S:{self.slots}>"
+            mode_char = "R" if self._relay_only_mode else "P"
+            tag = f"<NMDCpb V:0.1.0,M:{mode_char},H:1/0/0,S:{self.slots}>"
             myinfo = (
                 f"$MyINFO $ALL {self.nick} "
                 f"{self.description}{tag}$ $LAN(T1)\x01${self.nick}@nmdcpb"

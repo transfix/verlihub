@@ -33,7 +33,7 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import PbEnvelope, PbChat, PbStatus
 # Configuration
 # ---------------------------------------------------------------------------
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 LOG_LEVEL = logging.DEBUG
 
 # Feature flags
@@ -41,6 +41,15 @@ ENABLE_LEGACY_TRANSLATION = True   # Translate PB chat → legacy <nick> text
 ENABLE_HUBRELAY = False            # Not yet implemented
 ENABLE_E2EPM_FORWARD = True        # Opaque forward of E2EPM messages
 MAX_PB_SIZE = 65536                # Max protobuf wire frame size
+
+# Rate limiting
+RATE_WINDOW_SEC = 10               # Sliding window duration
+RATE_MAX_MESSAGES = 30             # Max PB messages per window per user
+RATE_MAX_E2EPM = 10                # Max E2EPM ops per window per user
+RATE_FLOOD_BAN_SEC = 60            # Temp-mute duration on flood detection
+
+# Session cleanup
+SESSION_IDLE_SEC = 300             # Idle user entries kept this long after disconnect
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -65,7 +74,78 @@ _stats = {
     "pb_messages_translated": 0,
     "e2epm_forwarded": 0,
     "unknown_dropped": 0,
+    "rate_limited": 0,
+    "flood_mutes": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+class _RateBucket:
+    """Sliding-window token bucket per user."""
+    __slots__ = ("timestamps", "muted_until")
+
+    def __init__(self):
+        self.timestamps: list[float] = []
+        self.muted_until: float = 0.0
+
+    def allow(self, now: float, window: float, limit: int) -> bool:
+        """Return True if within rate limit; prune expired entries."""
+        if now < self.muted_until:
+            return False
+        cutoff = now - window
+        self.timestamps = [t for t in self.timestamps if t > cutoff]
+        if len(self.timestamps) >= limit:
+            return False
+        self.timestamps.append(now)
+        return True
+
+    def mute(self, now: float, duration: float) -> None:
+        self.muted_until = now + duration
+
+    def is_idle(self, now: float, idle_sec: float) -> bool:
+        if not self.timestamps:
+            return True
+        return (now - self.timestamps[-1]) > idle_sec
+
+
+# nick → _RateBucket for general PB messages
+_rate_pb: dict[str, _RateBucket] = {}
+# nick → _RateBucket for E2EPM operations
+_rate_e2epm: dict[str, _RateBucket] = {}
+
+
+def _check_rate(nick: str, category: str = "pb") -> bool:
+    """Check if nick is within rate limit. Returns True if allowed."""
+    now = time.time()
+    if category == "e2epm":
+        bucket = _rate_e2epm.setdefault(nick, _RateBucket())
+        ok = bucket.allow(now, RATE_WINDOW_SEC, RATE_MAX_E2EPM)
+    else:
+        bucket = _rate_pb.setdefault(nick, _RateBucket())
+        ok = bucket.allow(now, RATE_WINDOW_SEC, RATE_MAX_MESSAGES)
+
+    if not ok:
+        _stats["rate_limited"] += 1
+        # Check if this is a flood (significantly over limit)
+        if len(bucket.timestamps) >= (RATE_MAX_MESSAGES * 2 if category == "pb"
+                                       else RATE_MAX_E2EPM * 2):
+            bucket.mute(now, RATE_FLOOD_BAN_SEC)
+            _stats["flood_mutes"] += 1
+            _send_status(
+                nick, PbStatus.ERROR, 20,
+                f"Flood detected — muted for {RATE_FLOOD_BAN_SEC}s",
+            )
+            log.warning(f"Flood mute: {nick} ({category})")
+        else:
+            _send_status(
+                nick, PbStatus.WARNING, 21,
+                f"Rate limit exceeded ({category}) — slow down",
+            )
+        return False
+    return True
 
 
 def name_and_version():
@@ -175,6 +255,8 @@ def OnUserLogin(nick: str) -> int:
 def OnUserLogout(nick: str) -> int:
     """Clean up NMDCpb state on user logout."""
     _pb_users.pop(nick, None)
+    _rate_pb.pop(nick, None)
+    _rate_e2epm.pop(nick, None)
     return 1
 
 
@@ -182,6 +264,8 @@ def OnCloseConnEx(ip: str, reason: int, nick: str) -> int:
     """Clean up on connection close."""
     _pb_users.pop(nick, None)
     _ip_to_nick.pop(ip, None)
+    _rate_pb.pop(nick, None)
+    _rate_e2epm.pop(nick, None)
     return 1
 
 
@@ -196,6 +280,10 @@ def OnUnknownMsg(nick: str, msg_str: str) -> int:
 
     if len(msg_str) > MAX_PB_SIZE:
         _send_status(nick, PbStatus.ERROR, 1, "Message too large")
+        return 0
+
+    # Rate limiting — general PB messages
+    if not _check_rate(nick, "pb"):
         return 0
 
     try:
@@ -272,7 +360,17 @@ def OnParsedMsgPM(nick: str, message: str, to_nick: str) -> int:
 
 
 def OnTimer(msec: float) -> int:
-    """Periodic maintenance."""
+    """Periodic maintenance — prune stale rate buckets."""
+    now = time.time()
+    # Prune rate buckets for users no longer online
+    online = _get_all_nicks()
+    for store in (_rate_pb, _rate_e2epm):
+        stale = [
+            nick for nick, bucket in store.items()
+            if nick not in online and bucket.is_idle(now, SESSION_IDLE_SEC)
+        ]
+        for nick in stale:
+            del store[nick]
     return 1
 
 
@@ -288,6 +386,8 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Legacy translations: {_stats['pb_messages_translated']}\n"
                 f"  E2EPM forwarded:    {_stats['e2epm_forwarded']}\n"
                 f"  Unknown dropped:    {_stats['unknown_dropped']}\n"
+                f"  Rate limited:       {_stats['rate_limited']}\n"
+                f"  Flood mutes:        {_stats['flood_mutes']}\n"
             )
         elif args == "users":
             if _pb_users:
@@ -304,6 +404,8 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Legacy translation: {'on' if ENABLE_LEGACY_TRANSLATION else 'off'}\n"
                 f"  HubRelay: {'on' if ENABLE_HUBRELAY else 'off'}\n"
                 f"  E2EPM forward: {'on' if ENABLE_E2EPM_FORWARD else 'off'}\n"
+                f"  Rate limit: {RATE_MAX_MESSAGES}/{RATE_WINDOW_SEC}s (PB), "
+                f"{RATE_MAX_E2EPM}/{RATE_WINDOW_SEC}s (E2EPM)\n"
                 f"\nCommands: +nmdcpb stats | +nmdcpb users"
             )
 
@@ -322,6 +424,8 @@ def OnUnLoad(code: int) -> int:
     log.info(f"NMDCpb hub plugin unloading (code={code})")
     _pb_users.clear()
     _ip_to_nick.clear()
+    _rate_pb.clear()
+    _rate_e2epm.clear()
     return 1
 
 
@@ -459,6 +563,9 @@ def _broadcast_legacy_chat(sender: str, env: PbEnvelope) -> None:
 
 def _forward_e2epm(sender: str, target: str, env: PbEnvelope) -> None:
     """Forward E2EPM messages opaquely between users."""
+    # E2EPM-specific rate limit
+    if not _check_rate(sender, "e2epm"):
+        return
     all_nicks = _get_all_nicks()
     if target not in all_nicks:
         _send_status(sender, PbStatus.ERROR, 7, f"User {target} not found")

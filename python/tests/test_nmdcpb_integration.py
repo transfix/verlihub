@@ -443,5 +443,100 @@ class TestE2EPMIntegration(unittest.TestCase):
         self.assertEqual(pt_c.text, "For Charlie only")
 
 
+# ============================================================================
+# Rate limiter unit tests
+# ============================================================================
+
+class TestRateLimiter(unittest.TestCase):
+    """Test the _RateBucket and _check_rate logic."""
+
+    def setUp(self):
+        # Import rate limiter internals
+        from verlihub.client.nmdcpb import hub_plugin
+        self._module = hub_plugin
+        # Save and reset rate state
+        self._saved_pb = dict(hub_plugin._rate_pb)
+        self._saved_e2epm = dict(hub_plugin._rate_e2epm)
+        self._saved_stats = dict(hub_plugin._stats)
+        hub_plugin._rate_pb.clear()
+        hub_plugin._rate_e2epm.clear()
+        # Reset stats
+        hub_plugin._stats["rate_limited"] = 0
+        hub_plugin._stats["flood_mutes"] = 0
+        # Ensure test user is registered as PB user
+        hub_plugin._pb_users["RateTester"] = {"NMDCpb"}
+
+    def tearDown(self):
+        self._module._rate_pb.clear()
+        self._module._rate_e2epm.clear()
+        self._module._rate_pb.update(self._saved_pb)
+        self._module._rate_e2epm.update(self._saved_e2epm)
+        self._module._stats.update(self._saved_stats)
+        self._module._pb_users.pop("RateTester", None)
+
+    def test_bucket_allows_under_limit(self):
+        from verlihub.client.nmdcpb.hub_plugin import _RateBucket
+        b = _RateBucket()
+        now = time.time()
+        for _ in range(5):
+            self.assertTrue(b.allow(now, 10.0, 10))
+
+    def test_bucket_blocks_at_limit(self):
+        from verlihub.client.nmdcpb.hub_plugin import _RateBucket
+        b = _RateBucket()
+        now = time.time()
+        for _ in range(10):
+            b.allow(now, 10.0, 10)
+        self.assertFalse(b.allow(now, 10.0, 10))
+
+    def test_bucket_window_expiry(self):
+        from verlihub.client.nmdcpb.hub_plugin import _RateBucket
+        b = _RateBucket()
+        past = time.time() - 20.0  # 20s ago
+        for _ in range(10):
+            b.timestamps.append(past)
+        # Now should be allowed because old timestamps are expired
+        self.assertTrue(b.allow(time.time(), 10.0, 10))
+
+    def test_bucket_mute(self):
+        from verlihub.client.nmdcpb.hub_plugin import _RateBucket
+        b = _RateBucket()
+        now = time.time()
+        b.mute(now, 60.0)
+        self.assertFalse(b.allow(now + 1.0, 10.0, 100))
+        # After mute duration, allowed again
+        self.assertTrue(b.allow(now + 61.0, 10.0, 100))
+
+    def test_bucket_is_idle(self):
+        from verlihub.client.nmdcpb.hub_plugin import _RateBucket
+        b = _RateBucket()
+        now = time.time()
+        self.assertTrue(b.is_idle(now, 300))
+        b.timestamps.append(now)
+        self.assertFalse(b.is_idle(now, 300))
+        self.assertTrue(b.is_idle(now + 301, 300))
+
+    def test_check_rate_allows_normal_traffic(self):
+        m = self._module
+        for _ in range(m.RATE_MAX_MESSAGES - 1):
+            self.assertTrue(m._check_rate("RateTester", "pb"))
+        self.assertEqual(m._stats["rate_limited"], 0)
+
+    def test_check_rate_blocks_excess(self):
+        m = self._module
+        for _ in range(m.RATE_MAX_MESSAGES):
+            m._check_rate("RateTester", "pb")
+        self.assertFalse(m._check_rate("RateTester", "pb"))
+        self.assertGreater(m._stats["rate_limited"], 0)
+
+    def test_e2epm_rate_separate(self):
+        m = self._module
+        # Fill PB bucket
+        for _ in range(m.RATE_MAX_MESSAGES):
+            m._check_rate("RateTester", "pb")
+        # E2EPM should still be allowed (separate bucket)
+        self.assertTrue(m._check_rate("RateTester", "e2epm"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,11 @@ message PbEnvelope {
     PbHubStream hub_stream = 55;
     PbPrivateSearch private_search = 60;
     PbPrivateSearchResult private_search_result = 61;
+    PbRelayResume relay_resume = 70;
+    PbSegmentRequest segment_request = 71;
+    PbSegmentInfo segment_info = 72;
+    PbUserQuery user_query = 73;
+    PbUserQueryResult user_query_result = 74;
   }
 }
 
@@ -291,6 +296,51 @@ message PbRelayStatus {
   uint32 max_sessions = 4;
   uint64 bandwidth_used = 5;
   uint64 bandwidth_limit = 6;
+}
+
+// Relay resume (sent by receiver to sender to resume from a given offset)
+message PbRelayResume {
+  uint32 relay_id = 1;
+  uint64 resume_offset = 2;       // Byte offset to resume from
+  bytes partial_sha256 = 3;       // SHA-256 of data received so far (for verification)
+  string token = 4;               // Original relay session token
+}
+
+// Segment request (multi-source swarming)
+message PbSegmentRequest {
+  string file_tth = 1;            // TTH root hash (base32) identifying the file
+  uint64 file_size = 2;           // Total file size in bytes
+  uint64 segment_offset = 3;      // Start offset of requested segment
+  uint64 segment_length = 4;      // Length of requested segment
+  string request_id = 5;          // Unique request ID for correlation
+}
+
+// Segment info (response to segment request)
+message PbSegmentInfo {
+  string request_id = 1;
+  bool available = 2;             // Whether the peer can serve this segment
+  uint64 segment_offset = 3;
+  uint64 segment_length = 4;
+  string peer_nick = 5;           // Nick of the peer offering this segment
+}
+
+// User query (for stealth hub-wide search — hub routes to matching users)
+message PbUserQuery {
+  string query_id = 1;            // Unique query ID
+  string feature_filter = 2;      // Required feature (e.g., "NMDCpb")
+  uint64 min_share_size = 3;      // Minimum shared bytes
+  uint32 max_results = 4;         // Max users to return
+  bool sweep = 5;                 // If true, hub sends PbPrivateSearch to each match
+  PbPrivateSearch search = 6;     // Search query to sweep (only if sweep=true)
+}
+
+message PbUserQueryResult {
+  string query_id = 1;            // Matches the request's query_id
+  repeated string nicks = 2;      // Matching user nicks
+  uint32 total_matching = 3;      // Total matching (may exceed nicks if max_results)
+  bool sweep_started = 4;         // True if sweep was initiated
+  uint32 sweep_count = 5;         // Number of users the search was sent to
+  string error = 6;               // Non-empty if query failed
 }
 
 // ============================================================================

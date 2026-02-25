@@ -27,19 +27,25 @@ except ImportError:
     vh = None  # type: ignore
 
 from verlihub.client.nmdcpb.wire import WireCodec, FEATURE_NMDCPB, FEATURE_HUBRELAY
-from verlihub.client.nmdcpb.nmdcpb_pb2 import PbEnvelope, PbChat, PbStatus
+from verlihub.client.nmdcpb.nmdcpb_pb2 import (
+    PbEnvelope, PbChat, PbStatus,
+    PbRelayRequest, PbRelayAck, PbRelayClosed, PbRelayStatus, PbRelayResume,
+    PbPrivateSearch, PbPrivateSearchResult,
+    PbUserQueryResult,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 LOG_LEVEL = logging.DEBUG
 
 # Feature flags
 ENABLE_LEGACY_TRANSLATION = True   # Translate PB chat → legacy <nick> text
-ENABLE_HUBRELAY = False            # Not yet implemented
+ENABLE_HUBRELAY = True             # Hub relay for passive-to-passive transfers
 ENABLE_E2EPM_FORWARD = True        # Opaque forward of E2EPM messages
+ENABLE_STEALTH_SEARCH = True       # Hub user-query / stealth sweep search
 MAX_PB_SIZE = 65536                # Max protobuf wire frame size
 
 # Rate limiting
@@ -50,6 +56,16 @@ RATE_FLOOD_BAN_SEC = 60            # Temp-mute duration on flood detection
 
 # Session cleanup
 SESSION_IDLE_SEC = 300             # Idle user entries kept this long after disconnect
+
+# Relay limits
+RELAY_MAX_SESSIONS_PER_USER = 3    # Max concurrent relay sessions per user
+RELAY_MAX_SESSIONS_TOTAL = 50      # Hub-wide max concurrent relay sessions
+RELAY_IDLE_TIMEOUT_SEC = 60        # Close idle relay sessions after this
+RELAY_MAX_PAYLOAD = 65536          # Max relay data frame size
+
+# Stealth search limits
+STEALTH_MAX_RESULTS = 100          # Max nicks returned in user query
+STEALTH_MAX_SWEEP_TARGETS = 50     # Max users to forward search to in one sweep
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -76,7 +92,79 @@ _stats = {
     "unknown_dropped": 0,
     "rate_limited": 0,
     "flood_mutes": 0,
+    "relay_sessions_created": 0,
+    "relay_bytes_forwarded": 0,
+    "relay_sessions_closed": 0,
+    "stealth_queries": 0,
+    "stealth_sweeps": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Relay session management
+# ---------------------------------------------------------------------------
+
+class _RelaySession:
+    """Hub-side relay session tracker."""
+    __slots__ = (
+        "relay_id", "user_a", "user_b", "token",
+        "bytes_forwarded", "created_at", "last_activity",
+    )
+
+    def __init__(self, relay_id: int, user_a: str, user_b: str, token: str):
+        self.relay_id = relay_id
+        self.user_a = user_a
+        self.user_b = user_b
+        self.token = token
+        self.bytes_forwarded: int = 0
+        self.created_at: float = time.time()
+        self.last_activity: float = self.created_at
+
+    def peer_of(self, nick: str) -> str:
+        """Return the other user in this session."""
+        if nick == self.user_a:
+            return self.user_b
+        if nick == self.user_b:
+            return self.user_a
+        return ""
+
+    def touches(self, nick: str) -> bool:
+        """True if nick is one of the two session participants."""
+        return nick == self.user_a or nick == self.user_b
+
+    def is_idle(self, now: float) -> bool:
+        return (now - self.last_activity) > RELAY_IDLE_TIMEOUT_SEC
+
+
+# relay_id → _RelaySession
+_relay_sessions: dict[int, _RelaySession] = {}
+# token → {from_nick, to_nick, purpose, pubkey, created_at}
+_pending_relay: dict[str, dict] = {}
+# Auto-incrementing relay_id
+_next_relay_id: int = 1
+
+
+def _user_relay_count(nick: str) -> int:
+    """Count active relay sessions for a user."""
+    return sum(1 for s in _relay_sessions.values() if s.touches(nick))
+
+
+def _close_relay_session(relay_id: int, reason: int = 0,
+                         notify: bool = True) -> None:
+    """Close a relay session and notify participants."""
+    sess = _relay_sessions.pop(relay_id, None)
+    if not sess:
+        return
+    _stats["relay_sessions_closed"] += 1
+    log.info(f"Relay session {relay_id} closed ({sess.user_a} ↔ {sess.user_b}, "
+             f"{sess.bytes_forwarded} bytes)")
+    if notify:
+        env = WireCodec.make_envelope(route=PbEnvelope.DIRECT)
+        env.relay_closed.relay_id = relay_id
+        env.relay_closed.reason = reason
+        wire = WireCodec.encode_text(env)
+        _send_to_user(wire, sess.user_a)
+        _send_to_user(wire, sess.user_b)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +342,7 @@ def OnUserLogin(nick: str) -> int:
 
 def OnUserLogout(nick: str) -> int:
     """Clean up NMDCpb state on user logout."""
+    _close_user_relays(nick, reason=4)  # USER_DISCONNECT
     _pb_users.pop(nick, None)
     _rate_pb.pop(nick, None)
     _rate_e2epm.pop(nick, None)
@@ -262,6 +351,7 @@ def OnUserLogout(nick: str) -> int:
 
 def OnCloseConnEx(ip: str, reason: int, nick: str) -> int:
     """Clean up on connection close."""
+    _close_user_relays(nick, reason=4)  # USER_DISCONNECT
     _pb_users.pop(nick, None)
     _ip_to_nick.pop(ip, None)
     _rate_pb.pop(nick, None)
@@ -291,11 +381,6 @@ def OnUnknownMsg(nick: str, msg_str: str) -> int:
     except Exception as e:
         log.warning(f"Failed to decode PB from {nick}: {e}")
         _send_status(nick, PbStatus.ERROR, 2, f"Decode error: {e}")
-        return 0
-
-    if isinstance(result, tuple):
-        relay_id, data = result
-        _handle_relay(nick, relay_id, data)
         return 0
 
     env = result
@@ -360,7 +445,7 @@ def OnParsedMsgPM(nick: str, message: str, to_nick: str) -> int:
 
 
 def OnTimer(msec: float) -> int:
-    """Periodic maintenance — prune stale rate buckets."""
+    """Periodic maintenance — prune stale rate buckets and relay sessions."""
     now = time.time()
     # Prune rate buckets for users no longer online
     online = _get_all_nicks()
@@ -371,6 +456,18 @@ def OnTimer(msec: float) -> int:
         ]
         for nick in stale:
             del store[nick]
+
+    # Expire idle relay sessions
+    if ENABLE_HUBRELAY:
+        idle_relays = [rid for rid, s in _relay_sessions.items()
+                       if s.is_idle(now)]
+        for rid in idle_relays:
+            _close_relay_session(rid, 2, notify=True)  # TIMEOUT
+        # Clean up stale pending relay requests (>30s)
+        stale_pending = [t for t, p in _pending_relay.items()
+                         if now - p.get("created_at", 0) > 30]
+        for t in stale_pending:
+            _pending_relay.pop(t, None)
     return 1
 
 
@@ -388,6 +485,9 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Unknown dropped:    {_stats['unknown_dropped']}\n"
                 f"  Rate limited:       {_stats['rate_limited']}\n"
                 f"  Flood mutes:        {_stats['flood_mutes']}\n"
+                f"  Relay created:      {_stats['relay_sessions_created']}\n"
+                f"  Relay closed:       {_stats['relay_sessions_closed']}\n"
+                f"  Relay bytes:        {_stats['relay_bytes_forwarded']}\n"
             )
         elif args == "users":
             if _pb_users:
@@ -396,6 +496,17 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                     msg += f"  {pb_nick}: {', '.join(feats)}\n"
             else:
                 msg = "No NMDCpb-capable users online."
+        elif args == "relay":
+            if not _relay_sessions:
+                msg = "No active relay sessions."
+            else:
+                msg = f"Active relay sessions ({len(_relay_sessions)}):\n"
+                for rid, sess in _relay_sessions.items():
+                    age = int(time.time() - sess.created_at)
+                    msg += (f"  #{rid}: {sess.user_a} ↔ {sess.user_b} "
+                            f"({sess.bytes_forwarded} bytes, {age}s)\n")
+            if _pending_relay:
+                msg += f"\nPending requests: {len(_pending_relay)}"
         else:
             msg = (
                 f"NMDCpb Hub Plugin v{VERSION}\n"
@@ -403,10 +514,11 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Total users:  {len(_get_all_nicks())}\n"
                 f"  Legacy translation: {'on' if ENABLE_LEGACY_TRANSLATION else 'off'}\n"
                 f"  HubRelay: {'on' if ENABLE_HUBRELAY else 'off'}\n"
+                f"  Active relays: {len(_relay_sessions)}\n"
                 f"  E2EPM forward: {'on' if ENABLE_E2EPM_FORWARD else 'off'}\n"
                 f"  Rate limit: {RATE_MAX_MESSAGES}/{RATE_WINDOW_SEC}s (PB), "
                 f"{RATE_MAX_E2EPM}/{RATE_WINDOW_SEC}s (E2EPM)\n"
-                f"\nCommands: +nmdcpb stats | +nmdcpb users"
+                f"\nCommands: +nmdcpb stats | +nmdcpb users | +nmdcpb relay"
             )
 
         if vh and in_pm:
@@ -426,6 +538,8 @@ def OnUnLoad(code: int) -> int:
     _ip_to_nick.clear()
     _rate_pb.clear()
     _rate_e2epm.clear()
+    _relay_sessions.clear()
+    _pending_relay.clear()
     return 1
 
 
@@ -453,6 +567,27 @@ def _route_direct(sender: str, env: PbEnvelope) -> None:
         return
 
     payload = env.WhichOneof("payload")
+
+    # Relay message intercepts — hub handles these specially
+    if payload == "relay_request":
+        _route_relay_request(sender, env)
+        return
+    if payload == "relay_ack":
+        _route_relay_ack(sender, env)
+        return
+    if payload == "relay_data":
+        _forward_relay_data(sender, env)
+        return
+    if payload == "relay_closed":
+        _route_relay_closed(sender, env)
+        return
+    if payload == "relay_resume":
+        _forward_relay_resume(sender, env)
+        return
+    if payload in ("segment_request", "segment_info"):
+        _forward_segment_msg(sender, env)
+        return
+
     if payload in ("pm_key_exchange", "encrypted_pm", "pm_session_end",
                     "private_search", "private_search_result"):
         if ENABLE_E2EPM_FORWARD:
@@ -485,6 +620,9 @@ def _route_direct(sender: str, env: PbEnvelope) -> None:
 def _route_hub(sender: str, env: PbEnvelope) -> None:
     """Handle HUB-bound messages."""
     payload = env.WhichOneof("payload")
+    if payload == "user_query":
+        _route_user_query(sender, env)
+        return
     if payload == "extension":
         log.info(f"Extension negotiation from {sender}: {env.extension}")
         _send_status(sender, PbStatus.INFO, 0, "Extension noted")
@@ -583,11 +721,323 @@ def _forward_e2epm(sender: str, target: str, env: PbEnvelope) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Relay (HubRelay) — stub for Phase 0
+# Relay (HubRelay) routing
 # ---------------------------------------------------------------------------
 
-def _handle_relay(sender: str, relay_id: int, data: bytes) -> None:
-    """Handle relay data frames."""
-    log.debug(f"Relay from {sender}: id={relay_id}, {len(data)} bytes — NOT IMPLEMENTED")
-    _stats["unknown_dropped"] += 1
-    _send_status(sender, PbStatus.WARNING, 11, "HubRelay is not yet implemented")
+def _close_user_relays(nick: str, reason: int = 4) -> None:
+    """Close all relay sessions involving a user (e.g., on disconnect).
+
+    reason 4 = USER_DISCONNECT in PbRelayClosed.CloseReason.
+    """
+    to_close = [rid for rid, s in _relay_sessions.items() if s.touches(nick)]
+    for rid in to_close:
+        _close_relay_session(rid, reason, notify=True)
+    # Clean up pending relay requests from/to this user
+    to_remove = [t for t, p in _pending_relay.items()
+                 if p.get("from_nick") == nick or p.get("to_nick") == nick]
+    for t in to_remove:
+        _pending_relay.pop(t, None)
+
+
+def _route_relay_request(sender: str, env: PbEnvelope) -> None:
+    """Handle relay session request: validate, track pending, forward to target."""
+    req = env.relay_request
+    target = req.target_nick or env.to_nick
+    token = req.token
+
+    if not ENABLE_HUBRELAY:
+        _send_status(sender, PbStatus.ERROR, 11, "HubRelay is disabled")
+        return
+
+    if not target:
+        _send_status(sender, PbStatus.ERROR, 12, "Relay request missing target_nick")
+        return
+
+    all_nicks = _get_all_nicks()
+    if target not in all_nicks:
+        _send_status(sender, PbStatus.ERROR, 7, f"User {target} not found")
+        return
+
+    if not _is_pb_user(target):
+        _send_status(
+            sender, PbStatus.ERROR, 13,
+            f"User {target} doesn't support NMDCpb relay",
+        )
+        return
+
+    # Per-user limit
+    if _user_relay_count(sender) >= RELAY_MAX_SESSIONS_PER_USER:
+        _send_status(
+            sender, PbStatus.ERROR, 14,
+            f"Max relay sessions per user ({RELAY_MAX_SESSIONS_PER_USER}) reached",
+        )
+        return
+
+    # Hub-wide limit
+    if len(_relay_sessions) >= RELAY_MAX_SESSIONS_TOTAL:
+        _send_status(sender, PbStatus.ERROR, 15, "Hub relay session limit reached")
+        return
+
+    # Store pending request
+    _pending_relay[token] = {
+        "from_nick": sender,
+        "to_nick": target,
+        "purpose": req.purpose,
+        "pubkey": bytes(req.public_key) if req.public_key else b"",
+        "created_at": time.time(),
+    }
+
+    # Forward to target
+    env.from_nick = sender
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, target)
+    log.info(f"Relay request forwarded: {sender} → {target} (token={token[:16]}...)")
+
+
+def _route_relay_ack(sender: str, env: PbEnvelope) -> None:
+    """Handle relay ack: match token, assign relay_id, create session, notify both."""
+    ack = env.relay_ack
+    token = ack.token
+
+    pending = _pending_relay.pop(token, None)
+    if not pending:
+        _send_status(sender, PbStatus.WARNING, 16, "Relay ack for unknown token")
+        return
+
+    requester = pending["from_nick"]
+
+    if not ack.accepted:
+        # Rejection — forward to requester
+        fwd = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT, from_nick=sender, to_nick=requester,
+        )
+        fwd.relay_ack.token = token
+        fwd.relay_ack.accepted = False
+        fwd.relay_ack.reject_reason = ack.reject_reason
+        _send_to_user(WireCodec.encode_text(fwd), requester)
+        log.info(f"Relay rejected by {sender} for {requester}")
+        return
+
+    # Assign relay_id
+    global _next_relay_id
+    relay_id = _next_relay_id
+    _next_relay_id += 1
+
+    # Create session
+    sess = _RelaySession(relay_id, requester, sender, token)
+    _relay_sessions[relay_id] = sess
+    _stats["relay_sessions_created"] += 1
+    log.info(f"Relay session {relay_id} created: {requester} ↔ {sender}")
+
+    # Notify requester (ack with relay_id)
+    ack_to_req = WireCodec.make_envelope(
+        route=PbEnvelope.DIRECT, from_nick=sender, to_nick=requester,
+    )
+    ack_to_req.relay_ack.token = token
+    ack_to_req.relay_ack.accepted = True
+    ack_to_req.relay_ack.relay_id = relay_id
+    if ack.public_key:
+        ack_to_req.relay_ack.public_key = ack.public_key
+    _send_to_user(WireCodec.encode_text(ack_to_req), requester)
+
+    # Notify responder (so they also learn relay_id)
+    ack_to_resp = WireCodec.make_envelope(
+        route=PbEnvelope.DIRECT, from_nick=requester, to_nick=sender,
+    )
+    ack_to_resp.relay_ack.token = token
+    ack_to_resp.relay_ack.accepted = True
+    ack_to_resp.relay_ack.relay_id = relay_id
+    if pending.get("pubkey"):
+        ack_to_resp.relay_ack.public_key = pending["pubkey"]
+    _send_to_user(WireCodec.encode_text(ack_to_resp), sender)
+
+
+def _forward_relay_data(sender: str, env: PbEnvelope) -> None:
+    """Forward relay data to the peer in the relay session."""
+    rd = env.relay_data
+    relay_id = rd.relay_id
+
+    sess = _relay_sessions.get(relay_id)
+    if not sess:
+        _send_status(sender, PbStatus.ERROR, 17, f"Unknown relay session {relay_id}")
+        return
+
+    if not sess.touches(sender):
+        _send_status(sender, PbStatus.ERROR, 18,
+                     "Not a participant in this relay session")
+        return
+
+    data_len = len(rd.data)
+    if data_len > RELAY_MAX_PAYLOAD:
+        _send_status(sender, PbStatus.ERROR, 19,
+                     f"Relay data exceeds max size ({RELAY_MAX_PAYLOAD})")
+        return
+
+    peer = sess.peer_of(sender)
+    sess.bytes_forwarded += data_len
+    sess.last_activity = time.time()
+    _stats["relay_bytes_forwarded"] += data_len
+
+    # Forward to peer
+    env.from_nick = sender
+    env.to_nick = peer
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, peer)
+
+
+def _route_relay_closed(sender: str, env: PbEnvelope) -> None:
+    """Handle relay close from a participant."""
+    rc = env.relay_closed
+    relay_id = rc.relay_id
+
+    sess = _relay_sessions.get(relay_id)
+    if not sess:
+        return  # Already closed, silently ignore
+
+    if not sess.touches(sender):
+        _send_status(sender, PbStatus.ERROR, 18,
+                     "Not a participant in this relay session")
+        return
+
+    _close_relay_session(relay_id, rc.reason, notify=True)
+
+
+def _forward_relay_resume(sender: str, env: PbEnvelope) -> None:
+    """Forward a relay resume request to the peer (sender side of transfer)."""
+    rr = env.relay_resume
+    relay_id = rr.relay_id
+
+    sess = _relay_sessions.get(relay_id)
+    if not sess:
+        _send_status(sender, PbStatus.ERROR, 17, f"Unknown relay session {relay_id}")
+        return
+
+    if not sess.touches(sender):
+        _send_status(sender, PbStatus.ERROR, 18,
+                     "Not a participant in this relay session")
+        return
+
+    peer = sess.peer_of(sender)
+    sess.last_activity = time.time()
+
+    env.from_nick = sender
+    env.to_nick = peer
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, peer)
+    log.info(f"Relay resume forwarded: relay {relay_id}, offset={rr.resume_offset}, "
+             f"{sender} → {peer}")
+
+
+def _forward_segment_msg(sender: str, env: PbEnvelope) -> None:
+    """Forward segment_request or segment_info as opaque DIRECT messages.
+
+    These are P2P negotiation messages — the hub just routes them
+    to the target without interpreting them.
+    """
+    target = env.to_nick
+    if not target:
+        _send_status(sender, PbStatus.ERROR, 5, "Segment message requires to_nick")
+        return
+
+    all_nicks = _get_all_nicks()
+    if target not in all_nicks:
+        _send_status(sender, PbStatus.ERROR, 7, f"User {target} not found")
+        return
+
+    if not _is_pb_user(target):
+        _send_status(sender, PbStatus.ERROR, 13,
+                     f"User {target} doesn't support NMDCpb")
+        return
+
+    env.from_nick = sender
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, target)
+
+
+# ---------------------------------------------------------------------------
+# Stealth Hub-Wide User Query
+# ---------------------------------------------------------------------------
+
+def _route_user_query(sender: str, env: PbEnvelope) -> None:
+    """Handle a PbUserQuery: filter online users, optionally sweep search.
+
+    The hub filters connected NMDCpb users by feature_filter and
+    min_share_size, returning matching nicks to the requester.
+    If sweep=true and a search payload is provided, the hub forwards
+    PbPrivateSearch to each matching user on behalf of the requester.
+    """
+    if not ENABLE_STEALTH_SEARCH:
+        _send_status(sender, PbStatus.ERROR, 14,
+                     "Stealth search is not enabled on this hub")
+        return
+
+    uq = env.user_query
+    query_id = uq.query_id
+    feature_filter = uq.feature_filter or ""
+    min_share = uq.min_share_size
+    max_results = min(uq.max_results or STEALTH_MAX_RESULTS,
+                      STEALTH_MAX_RESULTS)
+
+    # Build matching user list
+    matching: list[str] = []
+    for nick in _get_pb_nicks():
+        if nick == sender:
+            continue
+
+        # Feature filter: if specified, user must have that feature
+        if feature_filter:
+            user_features = _pb_users.get(nick)
+            if isinstance(user_features, set):
+                if feature_filter not in user_features:
+                    continue
+            elif not user_features:
+                continue
+
+        # min_share_size: we'd need user info for this — skip if we can't check
+        # (Hub doesn't always cache share sizes; filter is best-effort)
+
+        matching.append(nick)
+
+    total_matching = len(matching)
+    result_nicks = matching[:max_results]
+
+    # Build response
+    resp = WireCodec.make_envelope(
+        route=PbEnvelope.DIRECT,
+        from_nick="",
+        to_nick=sender,
+    )
+    resp.user_query_result.query_id = query_id
+    resp.user_query_result.nicks.extend(result_nicks)
+    resp.user_query_result.total_matching = total_matching
+
+    # Sweep: forward PbPrivateSearch to each matching user
+    sweep_count = 0
+    if uq.sweep and uq.HasField("search"):
+        sweep_targets = matching[:STEALTH_MAX_SWEEP_TARGETS]
+        search = uq.search
+
+        for target_nick in sweep_targets:
+            search_env = WireCodec.make_envelope(
+                route=PbEnvelope.DIRECT,
+                from_nick=sender,
+                to_nick=target_nick,
+            )
+            search_env.private_search.CopyFrom(search)
+            wire = WireCodec.encode_text(search_env)
+            _send_to_user(wire, target_nick)
+            sweep_count += 1
+
+        resp.user_query_result.sweep_started = True
+        resp.user_query_result.sweep_count = sweep_count
+        log.info(f"Stealth sweep from {sender}: query_id={query_id}, "
+                 f"sent to {sweep_count} users")
+    else:
+        log.info(f"User query from {sender}: query_id={query_id}, "
+                 f"{total_matching} matching, {len(result_nicks)} returned")
+
+    _send_to_user(WireCodec.encode_text(resp), sender)
+    _stats["pb_messages_routed"] += 1
+    _stats["stealth_queries"] += 1
+    if sweep_count:
+        _stats["stealth_sweeps"] += 1

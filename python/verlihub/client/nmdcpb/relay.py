@@ -117,10 +117,12 @@ class RelayFileTransfer:
         self._orig_on_relay_established = client.on_relay_established
         self._orig_on_relay_data = client.on_relay_data
         self._orig_on_relay_closed = client.on_relay_closed
+        self._orig_on_relay_resume = client.on_relay_resume
         client.on_relay_request = self._on_relay_request
         client.on_relay_established = self._on_relay_established
         client.on_relay_data = self._on_relay_data
         client.on_relay_closed = self._on_relay_closed
+        client.on_relay_resume = self._on_relay_resume
 
     def detach(self) -> None:
         """Unhook from client callbacks."""
@@ -128,6 +130,7 @@ class RelayFileTransfer:
         self.client.on_relay_established = self._orig_on_relay_established
         self.client.on_relay_data = self._orig_on_relay_data
         self.client.on_relay_closed = self._orig_on_relay_closed
+        self.client.on_relay_resume = self._orig_on_relay_resume
 
     # --- Public API ---
 
@@ -178,6 +181,32 @@ class RelayFileTransfer:
     def list_transfers(self) -> list[TransferInfo]:
         """List all active/completed transfers."""
         return list(self._transfers.values())
+
+    async def request_resume(self, relay_id: int) -> bool:
+        """Request the sender to resume transfer from current offset.
+
+        Used when a transfer is interrupted but the relay session is still alive.
+        Sends a PbRelayResume with the receiver's current offset and partial SHA-256.
+
+        Returns True if resume request was sent.
+        """
+        ctx = self._receiving.get(relay_id)
+        if not ctx or not ctx.header_received:
+            log.warning(f"Cannot resume: no active receive context for relay {relay_id}")
+            return False
+
+        info = ctx.info
+        resume_offset = info.bytes_transferred
+        partial_sha = ctx.sha.digest() if hasattr(ctx.sha, 'digest') else b""
+
+        ok = await self.client.send_relay_resume(
+            relay_id, resume_offset, partial_sha,
+        )
+        if ok:
+            info.state = TransferState.TRANSFERRING
+            info.error = ""
+            log.info(f"Resume requested for relay {relay_id} at offset {resume_offset}")
+        return ok
 
     # --- Callback Handlers ---
 
@@ -244,6 +273,27 @@ class RelayFileTransfer:
 
         asyncio.ensure_future(self._do_receive_chunk(relay_id, ctx, data))
 
+    def _on_relay_resume(self, relay_id: int, resume_offset: int,
+                          partial_sha256: bytes) -> None:
+        """Handle resume request from receiver — restart sending from offset."""
+        ctx = self._sending.get(relay_id)
+        if not ctx:
+            log.warning(f"Relay resume for non-send session {relay_id}")
+            if self._orig_on_relay_resume:
+                self._orig_on_relay_resume(relay_id, resume_offset, partial_sha256)
+            return
+
+        info = ctx.info
+        if info.state not in (TransferState.TRANSFERRING, TransferState.FAILED):
+            log.warning(f"Relay resume for session {relay_id} in state {info.state}")
+            return
+
+        log.info(f"Resuming send for relay {relay_id} from offset {resume_offset}")
+        info.state = TransferState.TRANSFERRING
+        info.bytes_transferred = resume_offset
+        info.error = ""
+        asyncio.ensure_future(self._do_send(relay_id, ctx, resume_offset=resume_offset))
+
     def _on_relay_closed(self, relay_id: int, reason: str) -> None:
         """Handle relay session closed."""
         info = self._transfers.get(relay_id)
@@ -261,28 +311,39 @@ class RelayFileTransfer:
 
     # --- Send Logic ---
 
-    async def _do_send(self, relay_id: int, ctx: "_SendContext") -> None:
-        """Send file header + data chunks through relay."""
+    async def _do_send(self, relay_id: int, ctx: "_SendContext",
+                       resume_offset: int = 0) -> None:
+        """Send file header + data chunks through relay.
+
+        Args:
+            relay_id: The relay session ID.
+            ctx: Send context with filepath and transfer info.
+            resume_offset: If >0, skip the header and seek to this byte offset
+                          in the file before sending data chunks (for resume).
+        """
         try:
             info = ctx.info
             filename_bytes = info.filename.encode("utf-8")
 
-            # Build and send header
-            header = struct.pack(
-                HEADER_FMT,
-                HEADER_MAGIC,
-                len(filename_bytes),
-                info.file_size,
-                info.sha256,
-            )
-            header += filename_bytes
+            if resume_offset == 0:
+                # Build and send header (only for fresh transfers)
+                header = struct.pack(
+                    HEADER_FMT,
+                    HEADER_MAGIC,
+                    len(filename_bytes),
+                    info.file_size,
+                    info.sha256,
+                )
+                header += filename_bytes
 
-            info.state = TransferState.TRANSFERRING
-            await self.client.send_relay_data(relay_id, header, 0)
+                info.state = TransferState.TRANSFERRING
+                await self.client.send_relay_data(relay_id, header, 0)
 
             # Send file data in chunks
-            offset = 0
+            offset = resume_offset
             with open(ctx.filepath, "rb") as f:
+                if resume_offset > 0:
+                    f.seek(resume_offset)
                 while True:
                     chunk = f.read(self.chunk_size)
                     if not chunk:
@@ -436,3 +497,230 @@ class _RecvContext:
     sha: object = field(default_factory=lambda: hashlib.sha256())
     output_path: str = ""
     file: object = None
+
+
+# ============================================================================
+# Segmented Multi-Source Download Coordinator
+# ============================================================================
+
+# Minimum segment size (256KB) to avoid overhead from too-small segments
+MIN_SEGMENT_SIZE = 262144
+
+
+class SegmentState(Enum):
+    """State of a download segment."""
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    TRANSFERRING = "transferring"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class Segment:
+    """A single segment of a multi-source download."""
+    index: int
+    offset: int
+    length: int
+    state: SegmentState = SegmentState.PENDING
+    peer_nick: str = ""
+    relay_id: int = 0
+    bytes_received: int = 0
+    retries: int = 0
+
+
+@dataclass
+class SegmentedDownloadInfo:
+    """Metadata for a segmented multi-source download."""
+    file_tth: str = ""
+    file_size: int = 0
+    segment_count: int = 0
+    download_dir: str = "/tmp"
+    segments: list = field(default_factory=list)
+    started_at: float = 0.0
+    completed_at: float = 0.0
+    error: str = ""
+
+    @property
+    def bytes_received(self) -> int:
+        return sum(s.bytes_received for s in self.segments)
+
+    @property
+    def progress(self) -> float:
+        if self.file_size == 0:
+            return 0.0
+        return min(1.0, self.bytes_received / self.file_size)
+
+    @property
+    def completed_segments(self) -> int:
+        return sum(1 for s in self.segments
+                   if s.state == SegmentState.COMPLETED)
+
+    @property
+    def is_complete(self) -> bool:
+        return all(s.state == SegmentState.COMPLETED for s in self.segments)
+
+    @property
+    def active_peers(self) -> list[str]:
+        return list({s.peer_nick for s in self.segments
+                     if s.state in (SegmentState.ASSIGNED,
+                                    SegmentState.TRANSFERRING) and s.peer_nick})
+
+
+class SegmentCoordinator:
+    """Coordinates multi-source segmented downloads.
+
+    Splits a file into segments and assigns them to different peers.
+    Each peer serves its segment through a separate relay session.
+
+    Usage:
+        coord = SegmentCoordinator(file_tth="ABC123", file_size=10_000_000,
+                                   peers=["Alice", "Bob", "Carol"])
+        coord.plan_segments()
+
+        # For each segment, request a relay session with the assigned peer
+        for seg in coord.pending_segments():
+            await client.request_relay(seg.peer_nick, ...)
+
+        # As relay data arrives, feed it to the coordinator
+        coord.on_segment_data(segment_index, data, offset)
+
+        # Check completion
+        if coord.info.is_complete:
+            ...
+    """
+
+    MAX_RETRIES = 3
+
+    def __init__(
+        self,
+        file_tth: str,
+        file_size: int,
+        peers: list[str],
+        segment_size: int = 0,
+        download_dir: str = "/tmp",
+    ):
+        self.file_tth = file_tth
+        self.file_size = file_size
+        self.peers = list(peers)
+        self.download_dir = download_dir
+
+        # Auto-compute segment size based on peers and file size
+        if segment_size > 0:
+            self._segment_size = max(segment_size, MIN_SEGMENT_SIZE)
+        else:
+            # Default: split across peers, with minimum segment size
+            ideal = file_size // max(len(peers), 1)
+            self._segment_size = max(ideal, MIN_SEGMENT_SIZE)
+
+        self.info = SegmentedDownloadInfo(
+            file_tth=file_tth,
+            file_size=file_size,
+            download_dir=download_dir,
+            started_at=time.time(),
+        )
+        self._segments: list[Segment] = []
+
+        # Callbacks
+        self.on_segment_complete: Optional[Callable[[Segment], None]] = None
+        self.on_segment_failed: Optional[Callable[[Segment], None]] = None
+        self.on_download_complete: Optional[Callable[[SegmentedDownloadInfo], None]] = None
+
+    def plan_segments(self) -> list[Segment]:
+        """Split the file into segments and assign to peers round-robin.
+
+        Returns the list of planned segments.
+        """
+        self._segments = []
+        offset = 0
+        index = 0
+
+        while offset < self.file_size:
+            length = min(self._segment_size, self.file_size - offset)
+            peer = self.peers[index % len(self.peers)] if self.peers else ""
+            seg = Segment(
+                index=index,
+                offset=offset,
+                length=length,
+                peer_nick=peer,
+                state=SegmentState.PENDING,
+            )
+            self._segments.append(seg)
+            offset += length
+            index += 1
+
+        self.info.segments = self._segments
+        self.info.segment_count = len(self._segments)
+        log.info(f"Planned {len(self._segments)} segments for {self.file_tth} "
+                 f"({self.file_size} bytes, {len(self.peers)} peers)")
+        return list(self._segments)
+
+    def pending_segments(self) -> list[Segment]:
+        """Return segments that need to be started."""
+        return [s for s in self._segments if s.state == SegmentState.PENDING]
+
+    def assign_segment(self, index: int, peer_nick: str, relay_id: int) -> None:
+        """Mark a segment as assigned to a peer with an established relay."""
+        seg = self._segments[index]
+        seg.state = SegmentState.ASSIGNED
+        seg.peer_nick = peer_nick
+        seg.relay_id = relay_id
+
+    def start_segment(self, index: int) -> None:
+        """Mark segment as actively transferring."""
+        self._segments[index].state = SegmentState.TRANSFERRING
+
+    def on_segment_data(self, index: int, data: bytes) -> None:
+        """Process incoming data for a segment."""
+        seg = self._segments[index]
+        if seg.state not in (SegmentState.ASSIGNED, SegmentState.TRANSFERRING):
+            return
+        seg.state = SegmentState.TRANSFERRING
+        seg.bytes_received += len(data)
+
+        if seg.bytes_received >= seg.length:
+            seg.state = SegmentState.COMPLETED
+            if self.on_segment_complete:
+                self.on_segment_complete(seg)
+            if self.info.is_complete:
+                self.info.completed_at = time.time()
+                if self.on_download_complete:
+                    self.on_download_complete(self.info)
+
+    def fail_segment(self, index: int, error: str = "") -> bool:
+        """Mark a segment as failed. Returns True if it can be retried."""
+        seg = self._segments[index]
+        seg.retries += 1
+        if seg.retries <= self.MAX_RETRIES:
+            seg.state = SegmentState.PENDING
+            seg.peer_nick = ""
+            seg.relay_id = 0
+            seg.bytes_received = 0
+            return True
+        seg.state = SegmentState.FAILED
+        if self.on_segment_failed:
+            self.on_segment_failed(seg)
+        return False
+
+    def reassign_peer(self, old_peer: str, new_peer: str) -> list[Segment]:
+        """Reassign all segments from old_peer to new_peer (e.g., on disconnect).
+
+        Returns list of reassigned segments.
+        """
+        reassigned = []
+        for seg in self._segments:
+            if seg.peer_nick == old_peer and seg.state in (
+                SegmentState.PENDING, SegmentState.ASSIGNED
+            ):
+                seg.peer_nick = new_peer
+                seg.state = SegmentState.PENDING
+                seg.relay_id = 0
+                reassigned.append(seg)
+        return reassigned
+
+    def get_segment_by_relay(self, relay_id: int) -> Optional[Segment]:
+        """Find a segment by its relay_id."""
+        for seg in self._segments:
+            if seg.relay_id == relay_id:
+                return seg
+        return None

@@ -143,9 +143,15 @@ class NMDCpbClient:
         self.on_relay_data: Optional[Callable[[int, bytes, int], None]] = None  # (relay_id, data, offset)
         self.on_relay_closed: Optional[Callable[[int, str], None]] = None  # (relay_id, reason)
         self.on_relay_status: Optional[Callable[[PbRelayStatus], None]] = None
+        self.on_relay_resume: Optional[Callable[[int, int, bytes], None]] = None  # (relay_id, offset, partial_sha256)
         # PrivateSearch callbacks
         self.on_private_search: Optional[Callable[[str, PbPrivateSearch], None]] = None  # (from_nick, search)
         self.on_private_search_result: Optional[Callable[[str, PbPrivateSearchResult], None]] = None  # (from_nick, result)
+        # Segment callbacks
+        self.on_segment_request: Optional[Callable] = None  # (from_nick, PbSegmentRequest)
+        self.on_segment_info: Optional[Callable] = None  # (from_nick, PbSegmentInfo)
+        # Stealth search callback
+        self.on_user_query_result: Optional[Callable] = None  # (PbUserQueryResult,)
 
     @property
     def hub_supports_nmdcpb(self) -> bool:
@@ -473,7 +479,7 @@ class NMDCpbClient:
             await self._handle_relay_ack(env)
 
         elif payload == "relay_data":
-            await self._handle_relay_data(env.relay_data.relay_id, env.relay_data.data)
+            await self._handle_relay_data(env.relay_data.relay_id, env.relay_data.data, env.relay_data.offset)
 
         elif payload == "relay_closed":
             self._handle_relay_closed(env)
@@ -481,6 +487,14 @@ class NMDCpbClient:
         elif payload == "relay_status":
             if self.on_relay_status:
                 self.on_relay_status(env.relay_status)
+
+        elif payload == "relay_resume":
+            if self.on_relay_resume:
+                self.on_relay_resume(
+                    env.relay_resume.relay_id,
+                    env.relay_resume.resume_offset,
+                    env.relay_resume.partial_sha256,
+                )
 
         elif payload == "private_search":
             log.debug(f"PrivateSearch from {env.from_nick}: id={env.private_search.search_id}")
@@ -492,6 +506,18 @@ class NMDCpbClient:
                        f"{len(env.private_search_result.results)} results")
             if self.on_private_search_result:
                 self.on_private_search_result(env.from_nick, env.private_search_result)
+
+        elif payload == "segment_request":
+            if self.on_segment_request:
+                self.on_segment_request(env.from_nick, env.segment_request)
+
+        elif payload == "segment_info":
+            if self.on_segment_info:
+                self.on_segment_info(env.from_nick, env.segment_info)
+
+        elif payload == "user_query_result":
+            if self.on_user_query_result:
+                self.on_user_query_result(env.user_query_result)
 
     async def _handle_e2epm_key_exchange(self, env: PbEnvelope) -> None:
         """Handle incoming E2EPM key exchange."""
@@ -529,7 +555,7 @@ class NMDCpbClient:
         except Exception as e:
             log.error(f"E2EPM decrypt failed from {from_nick}: {e}")
 
-    async def _handle_relay_data(self, relay_id: int, data: bytes) -> None:
+    async def _handle_relay_data(self, relay_id: int, data: bytes, offset: int = 0) -> None:
         """Handle incoming relay data chunk."""
         sess = self._relay_sessions.get(relay_id)
         if not sess:
@@ -538,7 +564,7 @@ class NMDCpbClient:
         sess["bytes_received"] = sess.get("bytes_received", 0) + len(data)
         log.debug(f"Relay data: id={relay_id}, {len(data)} bytes (total recv: {sess['bytes_received']})")
         if self.on_relay_data:
-            self.on_relay_data(relay_id, data, 0)
+            self.on_relay_data(relay_id, data, offset)
 
     async def _handle_relay_request(self, env: PbEnvelope) -> None:
         """Handle incoming relay session request from another user."""
@@ -728,6 +754,78 @@ class NMDCpbClient:
 
         await self._send_pb(env)
         log.info(f"Relay session {relay_id} closed: {reason}")
+
+    async def send_relay_resume(self, relay_id: int, resume_offset: int,
+                                 partial_sha256: bytes = b"") -> bool:
+        """Send a relay resume request to resume transfer from a given offset.
+
+        Returns True if sent, False if session not found.
+        """
+        sess = self._relay_sessions.get(relay_id)
+        if not sess or not sess.get("established"):
+            log.warning(f"Cannot send relay resume: session {relay_id} not established")
+            return False
+
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.DIRECT,
+            from_nick=self.nick,
+            to_nick=sess["peer_nick"],
+        )
+        env.relay_resume.relay_id = relay_id
+        env.relay_resume.resume_offset = resume_offset
+        if partial_sha256:
+            env.relay_resume.partial_sha256 = partial_sha256
+
+    async def send_user_query(
+        self,
+        query_id: str,
+        feature_filter: str = "",
+        min_share_size: int = 0,
+        max_results: int = 50,
+        sweep: bool = False,
+        search_query: str = "",
+        search_tth: str = "",
+    ) -> None:
+        """Send a stealth user query to the hub.
+
+        The hub will respond with PbUserQueryResult (via on_user_query_result).
+        If sweep=True, the hub also forwards a PbPrivateSearch to each
+        matching user on behalf of this client.
+
+        Args:
+            query_id: Unique query identifier for correlation.
+            feature_filter: Required feature string (e.g., "NMDCpb").
+            min_share_size: Minimum share size in bytes (0 = any).
+            max_results: Max users to return.
+            sweep: If True, hub forwards search to matching users.
+            search_query: Search string for sweep mode.
+            search_tth: TTH hash for sweep mode.
+        """
+        env = WireCodec.make_envelope(
+            route=PbEnvelope.HUB,
+            from_nick=self.nick,
+        )
+        env.user_query.query_id = query_id
+        if feature_filter:
+            env.user_query.feature_filter = feature_filter
+        if min_share_size:
+            env.user_query.min_share_size = min_share_size
+        if max_results:
+            env.user_query.max_results = max_results
+        env.user_query.sweep = sweep
+        if sweep and (search_query or search_tth):
+            if search_query:
+                env.user_query.search.query = search_query
+            if search_tth:
+                env.user_query.search.tth = search_tth
+            env.user_query.search.search_id = query_id
+
+        await self._send_pb(env)
+        log.info(f"User query sent: id={query_id}, sweep={sweep}")
+
+        await self._send_pb(env)
+        log.info(f"Relay resume sent: id={relay_id}, offset={resume_offset}")
+        return True
 
     # --- Sending ---
 

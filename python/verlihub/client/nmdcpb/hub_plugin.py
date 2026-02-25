@@ -389,12 +389,40 @@ def _route_hub(sender: str, env: PbEnvelope) -> None:
 
 
 def _route_echo(sender: str, env: PbEnvelope) -> None:
-    """Route ECHO — send back to sender + broadcast."""
+    """Route ECHO — send to target + echo back to sender (ADC E-type)."""
+    target = env.to_nick
+    if not target:
+        _send_status(sender, PbStatus.ERROR, 5, "ECHO route requires to_nick")
+        return
+
+    all_nicks = _get_all_nicks()
+    if target not in all_nicks:
+        _send_status(sender, PbStatus.ERROR, 7, f"User {target} not found")
+        return
+
     wire = WireCodec.encode_text(env)
+
+    # Send to target
+    if _is_pb_user(target):
+        _send_to_user(wire, target)
+    else:
+        payload = env.WhichOneof("payload")
+        if payload == "chat":
+            text = env.chat.text
+            if env.chat.is_pm:
+                legacy = f"$To: {target} From: {sender} $<{sender}> {text}|"
+            else:
+                legacy = f"<{sender}> {text}|"
+            _send_to_user(legacy, target)
+            _stats["pb_messages_translated"] += 1
+        else:
+            _send_status(
+                sender, PbStatus.WARNING, 8,
+                f"User {target} doesn't support NMDCpb — cannot deliver",
+            )
+
+    # Echo back to sender
     _send_to_user(wire, sender)
-    for pb_nick in _get_pb_nicks():
-        if pb_nick != sender:
-            _send_to_user(wire, pb_nick)
 
 
 def _route_feature(sender: str, env: PbEnvelope) -> None:

@@ -78,6 +78,17 @@ namespace nVerliHub {
 			 * Base64url decode (RFC 4648 §5, no padding).
 			 */
 			static bool Base64UrlDecode(const std::string &input, std::string &output);
+
+			/**
+			 * Check if a base64-encoded PbEnvelope has the ECHO route type.
+			 *
+			 * Used by DC_PBR to determine whether the message should also
+			 * be echoed back to the sender (ADC E-type semantics).
+			 *
+			 * @param base64data  The base64url-encoded protobuf data
+			 * @return true if route is PbEnvelope::ECHO
+			 */
+			static bool IsEchoRoute(const std::string &base64data);
 		};
 
 	} // namespace nProtocol

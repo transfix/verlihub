@@ -89,11 +89,13 @@ class MockHub:
                 self.send_to_user(new_wire, target)
 
         elif route == PbEnvelope.ECHO:
+            target = env.to_nick
             new_wire = WireCodec.encode_text(env)
+            # Send to target
+            if target and target in self.users:
+                self.send_to_user(new_wire, target)
+            # Echo back to sender
             self.send_to_user(new_wire, sender)
-            for nick in self.users:
-                if nick != sender and self.is_nmdcpb_user(nick):
-                    self.send_to_user(new_wire, nick)
 
 
 class TestHubRoutingIntegration(unittest.TestCase):
@@ -173,21 +175,31 @@ class TestHubRoutingIntegration(unittest.TestCase):
         self.assertEqual(len(alice_msgs), 0)
 
     def test_echo_route(self):
-        """ECHO sends to all including sender."""
+        """ECHO sends to target + echoes back to sender (ADC E-type)."""
+        # Add a third user to verify they do NOT receive the echo
+        self.hub.connect("Carol", nmdcpb=True)
+
         env = WireCodec.make_envelope(
             route=PbEnvelope.ECHO,
             from_nick="Alice",
+            to_nick="Bob",
         )
         env.chat.text = "Echo test"
         wire = WireCodec.encode_text(env)
 
         self.hub.route_message("Alice", wire)
 
-        # Both should receive
+        # Alice (sender) should get the echo back
         alice_msgs = self.hub.pop_inbox("Alice")
-        bob_msgs = self.hub.pop_inbox("Bob")
         self.assertEqual(len(alice_msgs), 1)
+
+        # Bob (target) should receive the message
+        bob_msgs = self.hub.pop_inbox("Bob")
         self.assertEqual(len(bob_msgs), 1)
+
+        # Carol (bystander) should NOT receive
+        carol_msgs = self.hub.pop_inbox("Carol")
+        self.assertEqual(len(carol_msgs), 0)
 
     def test_direct_to_nonexistent_user(self):
         """Direct message to offline user — silently dropped."""

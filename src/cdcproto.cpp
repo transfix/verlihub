@@ -1893,6 +1893,16 @@ int cDCProto::DC_PBR(cMessageDC *msg, cConnDC *conn)
 	{
 		string omsg(msg->mStr);
 		other->mxConn->Send(omsg, true); // send to target user
+
+		#ifdef WITH_NMDCPB
+		// ECHO route (ADC E-type): also send a copy back to the sender
+		{
+			const string &data = msg->ChunkString(eCH_PBR_DATA);
+
+			if (cPbTranslate::IsEchoRoute(data))
+				conn->Send(omsg, true);
+		}
+		#endif
 	}
 
 	return 0;

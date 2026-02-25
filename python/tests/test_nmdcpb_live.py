@@ -820,14 +820,244 @@ class TestNmdcPbLiveE2EPM:
                 await alice.disconnect()
                 await bob.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_e2epm_fallback_to_plaintext_for_legacy(self):
+        """Encrypted PM to a non-NMDCpb client falls back gracefully."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
 
-# ============================================================================
-# Phase 3: Relay File Transfer Live Tests
-# ============================================================================
+        nick_pb = _unique_nick("fbPB")
+        nick_leg = _unique_nick("fbLeg")
+
+        alice = NMDCpbClient(nick_pb)
+
+        async with NMDCTestClient(nick_leg, nmdcpb=False) as legacy:
+            try:
+                await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+                await asyncio.sleep(1.0)
+
+                # Attempt E2EPM — should return False (peer doesn't support it)
+                result = await alice.send_encrypted_pm(nick_leg, "Should fallback")
+                assert not result, (
+                    "send_encrypted_pm should return False for non-NMDCpb peer"
+                )
+
+                # Verify no crash on the sending side and legacy client
+                # didn't receive encrypted garbage
+                await asyncio.sleep(1.5)
+                encrypted_lines = [
+                    l for l in legacy.pbr_raw_lines + legacy.pb_raw_lines
+                    if nick_pb in l
+                ]
+                assert len(encrypted_lines) == 0, (
+                    f"Legacy client should not receive encrypted traffic: "
+                    f"{encrypted_lines}"
+                )
+            finally:
+                await alice.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_replay_rejection(self):
+        """A replayed PbEncryptedPM with an old nonce is rejected."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+        from verlihub.client.nmdcpb.wire import WireCodec
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbEnvelope
+
+        nick_a = _unique_nick("rpA")
+        nick_b = _unique_nick("rpB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        bob_msgs: list[tuple[str, str, bool]] = []
+        warning_count = [0]
+
+        def on_bob_msg(fn, text, ia):
+            bob_msgs.append((fn, text, ia))
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: alice_est.set()
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+        bob.on_encrypted_pm = on_bob_msg
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            # Establish E2EPM session
+            await alice.send_encrypted_pm(nick_b, "init")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            # Capture an encrypted PM
+            epm = alice.e2epm.encrypt_pm(nick_b, "replay test")
+            assert epm is not None
+            captured_nonce = epm.nonce
+
+            # Send the legit message
+            env = WireCodec.make_envelope(
+                route=PbEnvelope.DIRECT,
+                from_nick=nick_a,
+                to_nick=nick_b,
+            )
+            env.encrypted_pm.CopyFrom(epm)
+            await alice._send_pb(env)
+            await asyncio.sleep(1.5)
+
+            legit_count = len(bob_msgs)
+            assert legit_count >= 1, "Bob should receive the legit message"
+
+            # Now replay the SAME encrypted message (same nonce)
+            env2 = WireCodec.make_envelope(
+                route=PbEnvelope.DIRECT,
+                from_nick=nick_a,
+                to_nick=nick_b,
+            )
+            env2.encrypted_pm.CopyFrom(epm)
+            await alice._send_pb(env2)
+            await asyncio.sleep(1.5)
+
+            # Bob should NOT have decrypted the replayed message (nonce reuse)
+            assert len(bob_msgs) == legit_count, (
+                f"Replay should have been rejected. Messages before: {legit_count}, "
+                f"after: {len(bob_msgs)}"
+            )
+
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_tamper_detection(self):
+        """Modified ciphertext fails Poly1305 authentication — decryption rejected."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+        from verlihub.client.nmdcpb.wire import WireCodec
+        from verlihub.client.nmdcpb.nmdcpb_pb2 import PbEnvelope
+
+        nick_a = _unique_nick("tamA")
+        nick_b = _unique_nick("tamB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        bob_msgs: list[tuple[str, str, bool]] = []
+        bob.on_encrypted_pm = lambda fn, t, ia: bob_msgs.append((fn, t, ia))
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: alice_est.set()
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            # Establish session
+            await alice.send_encrypted_pm(nick_b, "init")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            # Encrypt a message and tamper with the ciphertext
+            epm = alice.e2epm.encrypt_pm(nick_b, "tamper test")
+            assert epm is not None
+            ciphertext = bytearray(epm.ciphertext)
+            if len(ciphertext) > 4:
+                ciphertext[2] ^= 0xFF  # Flip a byte
+                ciphertext[3] ^= 0xAA
+            epm.ciphertext = bytes(ciphertext)
+
+            # Send the tampered message through the hub
+            env = WireCodec.make_envelope(
+                route=PbEnvelope.DIRECT,
+                from_nick=nick_a,
+                to_nick=nick_b,
+            )
+            env.encrypted_pm.CopyFrom(epm)
+            await alice._send_pb(env)
+            await asyncio.sleep(2.0)
+
+            # Bob should NOT have decrypted the tampered message
+            assert len(bob_msgs) == 0, (
+                f"Tampered message should fail AEAD verification, "
+                f"but Bob decrypted: {bob_msgs}"
+            )
+
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_e2epm_reconnect_rekeys(self):
+        """After disconnect/reconnect, fresh key exchange occurs (forward secrecy)."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("rkA")
+        nick_b = _unique_nick("rkB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        fingerprints: list[str] = []
+
+        alice_est = asyncio.Event()
+        bob_est = asyncio.Event()
+        alice.on_e2epm_established = lambda n, fp: (fingerprints.append(fp), alice_est.set())
+        bob.on_e2epm_established = lambda n, fp: bob_est.set()
+
+        try:
+            # Session 1 — establish and record fingerprint
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            await alice.send_encrypted_pm(nick_b, "init session 1")
+            await asyncio.wait_for(alice_est.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est.wait(), timeout=MSG_TIMEOUT)
+
+            fp1 = fingerprints[-1]
+            assert fp1, "First fingerprint should not be empty"
+
+            # Disconnect Alice
+            await alice.disconnect()
+            await asyncio.sleep(1.0)
+
+            # Reconnect with a fresh client (new keypair)
+            alice = NMDCpbClient(nick_a)
+            alice_est2 = asyncio.Event()
+            bob_est2 = asyncio.Event()
+            alice.on_e2epm_established = lambda n, fp: (fingerprints.append(fp), alice_est2.set())
+            bob.on_e2epm_established = lambda n, fp: bob_est2.set()
+
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            # Session 2 — fresh key exchange
+            await alice.send_encrypted_pm(nick_b, "init session 2")
+            await asyncio.wait_for(alice_est2.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_est2.wait(), timeout=MSG_TIMEOUT)
+
+            fp2 = fingerprints[-1]
+            assert fp2, "Second fingerprint should not be empty"
+
+            # Fingerprints should differ (new ephemeral keys each time)
+            assert fp1 != fp2, (
+                f"Fingerprints should differ after reconnect (forward secrecy): "
+                f"session1={fp1}, session2={fp2}"
+            )
+
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
 
 
 class TestNmdcPbLiveRelay:
     """Test relay session lifecycle and file transfer through a real verlihub.
+
+    Both test clients announce ``M:P`` (passive mode) — the hub relay is the
+    ONLY channel for data exchange.  This validates the Phase 2 requirement:
+    "two passive clients through hub relay".
 
     Uses NMDCpbClient relay methods to exercise the full relay flow:
     relay_request → relay_ack → relay_data → relay_close.
@@ -835,7 +1065,7 @@ class TestNmdcPbLiveRelay:
 
     @pytest.mark.asyncio
     async def test_relay_request_and_ack(self):
-        """Two clients negotiate a relay session via PbRelayRequest/Ack."""
+        """Two passive clients negotiate a relay session via PbRelayRequest/Ack."""
         from verlihub.client.nmdcpb.client import NMDCpbClient
 
         nick_a = _unique_nick("relA")
@@ -844,11 +1074,21 @@ class TestNmdcPbLiveRelay:
         alice = NMDCpbClient(nick_a)
         bob = NMDCpbClient(nick_b)
 
+        bob_request_evt = asyncio.Event()
         bob_requests: list[tuple[str, str, str, int]] = []
+        alice_est_evt = asyncio.Event()
         alice_established: list[tuple[int, str]] = []
 
-        bob.on_relay_request = lambda fn, tok, purp, sz: bob_requests.append((fn, tok, purp, sz))
-        alice.on_relay_established = lambda rid, pn: alice_established.append((rid, pn))
+        def on_bob_request(fn, tok, purp, sz):
+            bob_requests.append((fn, tok, purp, sz))
+            bob_request_evt.set()
+
+        def on_alice_est(rid, pn):
+            alice_established.append((rid, pn))
+            alice_est_evt.set()
+
+        bob.on_relay_request = on_bob_request
+        alice.on_relay_established = on_alice_est
 
         try:
             await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
@@ -856,11 +1096,13 @@ class TestNmdcPbLiveRelay:
             await asyncio.sleep(1.0)
 
             # Alice requests relay with Bob
-            token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER", estimated_size=1024)
+            token = await alice.request_relay(
+                nick_b, purpose="FILE_TRANSFER", estimated_size=1024,
+            )
             assert token, "Token should be returned"
 
-            # Wait for Bob to receive the request
-            await asyncio.sleep(2.0)
+            # Bob must receive the request
+            await asyncio.wait_for(bob_request_evt.wait(), timeout=MSG_TIMEOUT)
             assert len(bob_requests) >= 1, "Bob should receive relay request"
             fn, tok, purp, sz = bob_requests[0]
             assert fn == nick_a
@@ -868,14 +1110,13 @@ class TestNmdcPbLiveRelay:
             assert "FILE_TRANSFER" in purp
             assert sz == 1024
 
-            # Bob accepts
+            # Bob accepts → Alice gets established callback
             await bob.accept_relay(token)
-            await asyncio.sleep(2.0)
+            await asyncio.wait_for(alice_est_evt.wait(), timeout=MSG_TIMEOUT)
 
-            # Alice should get established callback
-            # Note: This depends on hub assigning relay_id in ack.
-            # If hub just forwards the ack as-is, alice processes it client-side.
-            log.info(f"Relay request/ack test complete. Requests: {bob_requests}")
+            assert len(alice_established) >= 1, "Alice should see relay established"
+            relay_id, peer = alice_established[0]
+            assert peer == nick_b
 
         finally:
             await alice.disconnect()
@@ -883,7 +1124,7 @@ class TestNmdcPbLiveRelay:
 
     @pytest.mark.asyncio
     async def test_relay_data_roundtrip(self):
-        """Send small data through relay and verify reception."""
+        """Send data through relay, verify exact byte-level reception."""
         from verlihub.client.nmdcpb.client import NMDCpbClient
 
         nick_a = _unique_nick("rdtA")
@@ -892,61 +1133,126 @@ class TestNmdcPbLiveRelay:
         alice = NMDCpbClient(nick_a)
         bob = NMDCpbClient(nick_b)
 
-        bob_data_received: list[tuple[int, bytes, int]] = []
-        alice_established = asyncio.Event()
-        bob_request_token = asyncio.Event()
+        bob_data_received: list[tuple[int, bytes]] = []
+        bob_data_evt = asyncio.Event()
+        alice_est_evt = asyncio.Event()
+        bob_req_evt = asyncio.Event()
         received_token = [None]
 
-        # Bob auto-accepts relay requests
         def on_bob_request(fn, tok, purp, sz):
             received_token[0] = tok
-            bob_request_token.set()
+            bob_req_evt.set()
+
+        def on_bob_data(rid, data, off):
+            bob_data_received.append((rid, data))
+            bob_data_evt.set()
 
         bob.on_relay_request = on_bob_request
-        alice.on_relay_established = lambda rid, pn: alice_established.set()
-        bob.on_relay_data = lambda rid, data, off: bob_data_received.append((rid, data, off))
+        alice.on_relay_established = lambda rid, pn: alice_est_evt.set()
+        bob.on_relay_data = on_bob_data
 
         try:
             await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
             await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
             await asyncio.sleep(1.0)
 
-            # Alice requests relay
+            # Negotiate relay session
             token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER")
-            await asyncio.wait_for(bob_request_token.wait(), timeout=MSG_TIMEOUT)
-
-            # Bob accepts
+            await asyncio.wait_for(bob_req_evt.wait(), timeout=MSG_TIMEOUT)
             await bob.accept_relay(received_token[0])
-            await asyncio.sleep(2.0)
+            await asyncio.wait_for(alice_est_evt.wait(), timeout=MSG_TIMEOUT)
 
-            # If relay was established, try sending data
-            if alice._relay_sessions:
-                relay_id = list(alice._relay_sessions.keys())[0]
-                test_data = b"Hello through relay!"
+            # Session must be established
+            assert alice._relay_sessions, "Alice's relay session map should not be empty"
+            relay_id = list(alice._relay_sessions.keys())[0]
+            test_data = b"Hello through relay — exact bytes!"
 
-                await alice.send_relay_data(relay_id, test_data)
-                await asyncio.sleep(2.0)
+            sent = await alice.send_relay_data(relay_id, test_data)
+            assert sent, "send_relay_data should return True"
 
-                if bob_data_received:
-                    _, recv_data, _ = bob_data_received[0]
-                    log.info(f"Relay data roundtrip: sent {len(test_data)} bytes, "
-                             f"received {len(recv_data)} bytes")
-                else:
-                    log.info("Relay data sent but Bob hasn't received it yet — "
-                             "hub may need relay session tracking (Phase 3)")
-            else:
-                log.info("Relay session not yet established in client state — "
-                         "hub-assigned relay_id flow needs wire-level completion")
+            await asyncio.wait_for(bob_data_evt.wait(), timeout=MSG_TIMEOUT)
+            assert len(bob_data_received) >= 1, "Bob should receive relay data"
+            _, recv_data = bob_data_received[0]
+            assert recv_data == test_data, (
+                f"Data mismatch: sent {len(test_data)} bytes, "
+                f"received {len(recv_data)} bytes"
+            )
 
         finally:
             await alice.disconnect()
             await bob.disconnect()
 
     @pytest.mark.asyncio
-    async def test_relay_file_transfer_with_library(self):
-        """End-to-end file transfer using RelayFileTransfer class."""
+    async def test_relay_multiple_chunks(self):
+        """Send multiple data chunks through relay, verify all arrive in order."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("mchA")
+        nick_b = _unique_nick("mchB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        bob_chunks: list[bytes] = []
+        all_received = asyncio.Event()
+        alice_est_evt = asyncio.Event()
+        bob_req_evt = asyncio.Event()
+        received_token = [None]
+
+        NUM_CHUNKS = 5
+        CHUNK_SIZE = 512
+
+        def on_bob_request(fn, tok, purp, sz):
+            received_token[0] = tok
+            bob_req_evt.set()
+
+        def on_bob_data(rid, data, off):
+            bob_chunks.append(data)
+            if len(bob_chunks) >= NUM_CHUNKS:
+                all_received.set()
+
+        bob.on_relay_request = on_bob_request
+        alice.on_relay_established = lambda rid, pn: alice_est_evt.set()
+        bob.on_relay_data = on_bob_data
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER")
+            await asyncio.wait_for(bob_req_evt.wait(), timeout=MSG_TIMEOUT)
+            await bob.accept_relay(received_token[0])
+            await asyncio.wait_for(alice_est_evt.wait(), timeout=MSG_TIMEOUT)
+
+            relay_id = list(alice._relay_sessions.keys())[0]
+
+            # Send multiple chunks
+            sent_chunks = []
+            for i in range(NUM_CHUNKS):
+                chunk = bytes([(i + j) % 256 for j in range(CHUNK_SIZE)])
+                sent_chunks.append(chunk)
+                await alice.send_relay_data(relay_id, chunk, offset=i * CHUNK_SIZE)
+                await asyncio.sleep(0.1)  # Small gap between chunks
+
+            await asyncio.wait_for(all_received.wait(), timeout=MSG_TIMEOUT * 2)
+
+            assert len(bob_chunks) == NUM_CHUNKS, (
+                f"Expected {NUM_CHUNKS} chunks, got {len(bob_chunks)}"
+            )
+            for i, (sent, recv) in enumerate(zip(sent_chunks, bob_chunks)):
+                assert sent == recv, f"Chunk {i} mismatch"
+
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_relay_file_transfer_with_integrity(self):
+        """End-to-end file transfer using RelayFileTransfer with SHA-256 verification."""
         from verlihub.client.nmdcpb.client import NMDCpbClient
         from verlihub.client.nmdcpb.relay import RelayFileTransfer, TransferState
+        import hashlib
         import tempfile
 
         nick_a = _unique_nick("ftxA")
@@ -954,6 +1260,8 @@ class TestNmdcPbLiveRelay:
 
         alice = NMDCpbClient(nick_a)
         bob = NMDCpbClient(nick_b)
+
+        transfer_complete = asyncio.Event()
 
         try:
             await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
@@ -965,30 +1273,42 @@ class TestNmdcPbLiveRelay:
                 test_content = b"NMDCpb relay file transfer test data " * 100  # ~3.7 KB
                 f.write(test_content)
                 src_path = f.name
+            src_hash = hashlib.sha256(test_content).hexdigest()
 
             with tempfile.TemporaryDirectory() as dl_dir:
                 alice_ft = RelayFileTransfer(alice, chunk_size=1024)
                 bob_ft = RelayFileTransfer(bob, auto_accept=True, download_dir=dl_dir)
+
+                def on_complete(info):
+                    transfer_complete.set()
+
+                bob_ft.on_transfer_complete = on_complete
 
                 # Alice sends file to Bob
                 info = await alice_ft.send_file(nick_b, src_path)
                 assert info.state == TransferState.PENDING
                 assert info.file_size == len(test_content)
 
-                # Wait for transfer to complete (or timeout)
-                for _ in range(30):
-                    await asyncio.sleep(0.5)
-                    if info.state in (TransferState.COMPLETED, TransferState.FAILED):
-                        break
+                # Wait for transfer to complete
+                await asyncio.wait_for(transfer_complete.wait(), timeout=30.0)
+                assert info.state == TransferState.COMPLETED, (
+                    f"Transfer not completed: state={info.state}, "
+                    f"transferred={info.bytes_transferred}/{info.file_size}"
+                )
+                assert info.bytes_transferred == info.file_size
 
-                log.info(f"Transfer state: {info.state}, "
-                         f"transferred: {info.bytes_transferred}/{info.file_size}")
+                # Verify downloaded file integrity
+                dl_path = os.path.join(dl_dir, os.path.basename(src_path))
+                assert os.path.exists(dl_path), f"Downloaded file not found at {dl_path}"
+                with open(dl_path, 'rb') as f:
+                    dl_hash = hashlib.sha256(f.read()).hexdigest()
+                assert dl_hash == src_hash, (
+                    f"SHA-256 mismatch: sent={src_hash}, received={dl_hash}"
+                )
 
-                # Clean up
                 alice_ft.detach()
                 bob_ft.detach()
 
-            # Clean up temp file
             os.unlink(src_path)
 
         finally:
@@ -997,7 +1317,7 @@ class TestNmdcPbLiveRelay:
 
     @pytest.mark.asyncio
     async def test_relay_request_rejected(self):
-        """Test relay rejection flow."""
+        """Relay rejection: Bob rejects, Alice doesn't get an established session."""
         from verlihub.client.nmdcpb.client import NMDCpbClient
 
         nick_a = _unique_nick("rejA")
@@ -1006,14 +1326,16 @@ class TestNmdcPbLiveRelay:
         alice = NMDCpbClient(nick_a)
         bob = NMDCpbClient(nick_b)
 
-        bob_request_token = asyncio.Event()
+        bob_req_evt = asyncio.Event()
         received_token = [None]
+        alice_established = []
 
         def on_bob_request(fn, tok, purp, sz):
             received_token[0] = tok
-            bob_request_token.set()
+            bob_req_evt.set()
 
         bob.on_relay_request = on_bob_request
+        alice.on_relay_established = lambda rid, pn: alice_established.append((rid, pn))
 
         try:
             await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
@@ -1021,21 +1343,25 @@ class TestNmdcPbLiveRelay:
             await asyncio.sleep(1.0)
 
             token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER")
-            await asyncio.wait_for(bob_request_token.wait(), timeout=MSG_TIMEOUT)
+            await asyncio.wait_for(bob_req_evt.wait(), timeout=MSG_TIMEOUT)
 
             # Bob rejects
-            await bob.reject_relay(received_token[0], reason="Not accepting transfers")
+            await bob.reject_relay(received_token[0], reason="Not now")
             await asyncio.sleep(2.0)
 
-            log.info("Relay rejection test complete")
+            # Alice must NOT have an established relay session
+            assert len(alice_established) == 0, (
+                f"Alice should not have relay established after rejection, "
+                f"but got: {alice_established}"
+            )
 
         finally:
             await alice.disconnect()
             await bob.disconnect()
 
     @pytest.mark.asyncio
-    async def test_relay_close(self):
-        """Test relay session close notification."""
+    async def test_relay_close_notifies_peer(self):
+        """Closing a relay session notifies the other peer."""
         from verlihub.client.nmdcpb.client import NMDCpbClient
 
         nick_a = _unique_nick("clsA")
@@ -1044,16 +1370,23 @@ class TestNmdcPbLiveRelay:
         alice = NMDCpbClient(nick_a)
         bob = NMDCpbClient(nick_b)
 
-        bob_request_token = asyncio.Event()
+        bob_req_evt = asyncio.Event()
         received_token = [None]
+        alice_est_evt = asyncio.Event()
+        bob_closed_evt = asyncio.Event()
         bob_closed: list[tuple[int, str]] = []
 
         def on_bob_request(fn, tok, purp, sz):
             received_token[0] = tok
-            bob_request_token.set()
+            bob_req_evt.set()
+
+        def on_bob_closed(rid, reason):
+            bob_closed.append((rid, reason))
+            bob_closed_evt.set()
 
         bob.on_relay_request = on_bob_request
-        bob.on_relay_closed = lambda rid, reason: bob_closed.append((rid, reason))
+        bob.on_relay_closed = on_bob_closed
+        alice.on_relay_established = lambda rid, pn: alice_est_evt.set()
 
         try:
             await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
@@ -1061,24 +1394,77 @@ class TestNmdcPbLiveRelay:
             await asyncio.sleep(1.0)
 
             token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER")
-            await asyncio.wait_for(bob_request_token.wait(), timeout=MSG_TIMEOUT)
-
-            # Bob accepts
+            await asyncio.wait_for(bob_req_evt.wait(), timeout=MSG_TIMEOUT)
             await bob.accept_relay(received_token[0])
-            await asyncio.sleep(1.0)
+            await asyncio.wait_for(alice_est_evt.wait(), timeout=MSG_TIMEOUT)
 
             # Alice closes the session
-            if alice._relay_sessions:
-                relay_id = list(alice._relay_sessions.keys())[0]
-                await alice.close_relay(relay_id, "NORMAL")
-                await asyncio.sleep(2.0)
+            relay_id = list(alice._relay_sessions.keys())[0]
+            await alice.close_relay(relay_id, "NORMAL")
 
-                if bob_closed:
-                    log.info(f"Bob received relay close: {bob_closed[0]}")
-                else:
-                    log.info("Close sent but Bob hasn't received it yet")
-            else:
-                log.info("Relay session not established — close test deferred")
+            await asyncio.wait_for(bob_closed_evt.wait(), timeout=MSG_TIMEOUT)
+            assert len(bob_closed) >= 1, "Bob should receive relay close"
+            rid, reason = bob_closed[0]
+            assert "NORMAL" in reason
+
+        finally:
+            await alice.disconnect()
+            await bob.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_relay_bidirectional_data(self):
+        """Both peers can send data through the same relay (bidirectional)."""
+        from verlihub.client.nmdcpb.client import NMDCpbClient
+
+        nick_a = _unique_nick("biA")
+        nick_b = _unique_nick("biB")
+
+        alice = NMDCpbClient(nick_a)
+        bob = NMDCpbClient(nick_b)
+
+        alice_data: list[bytes] = []
+        bob_data: list[bytes] = []
+        alice_data_evt = asyncio.Event()
+        bob_data_evt = asyncio.Event()
+        alice_est_evt = asyncio.Event()
+        bob_est_evt = asyncio.Event()
+        bob_req_evt = asyncio.Event()
+        received_token = [None]
+
+        def on_bob_request(fn, tok, purp, sz):
+            received_token[0] = tok
+            bob_req_evt.set()
+
+        bob.on_relay_request = on_bob_request
+        alice.on_relay_established = lambda rid, pn: alice_est_evt.set()
+        bob.on_relay_established = lambda rid, pn: bob_est_evt.set()
+        alice.on_relay_data = lambda rid, data, off: (alice_data.append(data), alice_data_evt.set())
+        bob.on_relay_data = lambda rid, data, off: (bob_data.append(data), bob_data_evt.set())
+
+        try:
+            await alice.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await bob.connect(f"{HUB_HOST}:{HUB_PORT}")
+            await asyncio.sleep(1.0)
+
+            token = await alice.request_relay(nick_b, purpose="FILE_TRANSFER")
+            await asyncio.wait_for(bob_req_evt.wait(), timeout=MSG_TIMEOUT)
+            await bob.accept_relay(received_token[0])
+            await asyncio.wait_for(alice_est_evt.wait(), timeout=MSG_TIMEOUT)
+
+            alice_rid = list(alice._relay_sessions.keys())[0]
+
+            # Alice → Bob
+            await alice.send_relay_data(alice_rid, b"from alice")
+            await asyncio.wait_for(bob_data_evt.wait(), timeout=MSG_TIMEOUT)
+            assert bob_data[0] == b"from alice"
+
+            # Bob → Alice (Bob needs a relay session entry for Alice)
+            # Bob's session is populated when accepting the relay
+            if bob._relay_sessions:
+                bob_rid = list(bob._relay_sessions.keys())[0]
+                await bob.send_relay_data(bob_rid, b"from bob")
+                await asyncio.wait_for(alice_data_evt.wait(), timeout=MSG_TIMEOUT)
+                assert alice_data[0] == b"from bob"
 
         finally:
             await alice.disconnect()

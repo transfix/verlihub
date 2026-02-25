@@ -302,11 +302,22 @@ class MockNMDCpbHub:
             self._send(info["socket"], new_wire)
 
     def _route_echo(self, sender: str, env: PbEnvelope) -> None:
+        """ECHO — send to target + echo back to sender (ADC E-type)."""
+        target = env.to_nick
+        if not target:
+            return
+
         new_wire = WireCodec.encode_text(env)
         with self._lock:
-            for nick, info in self._clients.items():
-                if info["nmdcpb"]:
-                    self._send(info["socket"], new_wire)
+            # Send to target
+            info = self._clients.get(target)
+            if info and info["nmdcpb"]:
+                self._send(info["socket"], new_wire)
+
+            # Echo back to sender
+            sender_info = self._clients.get(sender)
+            if sender_info and sender_info["nmdcpb"]:
+                self._send(sender_info["socket"], new_wire)
 
     def _broadcast_legacy_chat(self, sender: str, raw_msg: str) -> None:
         """Forward legacy chat to all other clients, bridge to PB users."""

@@ -148,6 +148,7 @@ The `python/` directory contains a complete Python-based management stack:
   * **GeoIP Enrichment** — MaxMind .mmdb + ip-api.com fallback for country, city, ISP
   * **User Insights** — clone detection, share stats, geo distribution, status flags
   * **Embeddable Widget** — standalone dashboard embed for external sites (`/dashboard/embed`)
+  * **NMDCpb Extension** — Protobuf structured messaging (`$PB`/`$PBR`), hub-relayed transfers, E2EPM encrypted private messages, and PrivateSearch
 
 ## Quick Start
 

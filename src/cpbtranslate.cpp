@@ -260,6 +260,21 @@ bool cPbTranslate::LegacyToPb(const std::string &nick, const std::string &text,
 	return true;
 }
 
+bool cPbTranslate::IsEchoRoute(const std::string &base64data)
+{
+	std::string decoded;
+
+	if (!Base64UrlDecode(base64data, decoded))
+		return false;
+
+	nmdcpb::PbEnvelope envelope;
+
+	if (!envelope.ParseFromString(decoded))
+		return false;
+
+	return envelope.route() == nmdcpb::PbEnvelope::ECHO;
+}
+
 } // namespace nProtocol
 } // namespace nVerliHub
 

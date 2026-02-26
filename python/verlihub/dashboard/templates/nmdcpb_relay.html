@@ -77,6 +77,66 @@
         </div>
     </div>
 
+    <!-- E2EPM Encryption Stats -->
+    <div class="box mt-5">
+        <h2 class="title is-4">
+            <i class="fas fa-lock"></i> E2EPM Encryption Stats
+        </h2>
+        <div class="columns is-multiline" id="e2epm-cards">
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Total Forwarded</p>
+                        <p class="title is-5" id="e2epm-total">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Key Exchanges</p>
+                        <p class="title is-5" id="e2epm-kex">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Encrypted PMs</p>
+                        <p class="title is-5" id="e2epm-enc">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Session Ends</p>
+                        <p class="title is-5" id="e2epm-ends">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Priv. Searches</p>
+                        <p class="title is-5" id="e2epm-search">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Search Results</p>
+                        <p class="title is-5" id="e2epm-results">—</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <p class="is-size-7 has-text-grey mt-2" id="e2epm-status">
+            <i class="fas fa-info-circle"></i> E2EPM status: loading…
+        </p>
+    </div>
+
     <!-- Relay sessions table -->
     <div class="box mt-5">
         <div class="level">
@@ -179,6 +239,22 @@ async function loadStats() {
         document.getElementById('stat-rate-limited').textContent = data.rate_limited || 0;
         document.getElementById('stat-opaque').textContent = data.relay_opaque_forwards || 0;
         document.getElementById('stat-flood-mutes').textContent = data.flood_mutes || 0;
+
+        // E2EPM breakdown
+        if (data.e2epm) {
+            document.getElementById('e2epm-total').textContent = data.e2epm.total_forwarded || 0;
+            document.getElementById('e2epm-kex').textContent = data.e2epm.key_exchanges || 0;
+            document.getElementById('e2epm-enc').textContent = data.e2epm.encrypted_pms || 0;
+            document.getElementById('e2epm-ends').textContent = data.e2epm.session_ends || 0;
+            document.getElementById('e2epm-search').textContent = data.e2epm.private_searches || 0;
+            document.getElementById('e2epm-results').textContent = data.e2epm.search_results || 0;
+            const statusEl = document.getElementById('e2epm-status');
+            if (data.e2epm.enabled) {
+                statusEl.innerHTML = '<i class="fas fa-check-circle has-text-success"></i> E2EPM forwarding <strong>enabled</strong> — rate limit: ' + data.e2epm.rate_limit + ' msg/min';
+            } else {
+                statusEl.innerHTML = '<i class="fas fa-times-circle has-text-danger"></i> E2EPM forwarding <strong>disabled</strong>';
+            }
+        }
 
         if (data.config) {
             document.getElementById('config-json').textContent = JSON.stringify(data.config, null, 2);

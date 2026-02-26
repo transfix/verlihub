@@ -89,6 +89,11 @@ _stats = {
     "pb_messages_routed": 0,
     "pb_messages_translated": 0,
     "e2epm_forwarded": 0,
+    "e2epm_key_exchanges": 0,
+    "e2epm_encrypted_pms": 0,
+    "e2epm_session_ends": 0,
+    "e2epm_private_searches": 0,
+    "e2epm_search_results": 0,
     "unknown_dropped": 0,
     "rate_limited": 0,
     "flood_mutes": 0,
@@ -776,7 +781,19 @@ def _forward_e2epm(sender: str, target: str, env: PbEnvelope) -> None:
     wire = WireCodec.encode_text(env)
     _send_to_user(wire, target)
     _stats["e2epm_forwarded"] += 1
-    log.debug(f"E2EPM {env.WhichOneof('payload')} forwarded: {sender} → {target}")
+    # Track E2EPM message subtypes
+    payload_type = env.WhichOneof("payload")
+    if payload_type == "pm_key_exchange":
+        _stats["e2epm_key_exchanges"] += 1
+    elif payload_type == "encrypted_pm":
+        _stats["e2epm_encrypted_pms"] += 1
+    elif payload_type == "pm_session_end":
+        _stats["e2epm_session_ends"] += 1
+    elif payload_type == "private_search":
+        _stats["e2epm_private_searches"] += 1
+    elif payload_type == "private_search_result":
+        _stats["e2epm_search_results"] += 1
+    log.debug(f"E2EPM {payload_type} forwarded: {sender} → {target}")
 
 
 # ---------------------------------------------------------------------------

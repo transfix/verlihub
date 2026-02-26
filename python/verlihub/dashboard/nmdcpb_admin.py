@@ -79,6 +79,16 @@ async def get_nmdcpb_stats(
     stats["active_relay_sessions"] = len(hub_plugin._relay_sessions)
     stats["pending_relay_requests"] = len(hub_plugin._pending_relay)
     stats["version"] = hub_plugin.VERSION
+    stats["e2epm"] = {
+        "total_forwarded": hub_plugin._stats.get("e2epm_forwarded", 0),
+        "key_exchanges": hub_plugin._stats.get("e2epm_key_exchanges", 0),
+        "encrypted_pms": hub_plugin._stats.get("e2epm_encrypted_pms", 0),
+        "session_ends": hub_plugin._stats.get("e2epm_session_ends", 0),
+        "private_searches": hub_plugin._stats.get("e2epm_private_searches", 0),
+        "search_results": hub_plugin._stats.get("e2epm_search_results", 0),
+        "enabled": hub_plugin.ENABLE_E2EPM_FORWARD,
+        "rate_limit": hub_plugin.RATE_MAX_E2EPM,
+    }
     stats["config"] = {
         "enable_legacy_translation": hub_plugin.ENABLE_LEGACY_TRANSLATION,
         "enable_hubrelay": hub_plugin.ENABLE_HUBRELAY,

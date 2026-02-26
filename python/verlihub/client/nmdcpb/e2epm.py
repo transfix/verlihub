@@ -132,6 +132,11 @@ class E2EPMSession:
     fingerprint: str = ""
     created_at: float = field(default_factory=time.time)
 
+    # Key rotation tracking
+    messages_sent: int = 0
+    messages_recvd: int = 0
+    last_rotation: float = 0.0  # Timestamp of last rotation (0 = never)
+
     def __post_init__(self):
         raw = self.my_private_key.public_key().public_bytes(
             serialization.Encoding.Raw,
@@ -181,6 +186,9 @@ class E2EPMSession:
             self.my_public_key_bytes, self.peer_public_key_bytes
         )
         self.established = True
+        self.messages_sent = 0
+        self.messages_recvd = 0
+        self.last_rotation = time.time()
 
     def encrypt_message(self, text: str, is_action: bool = False) -> PbEncryptedPM:
         """Encrypt a plaintext message for the peer.
@@ -210,6 +218,9 @@ class E2EPMSession:
         epm.nonce = self.send_counter
         epm.ciphertext = ciphertext
         epm.sender_pubkey_hint = self.my_public_key_bytes[:PUBKEY_HINT_LEN]
+
+        self.messages_sent += 1
+
         return epm
 
     def decrypt_message(self, epm: PbEncryptedPM) -> PbPMPlaintext:
@@ -238,6 +249,7 @@ class E2EPMSession:
         plaintext_bytes = cipher.decrypt(nonce, epm.ciphertext, aad)
 
         self.recv_counter = epm.nonce
+        self.messages_recvd += 1
 
         pt = PbPMPlaintext()
         pt.ParseFromString(plaintext_bytes)
@@ -382,3 +394,60 @@ class E2EPMManager:
     def clear_all(self) -> None:
         """Clear all sessions (e.g., on disconnect)."""
         self._sessions.clear()
+
+    # ----- Key Rotation -----
+
+    ROTATION_MESSAGE_THRESHOLD: int = 1000  # Rotate after N total messages
+    ROTATION_TIME_THRESHOLD: float = 3600.0  # Rotate after N seconds (1 hour)
+
+    def needs_rotation(self, peer_nick: str) -> bool:
+        """Check if a session needs key rotation (message count or time threshold)."""
+        session = self._sessions.get(peer_nick)
+        if not session or not session.established:
+            return False
+        total_msgs = session.messages_sent + session.messages_recvd
+        if total_msgs >= self.ROTATION_MESSAGE_THRESHOLD:
+            return True
+        baseline = session.last_rotation if session.last_rotation > 0 else session.created_at
+        if baseline > 0 and (time.time() - baseline) >= self.ROTATION_TIME_THRESHOLD:
+            return True
+        return False
+
+    def get_sessions_needing_rotation(self) -> list[str]:
+        """Return list of peer nicks with sessions that need rotation."""
+        result = []
+        now = time.time()
+        for nick, session in self._sessions.items():
+            if not session.established:
+                continue
+            total_msgs = session.messages_sent + session.messages_recvd
+            if total_msgs >= self.ROTATION_MESSAGE_THRESHOLD:
+                result.append(nick)
+                continue
+            baseline = session.last_rotation if session.last_rotation > 0 else session.created_at
+            if baseline > 0 and (now - baseline) >= self.ROTATION_TIME_THRESHOLD:
+                result.append(nick)
+        return result
+
+    def rotation_stats(self, peer_nick: str) -> dict:
+        """Get rotation statistics for a session.
+
+        Returns dict with:
+            messages_sent, messages_recvd, session_age, rotation_needed
+        """
+        session = self._sessions.get(peer_nick)
+        if not session:
+            return {"messages_sent": 0, "messages_recvd": 0, "session_age": 0.0, "rotation_needed": False}
+        baseline = session.last_rotation if session.last_rotation > 0 else session.created_at
+        age = (time.time() - baseline) if baseline > 0 else 0.0
+        total_msgs = session.messages_sent + session.messages_recvd
+        needed = session.established and (
+            total_msgs >= self.ROTATION_MESSAGE_THRESHOLD
+            or (baseline > 0 and age >= self.ROTATION_TIME_THRESHOLD)
+        )
+        return {
+            "messages_sent": session.messages_sent,
+            "messages_recvd": session.messages_recvd,
+            "session_age": age,
+            "rotation_needed": needed,
+        }

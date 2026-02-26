@@ -303,6 +303,50 @@ async def websocket_hublist(websocket: WebSocket):
         await manager.disconnect(websocket, "hublist")
 
 
+@ws_router.websocket("/relay")
+async def websocket_relay(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time NMDCpb relay events.
+
+    Broadcasts events like:
+    - relay_created: {relay_id, user_a, user_b}
+    - relay_closed: {relay_id, reason}
+    - relay_data: {relay_id, bytes, direction}
+    - relay_stats: {active_sessions, total_bytes, opaque_forwards}
+    """
+    user = await get_user_from_ws_cookie(websocket)
+
+    if not user or user.user_class < 5:  # Require admin
+        await websocket.close(code=4403, reason="Admin access required")
+        return
+
+    if not await manager.connect(websocket, "relay"):
+        return
+
+    try:
+        await manager.send_personal(websocket, {
+            "type": "connected",
+            "message": "Connected to NMDCpb relay events",
+            "time": datetime.now(timezone.utc).isoformat(),
+        })
+
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(), timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                await manager.send_personal(websocket, {
+                    "type": "ping",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                })
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect(websocket, "relay")
+
+
 # --- Functions to be called by the hub core to push events ---
 
 
@@ -326,6 +370,16 @@ async def broadcast_log(level: str, message: str, log_type: str = "system"):
         "time": datetime.now(timezone.utc).isoformat(),
     }
     await manager.broadcast("logs", entry)
+
+
+async def broadcast_relay_event(event_type: str, data: dict):
+    """Broadcast a relay event to all connected relay channel clients."""
+    message = {
+        "type": event_type,
+        "time": datetime.now(timezone.utc).isoformat(),
+        **data,
+    }
+    await manager.broadcast("relay", message)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +419,15 @@ def emit_log(level: str, message: str, log_type: str = "system") -> None:
     loop = _ws_loop
     if loop is not None and loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_log(level, message, log_type), loop)
+
+
+def emit_relay_event(event_type: str, data: dict):
+    """Emit a relay event (sync wrapper for calling from hub_plugin)."""
+    try:
+        loop = asyncio.get_running_loop()
+        asyncio.create_task(broadcast_relay_event(event_type, data))
+    except RuntimeError:
+        pass
 
 
 # --- Background task for periodic stats updates ---

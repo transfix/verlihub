@@ -41,6 +41,162 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
+# ---------------------------------------------------------------------------
+# Protobuf wire format utilities (for opaque relay pass-through)
+# ---------------------------------------------------------------------------
+
+def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
+    """Read a protobuf varint starting at *pos*.
+
+    Returns (value, new_pos).  Raises ValueError on truncated input.
+    """
+    result = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        result |= (b & 0x7F) << shift
+        shift += 7
+        pos += 1
+        if not (b & 0x80):
+            return result, pos
+    raise ValueError("Truncated varint")
+
+
+def _encode_varint(value: int) -> bytes:
+    """Encode an unsigned integer as a protobuf varint."""
+    parts = []
+    while value > 0x7F:
+        parts.append((value & 0x7F) | 0x80)
+        value >>= 7
+    parts.append(value & 0x7F)
+    return bytes(parts)
+
+
+def _skip_field(data: bytes, pos: int, wire_type: int) -> int:
+    """Skip over a protobuf field value.  Returns new position."""
+    if wire_type == 0:  # VARINT
+        while pos < len(data) and data[pos] & 0x80:
+            pos += 1
+        return pos + 1
+    elif wire_type == 2:  # LEN (string, bytes, sub-message)
+        length, pos = _read_varint(data, pos)
+        return pos + length
+    elif wire_type == 5:  # I32
+        return pos + 4
+    elif wire_type == 1:  # I64
+        return pos + 8
+    else:
+        raise ValueError(f"Unknown wire type {wire_type}")
+
+
+def _extract_field_raw(data: bytes, target_field: int) -> tuple[int, int] | None:
+    """Find a protobuf field in serialized data.
+
+    Returns ``(field_start, field_end)`` byte offsets for the complete
+    field entry (tag + length-prefix + value) of *target_field*, or
+    ``None`` if the field is not present.
+    """
+    pos = 0
+    while pos < len(data):
+        field_start = pos
+        tag, pos = _read_varint(data, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x07
+        try:
+            field_end = _skip_field(data, pos, wire_type)
+        except (ValueError, IndexError):
+            return None
+        if field_number == target_field:
+            return (field_start, field_end)
+        pos = field_end
+    return None
+
+
+def _read_submsg_varint(data: bytes, outer_field: int,
+                        inner_field: int) -> int | None:
+    """Read a varint from inside a sub-message field without full parse.
+
+    Scans *data* for *outer_field* (expected wire-type LEN / sub-message),
+    then scans inside it for *inner_field* (expected varint).
+    Returns the varint value, or ``None`` if not found.
+    """
+    pos = 0
+    while pos < len(data):
+        tag, new_pos = _read_varint(data, pos)
+        fn = tag >> 3
+        wt = tag & 0x07
+        if fn == outer_field and wt == 2:
+            # Found the sub-message — read its length
+            sub_len, sub_start = _read_varint(data, new_pos)
+            sub_end = sub_start + sub_len
+            # Scan inside the sub-message for inner_field
+            sp = sub_start
+            while sp < sub_end:
+                itag, sp2 = _read_varint(data, sp)
+                ifn = itag >> 3
+                iwt = itag & 0x07
+                if ifn == inner_field and iwt == 0:
+                    val, _ = _read_varint(data, sp2)
+                    return val
+                try:
+                    sp = _skip_field(data, sp2, iwt)
+                except (ValueError, IndexError):
+                    return None
+            return None  # inner field not found
+        try:
+            pos = _skip_field(data, new_pos, wt)
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _submsg_data_length(data: bytes, outer_field: int,
+                        data_field: int) -> int | None:
+    """Read the *length* of a ``bytes`` field inside a sub-message.
+
+    Scans for *outer_field* (sub-message), then inside it for
+    *data_field* (wire-type LEN).  Returns the byte-length of the
+    LEN-delimited value **without copying it**.
+    """
+    pos = 0
+    while pos < len(data):
+        tag, new_pos = _read_varint(data, pos)
+        fn = tag >> 3
+        wt = tag & 0x07
+        if fn == outer_field and wt == 2:
+            sub_len, sub_start = _read_varint(data, new_pos)
+            sub_end = sub_start + sub_len
+            sp = sub_start
+            while sp < sub_end:
+                itag, sp2 = _read_varint(data, sp)
+                ifn = itag >> 3
+                iwt = itag & 0x07
+                if ifn == data_field and iwt == 2:
+                    dlen, _ = _read_varint(data, sp2)
+                    return dlen
+                try:
+                    sp = _skip_field(data, sp2, iwt)
+                except (ValueError, IndexError):
+                    return None
+            return 0  # data field absent → zero length
+        try:
+            pos = _skip_field(data, new_pos, wt)
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+# PbEnvelope field numbers (from nmdcpb.proto)
+_FIELD_ROUTE = 1          # varint
+_FIELD_FROM_NICK = 2      # string (LEN)
+_FIELD_TO_NICK = 3        # string (LEN)
+_FIELD_TIMESTAMP = 5      # uint64 (varint)
+_FIELD_RELAY_DATA = 22    # PbRelayData sub-message (LEN)
+# PbRelayData inner field numbers
+_FIELD_RD_RELAY_ID = 1    # uint32 (varint)
+_FIELD_RD_DATA = 2        # bytes (LEN)
+
+
 class WireCodec:
     """Encodes and decodes NMDCpb wire protocol messages."""
 
@@ -103,6 +259,150 @@ class WireCodec:
 
     # Backward-compat alias
     encode_relay = encode_routed
+
+    # --- Fast-path encoding (for opaque relay forwarding) ---
+
+    @staticmethod
+    def encode_text_raw(raw_pb: bytes, nick: str) -> str:
+        """Encode pre-serialized protobuf bytes as a $PB text-mode command.
+
+        Skips ``SerializeToString()`` — use when you already have the raw
+        protobuf bytes (e.g. from opaque relay forwarding).
+
+        Args:
+            raw_pb: Pre-serialized protobuf bytes.
+            nick: Sender nick for the wire header.
+        """
+        b64 = _b64url_encode(raw_pb)
+        return f"{PREFIX_PB}{nick} {b64}{TERMINATOR}"
+
+    @staticmethod
+    def build_relay_forward(raw_pb: bytes, from_nick: str,
+                            to_nick: str, timestamp: int) -> str:
+        """Build a forwarded relay-data wire frame using raw byte surgery.
+
+        Takes the **original** serialized protobuf bytes of the incoming
+        ``PbEnvelope`` (containing ``relay_data``), strips the old
+        routing fields, and concatenates a fresh header (with new nicks)
+        and the *unchanged* ``relay_data`` raw bytes.
+
+        This avoids full ``ParseFromString`` → modify → ``SerializeToString``
+        round-trip for the (potentially 64 KB) relay data payload.
+
+        Args:
+            raw_pb: Original serialized PbEnvelope bytes.
+            from_nick: Hub-authoritative sender nick.
+            to_nick: Peer nick (forwarding target).
+            timestamp: Envelope timestamp (uint64 millis).
+
+        Returns:
+            ``$PB <to_nick> <base64url>|`` wire string, or empty string
+            if the relay_data field couldn't be found.
+        """
+        # 1. Find the relay_data field in the original bytes
+        rd_span = _extract_field_raw(raw_pb, _FIELD_RELAY_DATA)
+        if rd_span is None:
+            return ""
+        rd_start, rd_end = rd_span
+        relay_data_raw = raw_pb[rd_start:rd_end]
+
+        # 2. Build a minimal header envelope (route + nicks + timestamp)
+        header = PbEnvelope()
+        header.route = PbEnvelope.DIRECT
+        header.from_nick = from_nick
+        header.to_nick = to_nick
+        header.timestamp = timestamp
+        header_bytes = header.SerializeToString()
+
+        # 3. Concatenate — valid protobuf (last-writer-wins for scalars,
+        #    sub-messages merge).  The header has no relay_data, so the
+        #    relay_data_raw field is simply appended.
+        full_bytes = header_bytes + relay_data_raw
+
+        # 4. Encode as $PB text frame
+        b64 = _b64url_encode(full_bytes)
+        return f"{PREFIX_PB}{to_nick} {b64}{TERMINATOR}"
+
+    @staticmethod
+    def decode_relay_opaque(line: str) -> tuple[int, int, int, bytes] | None:
+        """Fast-path decode for relay data forwarding.
+
+        Performs minimal protobuf wire scanning (no ``ParseFromString``)
+        to extract just the fields needed for relay validation:
+
+        - ``route``  (PbEnvelope field 1)
+        - ``relay_id``  (PbRelayData.relay_id, sub-field 1 of field 22)
+        - ``data_length``  (byte-length of PbRelayData.data, sub-field 2)
+
+        Also returns the raw protobuf bytes for use with
+        :meth:`build_relay_forward`.
+
+        Args:
+            line: Raw ``$PB <nick> <base64url>|`` wire string.
+
+        Returns:
+            ``(route, relay_id, data_length, raw_pb)`` tuple, or ``None``
+            if the message doesn't look like a ``$PB`` relay_data frame
+            or the wire-format scan fails.
+        """
+        if not isinstance(line, str):
+            return None
+        s = line
+        if s.endswith(TERMINATOR):
+            s = s[:-1]
+
+        # Only handle $PB text mode
+        if not s.startswith(PREFIX_PB):
+            return None
+        if s.startswith(PREFIX_PBB) or s.startswith(PREFIX_PBR):
+            return None
+
+        rest = s[len(PREFIX_PB):]
+        parts = rest.split(" ", 1)
+        if len(parts) != 2:
+            return None
+        _, b64 = parts
+
+        try:
+            raw_pb = _b64url_decode(b64)
+        except Exception:
+            return None
+
+        # Quick-scan: route (field 1, varint)
+        route = _read_submsg_varint.__wrapped__(raw_pb) if False else None  # noqa – placeholder
+        # Actually scan for route directly
+        route_val = None
+        pos = 0
+        try:
+            while pos < len(raw_pb):
+                tag, new_pos = _read_varint(raw_pb, pos)
+                fn = tag >> 3
+                wt = tag & 0x07
+                if fn == _FIELD_ROUTE and wt == 0:
+                    route_val, _ = _read_varint(raw_pb, new_pos)
+                pos = _skip_field(raw_pb, new_pos, wt)
+        except (ValueError, IndexError):
+            pass
+
+        if route_val is None:
+            # proto3 default for route is 0 (BROADCAST) — relay_data
+            # should be DIRECT (1), so if route is absent it's not relay.
+            return None
+        if route_val != 1:  # PbEnvelope.DIRECT == 1
+            return None
+
+        # Check relay_data is present and extract relay_id / data_length
+        relay_id = _read_submsg_varint(raw_pb, _FIELD_RELAY_DATA,
+                                       _FIELD_RD_RELAY_ID)
+        if relay_id is None:
+            return None  # Not a relay_data message
+
+        data_length = _submsg_data_length(raw_pb, _FIELD_RELAY_DATA,
+                                          _FIELD_RD_DATA)
+        if data_length is None:
+            data_length = 0
+
+        return (route_val, relay_id, data_length, raw_pb)
 
     # --- Decoding ---
 

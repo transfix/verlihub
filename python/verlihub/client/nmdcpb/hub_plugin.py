@@ -97,6 +97,8 @@ _stats = {
     "relay_sessions_closed": 0,
     "stealth_queries": 0,
     "stealth_sweeps": 0,
+    "relay_opaque_forwards": 0,
+    "relay_opaque_fallbacks": 0,
 }
 
 
@@ -144,6 +146,28 @@ _pending_relay: dict[str, dict] = {}
 _next_relay_id: int = 1
 
 
+# ---------------------------------------------------------------------------
+# Envelope pool (avoids repeated PbEnvelope allocation)
+# ---------------------------------------------------------------------------
+
+_ENVELOPE_POOL_MAX = 32
+_envelope_pool: list[PbEnvelope] = []
+
+
+def _get_envelope() -> PbEnvelope:
+    """Get a PbEnvelope from the pool, or create a new one."""
+    if _envelope_pool:
+        return _envelope_pool.pop()
+    return PbEnvelope()
+
+
+def _return_envelope(env: PbEnvelope) -> None:
+    """Return a PbEnvelope to the pool after clearing it."""
+    if len(_envelope_pool) < _ENVELOPE_POOL_MAX:
+        env.Clear()
+        _envelope_pool.append(env)
+
+
 def _user_relay_count(nick: str) -> int:
     """Count active relay sessions for a user."""
     return sum(1 for s in _relay_sessions.values() if s.touches(nick))
@@ -158,6 +182,14 @@ def _close_relay_session(relay_id: int, reason: int = 0,
     _stats["relay_sessions_closed"] += 1
     log.info(f"Relay session {relay_id} closed ({sess.user_a} ↔ {sess.user_b}, "
              f"{sess.bytes_forwarded} bytes)")
+    try:
+        from verlihub.dashboard.websocket import emit_relay_event
+        emit_relay_event("relay_closed", {
+            "relay_id": relay_id, "user_a": sess.user_a, "user_b": sess.user_b,
+            "reason": reason, "bytes_forwarded": sess.bytes_forwarded,
+        })
+    except Exception:
+        pass
     if notify:
         env = WireCodec.make_envelope(route=PbEnvelope.DIRECT)
         env.relay_closed.relay_id = relay_id
@@ -374,6 +406,33 @@ def OnUnknownMsg(nick: str, msg_str: str) -> int:
 
     # Rate limiting — general PB messages
     if not _check_rate(nick, "pb"):
+        return 0
+
+    # ---------------------------------------------------------------
+    # Fast path: opaque relay data forwarding
+    # If this is a DIRECT relay_data frame, we can forward it using
+    # raw byte surgery — only scanning the protobuf wire format for
+    # relay_id / data_length without a full ParseFromString.  This
+    # avoids copying the (potentially 64 KB) data blob into Python.
+    # ---------------------------------------------------------------
+    fast = WireCodec.decode_relay_opaque(msg_str)
+    if fast is not None:
+        _route, relay_id, data_length, raw_pb = fast
+        _stats["pb_messages_routed"] += 1
+        # We still need a parsed envelope for validation
+        # (relay_id lookup, sender check, size check), but by
+        # passing raw_pb we enable build_relay_forward() for output.
+        try:
+            env = WireCodec.decode(msg_str)
+        except Exception as e:
+            log.warning(f"Failed to decode PB from {nick}: {e}")
+            _send_status(nick, PbStatus.ERROR, 2, f"Decode error: {e}")
+            return 0
+        if env is None:
+            return 0
+        env.from_nick = nick
+        _forward_relay_data(nick, env, raw_pb=raw_pb)
+        _return_envelope(env)
         return 0
 
     try:
@@ -828,6 +887,13 @@ def _route_relay_ack(sender: str, env: PbEnvelope) -> None:
     _relay_sessions[relay_id] = sess
     _stats["relay_sessions_created"] += 1
     log.info(f"Relay session {relay_id} created: {requester} ↔ {sender}")
+    try:
+        from verlihub.dashboard.websocket import emit_relay_event
+        emit_relay_event("relay_created", {
+            "relay_id": relay_id, "user_a": requester, "user_b": sender,
+        })
+    except Exception:
+        pass
 
     # Notify requester (ack with relay_id)
     ack_to_req = WireCodec.make_envelope(
@@ -852,8 +918,15 @@ def _route_relay_ack(sender: str, env: PbEnvelope) -> None:
     _send_to_user(WireCodec.encode_text(ack_to_resp), sender)
 
 
-def _forward_relay_data(sender: str, env: PbEnvelope) -> None:
-    """Forward relay data to the peer in the relay session."""
+def _forward_relay_data(sender: str, env: PbEnvelope,
+                        raw_pb: bytes | None = None) -> None:
+    """Forward relay data to the peer in the relay session.
+
+    If *raw_pb* (the original serialized protobuf bytes) is provided,
+    uses opaque forwarding — the (potentially large) relay data payload
+    is forwarded as raw bytes without re-serialization, cutting the
+    per-frame cost roughly in half for large payloads.
+    """
     rd = env.relay_data
     relay_id = rd.relay_id
 
@@ -878,7 +951,19 @@ def _forward_relay_data(sender: str, env: PbEnvelope) -> None:
     sess.last_activity = time.time()
     _stats["relay_bytes_forwarded"] += data_len
 
-    # Forward to peer
+    # Try opaque forwarding (raw byte surgery — avoids full re-serialize)
+    if raw_pb is not None:
+        wire = WireCodec.build_relay_forward(
+            raw_pb, from_nick=sender, to_nick=peer,
+            timestamp=env.timestamp,
+        )
+        if wire:
+            _stats["relay_opaque_forwards"] += 1
+            _send_to_user(wire, peer)
+            return
+        _stats["relay_opaque_fallbacks"] += 1
+
+    # Fallback: full protobuf re-serialization
     env.from_nick = sender
     env.to_nick = peer
     wire = WireCodec.encode_text(env)

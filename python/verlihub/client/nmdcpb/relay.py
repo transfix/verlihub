@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import struct
@@ -207,6 +208,45 @@ class RelayFileTransfer:
             info.error = ""
             log.info(f"Resume requested for relay {relay_id} at offset {resume_offset}")
         return ok
+
+    def scan_partial_downloads(self) -> list[dict]:
+        """Scan download_dir for .partial sidecar files from interrupted transfers.
+
+        Returns a list of dicts with saved transfer state (relay_id, token,
+        filename, file_size, bytes_transferred, etc.) that can be used to
+        re-request relay sessions and resume.
+        """
+        results: list[dict] = []
+        if not os.path.isdir(self.download_dir):
+            return results
+
+        for name in os.listdir(self.download_dir):
+            if not name.endswith(".partial"):
+                continue
+            state_path = os.path.join(self.download_dir, name)
+            state = _RecvContext.load_state(state_path)
+            if state is None:
+                continue
+
+            output_path = state.get("output_path", "")
+            if output_path and os.path.isfile(output_path):
+                actual_size = os.path.getsize(output_path)
+                expected = state.get("bytes_transferred", 0)
+                if actual_size == expected:
+                    results.append(state)
+                    log.info(
+                        f"Resumable partial: {state.get('filename')} "
+                        f"({expected}/{state.get('file_size')} bytes)"
+                    )
+                else:
+                    log.warning(
+                        f"Partial state mismatch for {name}: "
+                        f"file={actual_size} vs state={expected}"
+                    )
+            else:
+                log.debug(f"Partial state without data file: {name}")
+
+        return results
 
     # --- Callback Handlers ---
 
@@ -456,6 +496,10 @@ class RelayFileTransfer:
             ctx.sha.update(data)
             info.bytes_transferred += len(data)
 
+            # Persist state every 256 KB for crash recovery
+            if info.bytes_transferred % (256 * 1024) < len(data):
+                ctx.save_state()
+
             if self.on_transfer_progress:
                 self.on_transfer_progress(info)
 
@@ -468,6 +512,7 @@ class RelayFileTransfer:
                 if ctx.sha.digest() == info.sha256:
                     info.state = TransferState.COMPLETED
                     log.info(f"File received: {info.filename} — SHA-256 verified ✓")
+                    ctx.clear_state()
                     if self.on_transfer_complete:
                         self.on_transfer_complete(info)
                 else:
@@ -497,6 +542,148 @@ class _RecvContext:
     sha: object = field(default_factory=lambda: hashlib.sha256())
     output_path: str = ""
     file: object = None
+
+    @property
+    def state_path(self) -> str:
+        """Path for the .partial JSON sidecar file."""
+        return self.output_path + ".partial" if self.output_path else ""
+
+    def save_state(self) -> None:
+        """Persist partial transfer state to disk for crash recovery."""
+        if not self.state_path or not self.header_received:
+            return
+        state = {
+            "relay_id": self.info.relay_id,
+            "token": self.info.token,
+            "peer_nick": self.info.peer_nick,
+            "filename": self.info.filename,
+            "file_size": self.info.file_size,
+            "bytes_transferred": self.info.bytes_transferred,
+            "sha256_expected": self.info.sha256.hex(),
+            "partial_sha256": self.sha.hexdigest() if hasattr(self.sha, "hexdigest") else "",
+            "output_path": self.output_path,
+        }
+        try:
+            with open(self.state_path, "w") as f:
+                json.dump(state, f)
+        except OSError:
+            log.debug(f"Failed to save partial state: {self.state_path}")
+
+    @staticmethod
+    def load_state(state_path: str) -> dict | None:
+        """Load a previously saved partial transfer state.
+
+        Returns dict with keys: relay_id, token, peer_nick, filename,
+        file_size, bytes_transferred, sha256_expected, partial_sha256,
+        output_path.  Returns None if the file doesn't exist or is corrupt.
+        """
+        try:
+            with open(state_path, "r") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def clear_state(self) -> None:
+        """Remove the sidecar state file after successful completion."""
+        if self.state_path:
+            try:
+                os.unlink(self.state_path)
+            except OSError:
+                pass
+
+
+# ============================================================================
+# Partial File Writer (offset-aware, for segmented downloads)
+# ============================================================================
+
+class PartialFileWriter:
+    """Writes data to a file at arbitrary offsets for segmented downloads.
+
+    Pre-allocates the file on first open, then supports concurrent writes
+    to different offsets from different segments.  Maintains a completion
+    bitmap and a sidecar ``.segments`` JSON file for crash recovery.
+
+    Thread safety: not thread-safe; callers must serialise access
+    (e.g. via the event loop).
+    """
+
+    def __init__(self, path: str, file_size: int, segment_count: int):
+        self.path = path
+        self.file_size = file_size
+        self.segment_count = segment_count
+        self._bitmap: list[bool] = [False] * segment_count
+        self._fd: int | None = None
+
+    @property
+    def state_path(self) -> str:
+        return self.path + ".segments"
+
+    def open(self) -> None:
+        """Open (and pre-allocate) the partial file."""
+        if self._fd is not None:
+            return
+        flags = os.O_RDWR | os.O_CREAT
+        self._fd = os.open(self.path, flags, 0o644)
+        # Pre-allocate to full size (sparse on most Linux filesystems)
+        os.ftruncate(self._fd, self.file_size)
+        log.debug(f"PartialFileWriter opened: {self.path} ({self.file_size} bytes)")
+
+    def write_at(self, offset: int, data: bytes) -> None:
+        """Write data at the given byte offset."""
+        if self._fd is None:
+            raise RuntimeError("PartialFileWriter not open")
+        os.lseek(self._fd, offset, os.SEEK_SET)
+        os.write(self._fd, data)
+
+    def mark_segment_complete(self, index: int) -> None:
+        """Mark a segment as fully written."""
+        if 0 <= index < self.segment_count:
+            self._bitmap[index] = True
+
+    def is_complete(self) -> bool:
+        """Check if all segments are written."""
+        return all(self._bitmap)
+
+    def save_state(self) -> None:
+        """Persist the completion bitmap for crash recovery."""
+        state = {
+            "path": self.path,
+            "file_size": self.file_size,
+            "bitmap": self._bitmap,
+        }
+        try:
+            with open(self.state_path, "w") as f:
+                json.dump(state, f)
+        except OSError:
+            log.debug(f"Failed to save segment state: {self.state_path}")
+
+    @staticmethod
+    def load_state(state_path: str) -> dict | None:
+        """Load saved segment completion state."""
+        try:
+            with open(state_path, "r") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def close(self) -> None:
+        """Close the file descriptor and remove the sidecar state file."""
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+        # Remove sidecar on successful close
+        try:
+            os.unlink(self.state_path)
+        except OSError:
+            pass
+
+    def __del__(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
 
 
 # ============================================================================
@@ -591,6 +778,8 @@ class SegmentCoordinator:
     """
 
     MAX_RETRIES = 3
+    MAX_CONCURRENT_PER_PEER = 2     # max active segments per peer
+    MIN_REQUEST_INTERVAL = 1.0      # min seconds between relay requests to a peer
 
     def __init__(
         self,
@@ -620,6 +809,9 @@ class SegmentCoordinator:
             started_at=time.time(),
         )
         self._segments: list[Segment] = []
+
+        # Rate-limiting state
+        self._peer_last_request: dict[str, float] = {}  # nick → monotonic time
 
         # Callbacks
         self.on_segment_complete: Optional[Callable[[Segment], None]] = None
@@ -659,12 +851,28 @@ class SegmentCoordinator:
         """Return segments that need to be started."""
         return [s for s in self._segments if s.state == SegmentState.PENDING]
 
+    def peer_active_count(self, peer_nick: str) -> int:
+        """Count segments currently active (assigned/transferring) for a peer."""
+        return sum(1 for s in self._segments
+                   if s.peer_nick == peer_nick
+                   and s.state in (SegmentState.ASSIGNED, SegmentState.TRANSFERRING))
+
+    def can_assign_peer(self, peer_nick: str) -> bool:
+        """Check if a peer can accept another segment (concurrency + rate limit)."""
+        if self.peer_active_count(peer_nick) >= self.MAX_CONCURRENT_PER_PEER:
+            return False
+        last = self._peer_last_request.get(peer_nick, 0.0)
+        if (time.monotonic() - last) < self.MIN_REQUEST_INTERVAL:
+            return False
+        return True
+
     def assign_segment(self, index: int, peer_nick: str, relay_id: int) -> None:
         """Mark a segment as assigned to a peer with an established relay."""
         seg = self._segments[index]
         seg.state = SegmentState.ASSIGNED
         seg.peer_nick = peer_nick
         seg.relay_id = relay_id
+        self._peer_last_request[peer_nick] = time.monotonic()
 
     def start_segment(self, index: int) -> None:
         """Mark segment as actively transferring."""

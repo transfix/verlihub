@@ -118,12 +118,13 @@ class _RelaySession:
         "bytes_forwarded", "created_at", "last_activity",
     )
 
-    def __init__(self, relay_id: int, user_a: str, user_b: str, token: str):
+    def __init__(self, relay_id: int, user_a: str, user_b: str, token: str,
+                 bytes_forwarded: int = 0):
         self.relay_id = relay_id
         self.user_a = user_a
         self.user_b = user_b
         self.token = token
-        self.bytes_forwarded: int = 0
+        self.bytes_forwarded: int = bytes_forwarded
         self.created_at: float = time.time()
         self.last_activity: float = self.created_at
 
@@ -149,6 +150,12 @@ _relay_sessions: dict[int, _RelaySession] = {}
 _pending_relay: dict[str, dict] = {}
 # Auto-incrementing relay_id
 _next_relay_id: int = 1
+# Closed sessions archive: token → {user_a, user_b, bytes_forwarded, closed_at}
+# Used for resume: when a client reconnects and sends PbRelayResume with a
+# previous token, the hub matches it here and creates a new relay session
+# between the same pair.  Entries expire after RELAY_RESUME_TOKEN_TTL seconds.
+RELAY_RESUME_TOKEN_TTL = 300  # 5 minutes
+_closed_relay_tokens: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +192,16 @@ def _close_relay_session(relay_id: int, reason: int = 0,
     if not sess:
         return
     _stats["relay_sessions_closed"] += 1
+
+    # Archive token for potential resume within TTL
+    if sess.token:
+        _closed_relay_tokens[sess.token] = {
+            "user_a": sess.user_a,
+            "user_b": sess.user_b,
+            "bytes_forwarded": sess.bytes_forwarded,
+            "closed_at": time.time(),
+        }
+
     log.info(f"Relay session {relay_id} closed ({sess.user_a} ↔ {sess.user_b}, "
              f"{sess.bytes_forwarded} bytes)")
     try:
@@ -532,6 +549,11 @@ def OnTimer(msec: float) -> int:
                          if now - p.get("created_at", 0) > 30]
         for t in stale_pending:
             _pending_relay.pop(t, None)
+        # Expire closed relay tokens past TTL
+        expired_tokens = [t for t, info in _closed_relay_tokens.items()
+                          if (now - info["closed_at"]) > RELAY_RESUME_TOKEN_TTL]
+        for t in expired_tokens:
+            del _closed_relay_tokens[t]
     return 1
 
 
@@ -1005,29 +1027,101 @@ def _route_relay_closed(sender: str, env: PbEnvelope) -> None:
 
 
 def _forward_relay_resume(sender: str, env: PbEnvelope) -> None:
-    """Forward a relay resume request to the peer (sender side of transfer)."""
+    """Forward a relay resume request to the peer.
+
+    Two scenarios:
+    1. In-session resume: relay_id is still active → forward to peer.
+    2. Reconnect resume: relay_id=0 but token matches a recently-closed session
+       → create a NEW relay session between the same pair, assign new relay_id,
+       then forward the resume to the peer.
+    """
+    global _next_relay_id
     rr = env.relay_resume
     relay_id = rr.relay_id
+    token = rr.token
 
-    sess = _relay_sessions.get(relay_id)
-    if not sess:
-        _send_status(sender, PbStatus.ERROR, 17, f"Unknown relay session {relay_id}")
+    # --- Case 1: Active session resume ---
+    sess = _relay_sessions.get(relay_id) if relay_id else None
+    if sess:
+        if not sess.touches(sender):
+            _send_status(sender, PbStatus.ERROR, 18,
+                         "Not a participant in this relay session")
+            return
+
+        peer = sess.peer_of(sender)
+        sess.last_activity = time.time()
+
+        env.from_nick = sender
+        env.to_nick = peer
+        wire = WireCodec.encode_text(env)
+        _send_to_user(wire, peer)
+        log.info(f"Relay resume forwarded (active): relay {relay_id}, "
+                 f"offset={rr.resume_offset}, {sender} → {peer}")
         return
 
-    if not sess.touches(sender):
-        _send_status(sender, PbStatus.ERROR, 18,
-                     "Not a participant in this relay session")
+    # --- Case 2: Reconnect resume via archived token ---
+    if token and token in _closed_relay_tokens:
+        archived = _closed_relay_tokens[token]
+
+        # Check TTL
+        if (time.time() - archived["closed_at"]) > RELAY_RESUME_TOKEN_TTL:
+            del _closed_relay_tokens[token]
+            _send_status(sender, PbStatus.ERROR, 17,
+                         "Resume token expired (session closed too long ago)")
+            return
+
+        # Verify sender was a participant
+        if sender not in (archived["user_a"], archived["user_b"]):
+            _send_status(sender, PbStatus.ERROR, 18,
+                         "Not a participant in the original session")
+            return
+
+        peer = (archived["user_b"] if sender == archived["user_a"]
+                else archived["user_a"])
+
+        # Check peer is still online
+        all_nicks = _get_all_nicks()
+        if peer not in all_nicks:
+            _send_status(sender, PbStatus.ERROR, 7,
+                         f"Peer {peer} is offline, cannot resume")
+            return
+
+        # Check session limits
+        if _user_relay_count(sender) >= RELAY_MAX_SESSIONS_PER_USER:
+            _send_status(sender, PbStatus.ERROR, 15,
+                         "Relay session limit reached")
+            return
+
+        # Create new relay session for the resumed transfer
+        new_relay_id = _next_relay_id
+        _next_relay_id += 1
+
+        new_sess = _RelaySession(
+            relay_id=new_relay_id,
+            user_a=sender,
+            user_b=peer,
+            token=token,
+            bytes_forwarded=archived["bytes_forwarded"],
+        )
+        _relay_sessions[new_relay_id] = new_sess
+        _stats["relay_sessions_created"] += 1
+
+        # Remove from archive (one-time use)
+        del _closed_relay_tokens[token]
+
+        # Update resume message with new relay_id and forward
+        rr.relay_id = new_relay_id
+        env.from_nick = sender
+        env.to_nick = peer
+        wire = WireCodec.encode_text(env)
+        _send_to_user(wire, peer)
+        log.info(f"Relay resume (reconnect): new relay {new_relay_id} "
+                 f"(token={token[:8]}...), offset={rr.resume_offset}, "
+                 f"{sender} → {peer}")
         return
 
-    peer = sess.peer_of(sender)
-    sess.last_activity = time.time()
-
-    env.from_nick = sender
-    env.to_nick = peer
-    wire = WireCodec.encode_text(env)
-    _send_to_user(wire, peer)
-    log.info(f"Relay resume forwarded: relay {relay_id}, offset={rr.resume_offset}, "
-             f"{sender} → {peer}")
+    _send_status(sender, PbStatus.ERROR, 17,
+                 f"Unknown relay session {relay_id} and no matching resume token")
 
 
 def _forward_segment_msg(sender: str, env: PbEnvelope) -> None:

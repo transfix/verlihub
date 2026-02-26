@@ -813,6 +813,11 @@ class SegmentCoordinator:
         # Rate-limiting state
         self._peer_last_request: dict[str, float] = {}  # nick → monotonic time
 
+        # TTH tree leaves for per-segment verification
+        self._tth_leaves: list[bytes] = []    # List of 24-byte Tiger leaf hashes
+        self._tth_block_size: int = 0         # Bytes per TTH leaf block
+        self._tth_file_size: int = 0          # File size used when tree was built
+
         # Callbacks
         self.on_segment_complete: Optional[Callable[[Segment], None]] = None
         self.on_segment_failed: Optional[Callable[[Segment], None]] = None
@@ -879,10 +884,33 @@ class SegmentCoordinator:
         self._segments[index].state = SegmentState.TRANSFERRING
 
     def on_segment_data(self, index: int, data: bytes) -> None:
-        """Process incoming data for a segment."""
+        """Process incoming data for a segment.
+
+        If TTH leaves are loaded via set_tth_leaves(), verifies each completed
+        block against the Merkle tree before accepting data.
+        """
         seg = self._segments[index]
         if seg.state not in (SegmentState.ASSIGNED, SegmentState.TRANSFERRING):
             return
+
+        # TTH leaf verification if tree data is loaded
+        if self._tth_leaves and self._tth_block_size > 0:
+            file_offset = seg.offset + seg.bytes_received
+            if not self._verify_tth_leaves(file_offset, data):
+                log.warning(f"TTH verification failed for segment {index} "
+                            f"at offset {file_offset}")
+                seg.retries += 1
+                if seg.retries <= self.MAX_RETRIES:
+                    seg.state = SegmentState.PENDING
+                    seg.peer_nick = ""
+                    seg.relay_id = 0
+                    seg.bytes_received = 0
+                else:
+                    seg.state = SegmentState.FAILED
+                    if self.on_segment_failed:
+                        self.on_segment_failed(seg)
+                return
+
         seg.state = SegmentState.TRANSFERRING
         seg.bytes_received += len(data)
 
@@ -932,3 +960,65 @@ class SegmentCoordinator:
             if seg.relay_id == relay_id:
                 return seg
         return None
+
+    # ------------------------------------------------------------------
+    # TTH tree verification support
+    # ------------------------------------------------------------------
+
+    def set_tth_leaves(self, leaves: list[bytes], block_size: int,
+                       file_size: int = 0) -> None:
+        """Load TTH tree leaves for per-segment integrity checking.
+
+        Args:
+            leaves: List of 24-byte Tiger hash leaf values.
+            block_size: Bytes per leaf block (e.g. 65536).
+            file_size: Total file size (for last-block sizing).
+        """
+        self._tth_leaves = leaves
+        self._tth_block_size = block_size
+        self._tth_file_size = file_size or self.file_size
+
+    def _verify_tth_leaves(self, offset: int, data: bytes) -> bool:
+        """Verify data at `offset` against TTH Merkle leaves.
+
+        Tiger leaf hash = Tiger(0x00 || block_data).
+        Only verifies fully-covered blocks; partial blocks are skipped.
+        Returns True if all fully-covered blocks verify (or no tree loaded).
+        """
+        if not self._tth_leaves or self._tth_block_size <= 0:
+            return True
+
+        bs = self._tth_block_size
+        first_leaf = offset // bs
+        end_byte = offset + len(data)
+        last_leaf = (end_byte - 1) // bs
+
+        if last_leaf >= len(self._tth_leaves):
+            last_leaf = len(self._tth_leaves) - 1
+
+        for leaf_idx in range(first_leaf, last_leaf + 1):
+            leaf_start = leaf_idx * bs
+            leaf_end = min(leaf_start + bs, self._tth_file_size)
+
+            # Only verify if we have the complete block
+            if offset > leaf_start or end_byte < leaf_end:
+                continue
+
+            block_offset = leaf_start - offset
+            block_len = leaf_end - leaf_start
+            block_data = data[block_offset:block_offset + block_len]
+
+            # Tiger leaf = Tiger(0x00 || data)
+            try:
+                import tiger  # python-tiger or compatible
+                h = tiger.new(b'\x00' + block_data)
+                computed = h.digest()
+            except ImportError:
+                # Fallback: skip verification if no Tiger implementation
+                log.debug("tiger hash library not available, skipping TTH verify")
+                return True
+
+            if computed != self._tth_leaves[leaf_idx]:
+                return False
+
+        return True

@@ -17,6 +17,7 @@ routing logic.
 
 import sys
 import os
+import asyncio
 import time
 import logging
 
@@ -32,7 +33,10 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import (
     PbRelayRequest, PbRelayAck, PbRelayClosed, PbRelayStatus, PbRelayResume,
     PbPrivateSearch, PbPrivateSearchResult,
     PbUserQueryResult,
+    PbMediaUpload, PbMediaMeta, PbMediaDelete, PbMediaCapabilities,
 )
+from verlihub.client.nmdcpb.media_storage import MediaConfig
+from verlihub.client.nmdcpb.media_handler import MediaHandler
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -66,6 +70,15 @@ RELAY_MAX_PAYLOAD = 65536          # Max relay data frame size
 # Stealth search limits
 STEALTH_MAX_RESULTS = 100          # Max nicks returned in user query
 STEALTH_MAX_SWEEP_TARGETS = 50     # Max users to forward search to in one sweep
+
+# MediaShare settings
+ENABLE_MEDIASHARE = True            # Enable media upload/download
+MEDIA_STORAGE_PATH = "/var/lib/verlihub/media"
+MEDIA_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MEDIA_DEFAULT_TTL = 7 * 86400       # 7 days
+MEDIA_MAX_TTL = 30 * 86400          # 30 days
+MEDIA_PER_USER_QUOTA = 500 * 1024 * 1024  # 500 MB
+MEDIA_HUB_URL = ""                  # Public base URL for media access
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -104,7 +117,43 @@ _stats = {
     "stealth_sweeps": 0,
     "relay_opaque_forwards": 0,
     "relay_opaque_fallbacks": 0,
+    "media_uploads": 0,
+    "media_deletes": 0,
+    "media_expired_purged": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Media handler (lazy-init)
+# ---------------------------------------------------------------------------
+
+_media_handler: MediaHandler | None = None
+
+
+def _get_media_handler() -> MediaHandler | None:
+    """Lazy-initialize the media handler on first use."""
+    global _media_handler
+    if _media_handler is not None:
+        return _media_handler
+    if not ENABLE_MEDIASHARE:
+        return None
+    cfg = MediaConfig(
+        enabled=True,
+        storage_backend="filesystem",
+        storage_path=MEDIA_STORAGE_PATH,
+        max_file_size=MEDIA_MAX_FILE_SIZE,
+        default_ttl=MEDIA_DEFAULT_TTL,
+        max_ttl=MEDIA_MAX_TTL,
+        per_user_quota=MEDIA_PER_USER_QUOTA,
+    )
+    _media_handler = MediaHandler(
+        config=cfg,
+        send_fn=_send_to_user,
+        status_fn=_send_status,
+        hub_url=MEDIA_HUB_URL,
+    )
+    log.info(f"MediaHandler initialized: storage={cfg.storage_path}")
+    return _media_handler
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +440,16 @@ def OnUserLogin(nick: str) -> int:
                 f"NMDCpb v{VERSION} active — "
                 f"{len(_pb_users)} protobuf-capable users online",
             )
+            # Send media capabilities if enabled
+            if ENABLE_MEDIASHARE:
+                handler = _get_media_handler()
+                if handler is not None:
+                    try:
+                        loop = _get_event_loop()
+                        loop.run_until_complete(
+                            handler.handle_media_capabilities_request(nick))
+                    except Exception as e:
+                        log.warning(f"Failed to send media caps to {nick}: {e}")
     return 1
 
 
@@ -554,6 +613,17 @@ def OnTimer(msec: float) -> int:
                           if (now - info["closed_at"]) > RELAY_RESUME_TOKEN_TTL]
         for t in expired_tokens:
             del _closed_relay_tokens[t]
+
+    # Media expiry check
+    if ENABLE_MEDIASHARE and _media_handler is not None:
+        try:
+            loop = _get_event_loop()
+            purged = loop.run_until_complete(_media_handler.check_expiry())
+            if purged:
+                _stats["media_expired_purged"] += purged
+        except Exception as e:
+            log.warning(f"Media expiry check failed: {e}")
+
     return 1
 
 
@@ -574,6 +644,9 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Relay created:      {_stats['relay_sessions_created']}\n"
                 f"  Relay closed:       {_stats['relay_sessions_closed']}\n"
                 f"  Relay bytes:        {_stats['relay_bytes_forwarded']}\n"
+                f"  Media uploads:      {_stats.get('media_uploads', 0)}\n"
+                f"  Media deletes:      {_stats.get('media_deletes', 0)}\n"
+                f"  Media expired:      {_stats.get('media_expired_purged', 0)}\n"
             )
         elif args == "users":
             if _pb_users:
@@ -593,6 +666,42 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                             f"({sess.bytes_forwarded} bytes, {age}s)\n")
             if _pending_relay:
                 msg += f"\nPending requests: {len(_pending_relay)}"
+        elif args == "media":
+            handler = _get_media_handler()
+            if handler is None:
+                msg = "MediaShare is not enabled."
+            else:
+                ms = handler.get_stats()
+                msg = (
+                    f"MediaShare Status:\n"
+                    f"  Enabled:   {handler.config.enabled}\n"
+                    f"  Storage:   {handler.config.storage_backend} "
+                    f"({handler.config.storage_path})\n"
+                    f"  Max file:  {handler.config.max_file_size // (1024*1024)} MB\n"
+                    f"  Quota/user: {handler.config.per_user_quota // (1024*1024)} MB\n"
+                    f"  TTL:       {handler.config.default_ttl // 86400}d "
+                    f"(max {handler.config.max_ttl // 86400}d)\n"
+                    f"  Uploads:   {ms['uploads']}\n"
+                    f"  Deletes:   {ms['deletes']}\n"
+                    f"  Expired:   {ms['expired_purged']}\n"
+                    f"  Quota rej: {ms['quota_rejections']}\n"
+                    f"  Type rej:  {ms['type_rejections']}\n"
+                )
+        elif args.startswith("media delete "):
+            # Operator delete: +nmdcpb media delete <media_id> [reason]
+            parts = args[len("media delete "):].split(None, 1)
+            media_id = parts[0] if parts else ""
+            reason = parts[1] if len(parts) > 1 else ""
+            handler = _get_media_handler()
+            if handler is None:
+                msg = "MediaShare is not enabled."
+            elif not media_id:
+                msg = "Usage: +nmdcpb media delete <media_id> [reason]"
+            else:
+                loop = _get_event_loop()
+                loop.run_until_complete(
+                    handler.handle_operator_delete(nick, media_id, reason))
+                msg = f"Delete request submitted for {media_id}"
         else:
             msg = (
                 f"NMDCpb Hub Plugin v{VERSION}\n"
@@ -602,9 +711,10 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  HubRelay: {'on' if ENABLE_HUBRELAY else 'off'}\n"
                 f"  Active relays: {len(_relay_sessions)}\n"
                 f"  E2EPM forward: {'on' if ENABLE_E2EPM_FORWARD else 'off'}\n"
+                f"  MediaShare:  {'on' if ENABLE_MEDIASHARE else 'off'}\n"
                 f"  Rate limit: {RATE_MAX_MESSAGES}/{RATE_WINDOW_SEC}s (PB), "
                 f"{RATE_MAX_E2EPM}/{RATE_WINDOW_SEC}s (E2EPM)\n"
-                f"\nCommands: +nmdcpb stats | +nmdcpb users | +nmdcpb relay"
+                f"\nCommands: +nmdcpb stats | users | relay | media"
             )
 
         if vh and in_pm:
@@ -708,6 +818,9 @@ def _route_hub(sender: str, env: PbEnvelope) -> None:
     payload = env.WhichOneof("payload")
     if payload == "user_query":
         _route_user_query(sender, env)
+        return
+    if payload in ("media_upload", "media_delete", "media_capabilities"):
+        _route_media(sender, env, payload)
         return
     if payload == "extension":
         log.info(f"Extension negotiation from {sender}: {env.extension}")
@@ -1148,6 +1261,44 @@ def _forward_segment_msg(sender: str, env: PbEnvelope) -> None:
     env.from_nick = sender
     wire = WireCodec.encode_text(env)
     _send_to_user(wire, target)
+
+
+# ---------------------------------------------------------------------------
+# MediaShare routing
+# ---------------------------------------------------------------------------
+
+def _route_media(sender: str, env: PbEnvelope, payload: str) -> None:
+    """Route media messages to the MediaHandler (async bridge)."""
+    handler = _get_media_handler()
+    if handler is None:
+        _send_status(sender, PbStatus.ERROR, 40,
+                     "Media sharing is not enabled on this hub")
+        return
+
+    loop = _get_event_loop()
+    if payload == "media_upload":
+        loop.run_until_complete(
+            handler.handle_media_upload(sender, env.media_upload))
+        _stats["media_uploads"] += 1
+    elif payload == "media_delete":
+        loop.run_until_complete(
+            handler.handle_media_delete(sender, env.media_delete))
+        _stats["media_deletes"] += 1
+    elif payload == "media_capabilities":
+        loop.run_until_complete(
+            handler.handle_media_capabilities_request(sender))
+
+
+def _get_event_loop() -> asyncio.AbstractEventLoop:
+    """Get or create an asyncio event loop for sync→async bridging."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
 
 
 # ---------------------------------------------------------------------------

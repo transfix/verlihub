@@ -1165,7 +1165,7 @@ class TestNmdcPbLiveRelay:
             # Session must be established
             assert alice._relay_sessions, "Alice's relay session map should not be empty"
             relay_id = list(alice._relay_sessions.keys())[0]
-            test_data = b"Hello through relay — exact bytes!"
+            test_data = b"Hello through relay -- exact bytes!"
 
             sent = await alice.send_relay_data(relay_id, test_data)
             assert sent, "send_relay_data should return True"

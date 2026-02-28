@@ -182,6 +182,21 @@ public:
     // Hub lifecycle
     virtual void OnHubStarted() {}
     virtual void OnHubStopping() {}
+    
+    // Configuration — called by LoadConfiguration() so the Python layer
+    // can supply values from the YAML config without env-var indirection.
+    /**
+     * Return a configuration value for the given section/key.
+     * @param section  Config section (e.g. "hub")
+     * @param key      Config key   (e.g. "hub_name")
+     * @param default_val  Value to return when the Python side has no override
+     * @return The value to use (std::string so the lifetime is owned by the caller)
+     */
+    virtual std::string OnGetConfig(const std::string& section,
+                                    const std::string& key,
+                                    const std::string& default_val) {
+        return default_val;
+    }
 };
 
 // ============================================================================

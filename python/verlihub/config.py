@@ -625,14 +625,21 @@ class VerlihubConfig:
         env_vars = {}
         env_vars.update(self.database.to_env())
         env_vars.update(self.api.to_env())
+
+        # Config directory — used by the API lifespan for SQLite path resolution
+        env_vars["VH_CONFIG_DIR"] = str(self._config_dir or "")
         
-        # Hub settings (needed by dashboard in API-only mode)
+        # Hub settings (needed by dashboard in API-only mode and C++ core)
         env_vars["VH_HUB_NAME"] = self.hub.name
         env_vars["VH_HUB_DESCRIPTION"] = self.hub.description
         env_vars["VH_HUB_TOPIC"] = self.hub.topic
         env_vars["VH_HUB_LOGO"] = self.hub.logo
         env_vars["VH_HUB_PORT"] = str(self.hub.port)
         env_vars["VH_HUB_HOST"] = self.hub.host
+        env_vars["VH_HUB_OWNER"] = self.hub.owner
+        env_vars["VH_HUB_ENCODING"] = self.hub.encoding
+        env_vars["VH_HUB_LISTEN"] = self.hub.listen_host
+        env_vars["VH_HUB_MAX_USERS"] = str(self.hub.max_users)
 
         for key, value in env_vars.items():
             os.environ[key] = value

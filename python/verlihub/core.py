@@ -43,7 +43,9 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
     Python callback handler for hub events.
     
     Extends the SWIG-generated IHubEventCallback to dispatch events
-    to registered Python handlers.
+    to registered Python handlers.  Also implements ``OnGetConfig``
+    so the C++ core can pull configuration values straight from
+    the Python YAML config instead of relying on environment variables.
     
     Example:
         handler = HubEventHandler()
@@ -66,6 +68,28 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
             'hub_stopping': [],
         }
         self._lock = threading.Lock()
+        # Config dict for OnGetConfig callback — populated before Initialize().
+        # Structure: {"hub": {"hub_name": "...", "hub_topic": "..."}, ...}
+        self._config: dict[str, dict[str, str]] = {}
+    
+    # ------------------------------------------------------------------
+    # Config bridge
+    # ------------------------------------------------------------------
+
+    def set_config(self, config: dict[str, dict[str, str]]) -> None:
+        """Load a ``{section: {key: value, ...}}`` dict for C++ to query."""
+        with self._lock:
+            self._config = config
+
+    def OnGetConfig(self, section: str, key: str, default_val: str) -> str:
+        """Called from C++ ``LoadConfiguration()`` — returns config values."""
+        with self._lock:
+            sec = self._config.get(section)
+            if sec is not None:
+                val = sec.get(key)
+                if val is not None:
+                    return str(val)
+        return default_val
     
     def register(self, event: str, handler: Callable[..., Any]) -> None:
         """Register a handler for an event type."""
@@ -324,3 +348,78 @@ def setup_signal_handlers(ctx: HubContext) -> None:
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGHUP, reload_handler)
+
+
+async def run_hub_server(
+    config_dir: str,
+    port: int = 0,
+    listen_ip: str = "",
+    *,
+    hub_name: str = "",
+    hub_topic: str = "",
+    hub_desc: str = "",
+    hub_owner: str = "",
+    hub_encoding: str = "",
+) -> None:
+    """
+    High-level coroutine that initialises, starts, and runs the NMDC hub
+    until a shutdown signal is received.
+
+    This is the entry-point used by ``verlihub-server`` in *hub* and *both*
+    modes.
+
+    Configuration values are passed to the C++ core through the
+    ``IHubEventCallback.OnGetConfig`` director callback — no environment
+    variables are involved.
+
+    Args:
+        config_dir:   Path to the verlihub configuration directory.
+        port:         Port to listen on (0 = use value from config).
+        listen_ip:    IP address to bind to (empty = use value from config).
+        hub_name:     Hub name shown to DC clients.
+        hub_topic:    Hub topic shown to DC clients.
+        hub_desc:     Hub description for hub lists.
+        hub_owner:    Hub owner nick.
+        hub_encoding: Character encoding for legacy clients.
+
+    Raises:
+        RuntimeError: If context creation, initialisation, or start fails.
+    """
+    async with create_hub(config_dir) as ctx:
+        # Build a config dict that the C++ side will pull via OnGetConfig
+        # during Initialize() → LoadConfiguration().
+        hub_section: dict[str, str] = {}
+        if hub_name:
+            hub_section["hub_name"] = hub_name
+        if hub_topic:
+            hub_section["hub_topic"] = hub_topic
+        if hub_desc:
+            hub_section["hub_desc"] = hub_desc
+        if hub_owner:
+            hub_section["hub_owner"] = hub_owner
+        if hub_encoding:
+            hub_section["hub_encoding"] = hub_encoding
+        if port:
+            hub_section["listen_port"] = str(port)
+        if listen_ip:
+            hub_section["listen_ip"] = listen_ip
+
+        ctx.events.set_config({"hub": hub_section})
+
+        if not ctx.initialize():
+            raise RuntimeError("HubContext.initialize() failed")
+
+        setup_signal_handlers(ctx)
+
+        if not ctx.start(port=port, listen_ip=listen_ip):
+            raise RuntimeError(
+                f"HubContext.start(port={port}, listen_ip={listen_ip!r}) failed"
+            )
+
+        logger.info(
+            "Hub running on %s:%d — press Ctrl-C to stop",
+            listen_ip or "0.0.0.0",
+            port,
+        )
+        await ctx.wait_for_shutdown()
+        logger.info("Hub stopped")

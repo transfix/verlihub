@@ -209,6 +209,11 @@ async def run_hub(config: "VerlihubConfig", args: argparse.Namespace) -> None:
             config_dir=config_dir,
             port=hub_port,
             listen_ip=config.hub.listen_host,
+            hub_name=config.hub.name,
+            hub_topic=config.hub.topic,
+            hub_desc=config.hub.description,
+            hub_owner=config.hub.owner,
+            hub_encoding=config.hub.encoding,
         )
     except Exception as e:
         logger.error("Hub error: %s", e)
@@ -315,8 +320,7 @@ def main() -> None:
         async def _sync_config():
             # Initialize database
             db_url = config.database.get_url(config._config_dir)
-            db_cfg = DbConfig()
-            db_cfg._url_override = db_url
+            db_cfg = DbConfig(url=db_url)
             await init_database(config=db_cfg)
             # Apply YAML config respecting DB precedence
             await apply_config_to_db(config, force=getattr(args, 'force', False))

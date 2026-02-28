@@ -139,7 +139,9 @@ async def login_submit(request: Request):
                     url=f"/dashboard/login?error=Invalid+username+or+password&next_url={next_url}",
                     status_code=status.HTTP_303_SEE_OTHER,
                 )
-    except Exception:
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).exception("Login failed for user %r: %s", username, exc)
         return RedirectResponse(
             url=f"/dashboard/login?error=Authentication+failed&next_url={next_url}",
             status_code=status.HTTP_303_SEE_OTHER,

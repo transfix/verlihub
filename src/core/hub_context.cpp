@@ -419,32 +419,55 @@ void HubContext::Log(int level, std::string_view message,
 // Private Helpers
 // =============================================================================
 
+/// Helper: ask the event callback for a config value; fall back to a compiled
+/// default when no callback is present or the callback returns the default.
+///
+/// This replaces the old EnvOr() approach that read VH_HUB_* environment
+/// variables — all configuration now flows through the SWIG director so
+/// Python owns the source of truth.
+
 bool HubContext::LoadConfiguration() {
-    // Set defaults - actual values come from Python YAML config via SetConfig()
     std::unique_lock lock(m_config_mutex);
+
+    // Lambda wrappers that delegate to the IHubEventCallback director.
+    auto cfg = [this](const std::string& key, const std::string& def) -> std::string {
+        if (m_event_callback) {
+            return m_event_callback->OnGetConfig("hub", key, def);
+        }
+        return def;
+    };
+
+    auto cfgInt = [this](const std::string& key, int def) -> int {
+        if (m_event_callback) {
+            std::string val = m_event_callback->OnGetConfig("hub", key, std::to_string(def));
+            try { return std::stoi(val); } catch (...) {}
+        }
+        return def;
+    };
+
     m_hub_config = HubConfig{
-        .hub_name = "Verlihub Hub",
-        .hub_desc = "A Verlihub Hub",
-        .hub_topic = "Welcome!",
-        .hub_host = "localhost",
-        .hub_owner = "admin",
-        .hub_encoding = "UTF-8",
-        .hub_security = "Hub-Security",
-        .opchat_name = "OpChat",
-        .listen_port = 411,
-        .listen_ip = "0.0.0.0",
-        .max_users = 1000,
-        .min_share = 0,
-        .max_share = 0,
-        .tls_enabled = false,
-        .tls_port = 0,
+        .hub_name     = cfg("hub_name",      "Verlihub Hub"),
+        .hub_desc     = cfg("hub_desc",       "A Verlihub Hub"),
+        .hub_topic    = cfg("hub_topic",      ""),
+        .hub_host     = cfg("hub_host",       "localhost"),
+        .hub_owner    = cfg("hub_owner",      "admin"),
+        .hub_encoding = cfg("hub_encoding",   "UTF-8"),
+        .hub_security = cfg("hub_security",   "Hub-Security"),
+        .opchat_name  = cfg("opchat_name",    "OpChat"),
+        .listen_port  = cfgInt("listen_port",  411),
+        .listen_ip    = cfg("listen_ip",      "0.0.0.0"),
+        .max_users    = cfgInt("max_users",    1000),
+        .min_share    = 0,
+        .max_share    = 0,
+        .tls_enabled  = false,
+        .tls_port     = 0,
         .tls_cert_file = {},
-        .tls_key_file = {}
+        .tls_key_file  = {}
     };
     
-    // No dbconfig file needed - verlihub-py mode doesn't use MySQL
-    // All database operations are handled by Python
-    
+    Log(0, vh::fmt("Config: hub_name='{}', hub_topic='{}'",
+                   m_hub_config.hub_name, m_hub_config.hub_topic));
+
     return true;
 }
 

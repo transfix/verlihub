@@ -49,9 +49,19 @@ async def lifespan(app: FastAPI):
     try:
         # Use environment variables for database config
         logger.info("Using environment variables for database config")
-        config = DatabaseConfig()
+        config = DatabaseConfig(config_dir=config_dir)
         await init_database(config=config)
         logger.info("Database connected")
+
+        # Seed admin / user accounts from YAML config into the live DB
+        try:
+            from verlihub.config import apply_config_to_db, load_config
+            yaml_cfg = load_config(config_dir=config_dir)
+            if yaml_cfg is not None:
+                await apply_config_to_db(yaml_cfg)
+                logger.info("Config-to-DB sync complete (lifespan)")
+        except Exception as seed_err:
+            logger.warning("Admin seeding skipped in lifespan: %s", seed_err)
     except Exception as e:
         logger.error("Failed to connect to database: %s", e)
         # Continue anyway - API will work with limited functionality

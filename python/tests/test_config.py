@@ -642,6 +642,10 @@ class TestApplyToEnv:
                 logo="https://example.com/logo.png",
                 host="hub.example.com:4111",
                 port=4111,
+                owner="myowner",
+                encoding="CP1251",
+                listen_host="127.0.0.1",
+                max_users=500,
             ),
         )
         cfg.apply_to_env()
@@ -651,6 +655,10 @@ class TestApplyToEnv:
         assert os.environ["VH_HUB_LOGO"] == "https://example.com/logo.png"
         assert os.environ["VH_HUB_HOST"] == "hub.example.com:4111"
         assert os.environ["VH_HUB_PORT"] == "4111"
+        assert os.environ["VH_HUB_OWNER"] == "myowner"
+        assert os.environ["VH_HUB_ENCODING"] == "CP1251"
+        assert os.environ["VH_HUB_LISTEN"] == "127.0.0.1"
+        assert os.environ["VH_HUB_MAX_USERS"] == "500"
 
 
 # ======================================================================

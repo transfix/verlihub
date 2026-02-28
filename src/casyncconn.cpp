@@ -114,8 +114,7 @@ cAsyncConn::cAsyncConn(int desc, cAsyncSocketServer *s, tConnType ct): // incomi
 	mCloseAfter(0, 0)
 {
 	if (mxServer) {
-		nVerliHub::cServerDC *serv = (nVerliHub::cServerDC*)mxServer;
-		mMaxBuffer = serv->mC.max_outbuf_size;
+		mMaxBuffer = mxServer->GetMaxOutBufSize();
 	}
 
 	memset(&mAddrIN, 0, sizeof(struct sockaddr_in));
@@ -980,7 +979,7 @@ int cAsyncConn::Write(const string &data, bool flush) // note: data can actually
 	nVerliHub::cServerDC *serv = NULL;
 
 	if (mxServer)
-		serv = (nVerliHub::cServerDC*)mxServer;
+		serv = dynamic_cast<nVerliHub::cServerDC*>(mxServer);
 	else if (Log(5))
 		LogStream() << "Server not available for write operations" << endl;
 
@@ -1191,7 +1190,7 @@ bool cAsyncConn::SetUserIP(const string &addr)
 	mIP = inet_addr(addr.c_str());
 
 	if (mxServer) {
-		nVerliHub::cServerDC *serv = (nVerliHub::cServerDC*)mxServer;
+		nVerliHub::cServerDC *serv = dynamic_cast<nVerliHub::cServerDC*>(mxServer);
 
 		if (serv) // send userip to operators
 			serv->ShowUserIP(this);

@@ -83,6 +83,13 @@ namespace nVerliHub {
 				virtual ~cAsyncSocketServer();
 
 				/**
+				* Return the maximum output buffer size for connections.
+				* Subclasses with their own config (e.g. cServerDC) should override.
+				* @return Maximum output buffer size in bytes.
+				*/
+				virtual unsigned long GetMaxOutBufSize() const { return MAX_SEND_SIZE; }
+
+				/**
 				* Stop main process loop and delete all connections.
 				*/
 				void close();
@@ -144,7 +151,7 @@ namespace nVerliHub {
 
 				/**
 				* Start the main loop.
-				* This ìs the method that calls OnTimerBase() and TimeStep()
+				* This ï¿½s the method that calls OnTimerBase() and TimeStep()
 				* Run it until it is stopped or paused.
 				* @see TimeStep()
 				* @see OnTimerBase()

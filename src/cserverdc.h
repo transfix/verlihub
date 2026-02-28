@@ -231,6 +231,9 @@ class cServerDC : public cAsyncSocketServer
 		cMySQL mMySQL;
 		// VerliHub configuration
 		cDCConf mC;
+
+		/// Return max output buffer size from cDCConf.
+		unsigned long GetMaxOutBufSize() const override { return mC.max_outbuf_size; }
 		// Setup loader
 		cSetupList mSetupList;
 		// Protocol message handler

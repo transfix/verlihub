@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "../nmdc_hub_server.h"
+#include "../../casyncconn.h"
 
 using namespace nVerliHub;
 
@@ -236,4 +237,10 @@ TEST_F(NMDCHubServerTest, MultipleConfigChanges) {
 TEST_F(NMDCHubServerTest, OnClientDeleted_Null) {
     // Should not crash
     EXPECT_NO_THROW(server.OnClientDeleted(nullptr));
+}
+
+TEST(NMDCHubServerConnTest, OutputBufferSizeIsDefault) {
+    nVerliHub::NMDCHubServer server(".");
+    nVerliHub::nSocket::cAsyncConn conn(42, &server, nVerliHub::nEnums::eCT_CLIENT);
+    EXPECT_EQ(conn.mMaxBuffer, MAX_SEND_SIZE) << "Output buffer size should be 1MB for NMDCHubServer";
 }

@@ -15,7 +15,7 @@ from typing import Annotated, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -42,15 +42,8 @@ SECRET_KEY = _jwt_secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("VH_JWT_EXPIRE_MINUTES", "60"))
 
-# Password hashing - use sha256_crypt as fallback if bcrypt has issues
-try:
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    # Verify bcrypt works
-    _test_hash = pwd_context.hash("test")
-    pwd_context.verify("test", _test_hash)
-except Exception:
-    # Fallback to sha256_crypt
-    pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
+# Password hashing — uses bcrypt directly (passlib is unmaintained and
+# incompatible with bcrypt ≥ 4.1).
 
 # Security scheme
 security = HTTPBearer(auto_error=False)
@@ -125,28 +118,22 @@ class CurrentUser(BaseModel):
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash."""
-    # Handle empty/legacy passwords
+    """Verify a password against a bcrypt hash."""
     if not hashed_password:
         return not plain_password
-    
-    # Try bcrypt first
     try:
-        return pwd_context.verify(plain_password, hashed_password)
-    except Exception:
-        pass
-    
-    # SECURITY: Plain text comparison removed - use password migration instead
-    # If passwords are stored unhashed, they should be migrated to bcrypt
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.warning("Password hash format not recognized - rejecting authentication")
-    return False
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8") if isinstance(hashed_password, str) else hashed_password,
+        )
+    except (ValueError, TypeError):
+        _logger.warning("Password hash format not recognized - rejecting authentication")
+        return False
 
 
 def hash_password(password: str) -> str:
-    """Hash a password for storage."""
-    return pwd_context.hash(password)
+    """Hash a password with bcrypt for storage."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 # =============================================================================

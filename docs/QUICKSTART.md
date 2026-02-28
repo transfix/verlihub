@@ -30,7 +30,7 @@ python -m verlihub.server
 - Uses current working directory as config directory
 - Creates `verlihub.db` SQLite database in config directory
 - Runs API server on `127.0.0.1:8000`
-- Runs in development mode (API only, no hub)
+- Runs in development mode (API + hub)
 
 ## Configuration
 
@@ -74,8 +74,11 @@ Options:
 | `VH_DB_PATH` | SQLite database file path |
 | `VH_API_HOST` | API server bind host |
 | `VH_API_PORT` | API server port |
-| `VH_API_USERNAME` | API admin username |
+| `VH_API_USERNAME` | API admin username (seeded into DB at startup) |
 | `VH_API_PASSWORD` | API admin password |
+| `VH_REGISTRATION_ENABLED` | Enable self-registration from login screen (default: true) |
+| `VH_REGISTRATION_REQUIRE_INVITE` | Require invite code to register (default: false) |
+| `VH_REGISTRATION_DEFAULT_CLASS` | User class for new accounts: 1=Registered, 2=VIP (default: 1) |
 | `VH_ENV` | Environment: development, qa, production |
 | `VH_MODE` | Run mode: api, hub, both |
 
@@ -86,7 +89,7 @@ Options:
 ```yaml
 # Uses SQLite database, default settings
 environment: development
-mode: api
+mode: both
 
 database:
   type: sqlite
@@ -97,13 +100,14 @@ api:
   port: 8000
   username: admin
   password: changeme
+  registration_enabled: true  # Allow self-registration from login screen
 ```
 
 ### MySQL Production
 
 ```yaml
 environment: production
-mode: api
+mode: both
 
 database:
   type: mysql
@@ -128,7 +132,7 @@ api:
 
 ```yaml
 environment: production
-mode: api
+mode: both
 
 database:
   type: postgresql
@@ -246,15 +250,35 @@ Once running, access:
 
 ### Authentication
 
+The `api.username` / `api.password` admin is seeded into the database as an
+admin-class user at startup.  All users — including the config admin — share the
+same `RegUser` table and can log into the dashboard.
+
 ```bash
 # Get auth token
-curl -X POST http://localhost:8000/api/auth/login \
-  -d "username=admin&password=changeme"
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"nick": "admin", "password": "changeme"}'
 
 # Use token
-curl http://localhost:8000/api/hub/info \
+curl http://localhost:8000/api/v1/hub/info \
   -H "Authorization: Bearer <token>"
 ```
+
+### Self-Registration
+
+Users can create accounts from the login screen at `/dashboard/register`.
+Registered nicks are reserved on the hub — only the owner can use them.
+
+Registration is controlled by these settings (YAML or env vars):
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `api.registration_enabled` | `VH_REGISTRATION_ENABLED` | `true` | Enable / disable public registration |
+| `api.registration_require_invite` | `VH_REGISTRATION_REQUIRE_INVITE` | `false` | Require an invite code |
+| `api.registration_default_class` | `VH_REGISTRATION_DEFAULT_CLASS` | `1` | User class for new accounts (1=Registered) |
+
+Admins can generate invite codes from the dashboard Invites page.
 
 ## Troubleshooting
 
@@ -275,9 +299,10 @@ curl http://localhost:8000/api/hub/info \
 
 ### Authentication failures
 
-1. Verify username/password in config
-2. Check JWT secret is set (for production)
+1. Verify username/password in config — the `api.username`/`api.password` admin is seeded into the database at first startup
+2. Check JWT secret is set (for production) — without it, tokens are invalidated on restart
 3. Ensure cookies are enabled in browser (for dashboard)
+4. Regular users can log in once registered (via `/dashboard/register` or the API)
 
 ## See Also
 

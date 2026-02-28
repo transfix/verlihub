@@ -7,7 +7,7 @@
 #   verlihub-server -c qa.yml
 #   verlihub-server -c qa.yml --validate  # Check config before starting
 
-mode: api
+mode: both
 environment: qa
 
 database:

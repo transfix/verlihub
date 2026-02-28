@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Register - {{ hub_name }} Dashboard{% endblock %}
+{% block title %}Register - {{ hub_name }}{% endblock %}
 
 {% block content %}
 <div class="columns is-centered">
@@ -8,8 +8,8 @@
         <div class="box">
             <div class="has-text-centered mb-5">
                 <figure class="image is-96x96" style="margin: 0 auto 1rem auto;">
-                    <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
-                         alt="Verlihub"
+                    <img src="{{ hub_logo }}"
+                         alt="{{ hub_name }}"
                          style="border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,0.15); border: 3px solid hsl(171, 100%, 41%);">
                 </figure>
                 <h1 class="title is-4">{{ hub_name }}</h1>

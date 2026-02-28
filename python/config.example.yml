@@ -24,20 +24,31 @@
 
 # Mode: api, hub, both
 #
-#   api  - REST API only. Provides user management (registration, login,
-#          password changes), ban management, invite codes, health checks,
-#          and the web dashboard — all backed by the database. Does NOT
-#          require the C++ NMDC core. Hub-dependent endpoints (online users,
-#          kick, broadcast, live stats, console) return HTTP 503.
-#          Use this mode when you want a standalone admin interface, or when
-#          deploying on a machine without the C++ libraries.
+#   both - (default) Full stack: REST API + NMDC hub in the same process.
+#          The API thread and hub event loop share memory so changes made
+#          through the REST API or dashboard (topic, kicks, user registration)
+#          take effect on the hub immediately.
+#
+#   api  - REST API only. Provides user management, ban management, invite
+#          codes, health checks, and the web dashboard — all backed by the
+#          database. Does NOT require the C++ NMDC core. Hub-dependent
+#          endpoints (online users, kick, broadcast, live stats, console)
+#          return HTTP 503. Use this mode when you want a standalone admin
+#          interface, or when deploying without the C++ libraries.
 #
 #   hub  - NMDC hub only. Runs the C++ hub core with Lua/Python plugin
 #          support. No REST API or web dashboard.
 #
-#   both - Full stack: REST API + NMDC hub running concurrently.
+# Split-process deployment (separate api and hub processes):
+#   Both processes can share the same database. The API process writes to the
+#   database, and the hub process reads from it. To notify the hub process
+#   that settings have changed, send it SIGHUP or call the /api/v1/hub/reload
+#   endpoint on the hub's own API (if it runs in "both" mode on a different
+#   port). User registration and ban changes are picked up on next login
+#   automatically since the hub queries the database for each auth event.
+#   In-memory state (topic, MOTD) requires an explicit reload.
 #
-mode: api
+mode: both
 
 # Environment: development, qa, production
 # Production mode enforces security requirements
@@ -106,7 +117,7 @@ api:
   # Authentication
   # REQUIRED in production - generate with: python -c "import secrets; print(secrets.token_hex(32))"
   secret: ""  # If empty, random secret generated (tokens invalidate on restart)
-  username: admin
+  username: admin  # Bootstrap admin account (seeded into DB at startup)
   password: ""  # REQUIRED in production
   
   # Token settings
@@ -121,6 +132,13 @@ api:
   
   # Cookies
   secure_cookies: false  # Set true in production (requires HTTPS)
+  
+  # Self-registration
+  # Allow users to create accounts from the login screen.
+  # Registered nicks are reserved on the hub — only the owner can use them.
+  registration_enabled: true       # Set false to disable public registration
+  registration_require_invite: false  # Require an invite code to register
+  registration_default_class: 1    # 1=Registered, 2=VIP (class for new accounts)
 
 # =============================================================================
 # Hub Configuration (for mode: hub or both)
@@ -184,6 +202,12 @@ bots:
 # --force is passed on the command line.
 #
 # User classes: master (10), admin (5), operator (3), vip (2), registered (1)
+#
+# Note: The api.username / api.password admin is ALSO seeded into the database
+# as an admin-class user. You do NOT need to duplicate it here.
+# All users (including the api admin) share the same RegUser table and can
+# log into the dashboard. Users can also self-register from the login screen
+# if registration_enabled is true.
 users:
   masters:
     - nick: admin

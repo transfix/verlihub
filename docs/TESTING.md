@@ -152,6 +152,7 @@ python/tests/
 ├── test_python_plugin.py    # Python plugin specific tests  
 ├── test_client.py           # NMDC client tests
 ├── test_auth.py             # Authentication tests
+├── test_auth_registration.py # Registration, admin seeding, dashboard auth
 ├── test_database.py         # Database model tests
 ├── test_integration.py      # Protocol integration tests
 ├── test_api_endpoints.py    # REST API tests

@@ -77,10 +77,12 @@ if(UNIX)
 endif()
 target_link_libraries(verlihub_core_lib PUBLIC libverlihub_so)
 
-# Install headers
-install(FILES ${CORE_HEADERS}
-    DESTINATION ${INCDIR}/core
-)
+# Install headers (system-wide build only, not for Python wheel)
+if(NOT PYTHON_WHEEL_BUILD)
+    install(FILES ${CORE_HEADERS}
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/core
+    )
+endif()
 
 # For IDE support - mark headers
 source_group("Headers" FILES ${CORE_HEADERS})

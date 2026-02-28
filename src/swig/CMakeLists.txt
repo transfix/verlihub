@@ -35,7 +35,7 @@ message(STATUS "Python include dirs: ${Python3_INCLUDE_DIRS}")
 message(STATUS "Python libraries: ${Python3_LIBRARIES}")
 
 # Set SWIG properties
-set(CMAKE_SWIG_FLAGS -threads -Wall)
+set(CMAKE_SWIG_FLAGS -threads -Wall -relativeimport)
 
 # SWIG interface file
 set_source_files_properties(
@@ -77,6 +77,9 @@ set_target_properties(verlihub_core PROPERTIES
     PREFIX ""
     OUTPUT_NAME "_verlihub_core"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python/verlihub"
+    # RPATH: look for libverlihub.so in the same directory as _verlihub_core.so
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH TRUE
 )
 
 # Platform-specific suffix
@@ -90,7 +93,7 @@ endif()
 add_custom_command(TARGET verlihub_core POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_BINARY_DIR}/python/verlihub/verlihub_core.py
-        ${CMAKE_BINARY_DIR}/python/verlihub/verlihub_core.py
+        ${CMAKE_BINARY_DIR}/swig/verlihub_core.py
     COMMENT "SWIG Python module built: verlihub_core"
 )
 
@@ -105,16 +108,22 @@ install(FILES
 )
 
 # Install for Python wheel (scikit-build-core picks up this component)
+# Note: wheel.install-dir = "verlihub" in pyproject.toml already maps
+# CMAKE_INSTALL_PREFIX → verlihub/ in the wheel, so DESTINATION must be "."
+# to avoid a doubled verlihub/verlihub/ path.
 install(TARGETS verlihub_core
     COMPONENT PythonModule
-    LIBRARY DESTINATION verlihub
+    LIBRARY DESTINATION .
 )
 
 install(FILES
     ${CMAKE_BINARY_DIR}/python/verlihub/verlihub_core.py
     COMPONENT PythonModule
-    DESTINATION verlihub
+    DESTINATION .
 )
+
+# Note: libverlihub.so is installed into the wheel from src/CMakeLists.txt
+# (install(TARGETS) must be in the same directory that defined the target)
 
 # Add Python SWIG wrapper tests
 # Ensure pytest is available

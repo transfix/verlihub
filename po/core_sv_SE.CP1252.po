@@ -167,7 +167,7 @@ msgstr ""
 
 #: ../src/cbanlist.cpp:722 ../src/cbanlist.cpp:772 ../src/cconndc.cpp:159
 msgid "Password"
-msgstr "Lösenord"
+msgstr "LÃ¶senord"
 
 #: ../src/cbanlist.cpp:726 ../src/cbanlist.cpp:776
 msgid "Reconnect"
@@ -186,7 +186,7 @@ msgstr ""
 #: ../src/cdctag.cpp:217 ../src/creguserinfo.cpp:105 ../src/cserverdc.cpp:2812
 #: ../src/cserverdc.cpp:2836
 msgid "Unknown"
-msgstr "Okänt"
+msgstr "OkÃ¤nt"
 
 #: ../src/cbanlist.cpp:748 ../src/cbanlist.cpp:798
 msgid "Not found"
@@ -315,7 +315,7 @@ msgstr "Beskrivning"
 #: ../src/ccustomredirect.cpp:77 ../src/cdcclient.cpp:65
 #: ../src/creglist.cpp:117
 msgid "On"
-msgstr "På"
+msgstr "PÃ¥"
 
 #: ../src/ccustomredirect.cpp:77 ../src/cdcclient.cpp:65
 msgid "Off"
@@ -373,7 +373,7 @@ msgstr ""
 
 #: ../src/ccustomredirects.cpp:317
 msgid "Hits"
-msgstr "Träffar"
+msgstr "TrÃ¤ffar"
 
 #: ../src/ccustomredirects.cpp:318
 msgid "Start"
@@ -445,7 +445,7 @@ msgstr ""
 #: ../src/cdcconsole.cpp:331 ../src/cdcconsole.cpp:364
 #: ../src/cdcconsole.cpp:406
 msgid "User"
-msgstr "Användare"
+msgstr "AnvÃ¤ndare"
 
 #: ../src/cdcconsole.cpp:334 ../src/cdcconsole.cpp:369
 #: ../src/cdcconsole.cpp:414 ../src/cdcconsole.cpp:1226
@@ -456,7 +456,7 @@ msgstr "Användare"
 #: ../src/cserverdc.cpp:2933
 #, c-format
 msgid "User not found: %s"
-msgstr "Användare hittades inte: %s"
+msgstr "AnvÃ¤ndare hittades inte: %s"
 
 #: ../src/cdcconsole.cpp:340 ../src/cdcconsole.cpp:375
 #: ../src/cdcconsole.cpp:421
@@ -597,7 +597,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:665
 msgid "Translators"
-msgstr "Översättare"
+msgstr "Ã–versÃ¤ttare"
 
 #: ../src/cdcconsole.cpp:671 ../src/cdcconsole.cpp:681
 msgid "Translate"
@@ -657,7 +657,7 @@ msgstr "Hubbinformation"
 #: ../src/cdcconsole.cpp:720 ../src/cinfoserver.cpp:533
 #, c-format
 msgid "Owner: %s"
-msgstr "Ägare: %s"
+msgstr "Ã„gare: %s"
 
 #: ../src/cdcconsole.cpp:720 ../src/cdcconsole.cpp:721
 #: ../src/cinfoserver.cpp:532 ../src/cinfoserver.cpp:533
@@ -670,7 +670,7 @@ msgstr "Ägare: %s"
 #: ../src/creguserinfo.cpp:119 ../src/creguserinfo.cpp:121
 #: ../src/creguserinfo.cpp:124 ../src/ctrigger.cpp:273
 msgid "Not set"
-msgstr "Inte inställd"
+msgstr "Inte instÃ¤lld"
 
 #: ../src/cdcconsole.cpp:721
 #, c-format
@@ -736,7 +736,7 @@ msgstr[1] ""
 #: ../src/cdcconsole.cpp:761
 #, c-format
 msgid "Mode: %s"
-msgstr "Läge: %s"
+msgstr "LÃ¤ge: %s"
 
 #: ../src/cdcconsole.cpp:761 ../src/cdctag.cpp:223 ../src/ctrigger.cpp:151
 msgid "Passive"
@@ -749,7 +749,7 @@ msgstr "Aktiv"
 #: ../src/cdcconsole.cpp:766
 #, c-format
 msgid "Hidden: %s"
-msgstr "Gömt: %s"
+msgstr "GÃ¶mt: %s"
 
 #: ../src/cdcconsole.cpp:767 ../src/cpenaltylist.cpp:226
 #, c-format
@@ -2406,7 +2406,7 @@ msgstr ""
 #: ../src/cserverdc.cpp:2898 ../src/cserverdc.cpp:2909
 #, c-format
 msgid "Uptime: %s"
-msgstr "Körtid: %s"
+msgstr "KÃ¶rtid: %s"
 
 #: ../src/cinfoserver.cpp:301
 #, c-format
@@ -3061,7 +3061,7 @@ msgstr ""
 #: ../src/cserverdc.cpp:2899 ../src/cserverdc.cpp:2910
 #, c-format
 msgid "Users: %d"
-msgstr "Användare: %d"
+msgstr "AnvÃ¤ndare: %d"
 
 #: ../src/cserverdc.cpp:2936
 #, c-format

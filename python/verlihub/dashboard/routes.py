@@ -146,7 +146,7 @@ async def login_submit(request: Request):
         )
     
     # Create JWT token
-    token = create_access_token(user.nick, user.class_)
+    token = create_access_token(user.nick, user.user_class)
     
     # Create response with redirect
     response = RedirectResponse(url=next_url, status_code=status.HTTP_303_SEE_OTHER)

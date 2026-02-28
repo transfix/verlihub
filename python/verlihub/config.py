@@ -171,6 +171,9 @@ class ApiConfig:
     token_expire_minutes: int = 60
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
     secure_cookies: bool = False
+    registration_enabled: bool = True
+    registration_require_invite: bool = False
+    registration_default_class: int = 1  # REGISTERED
     
     def to_env(self) -> dict[str, str]:
         """Export as environment variables."""
@@ -182,6 +185,9 @@ class ApiConfig:
             "VH_JWT_EXPIRE_MINUTES": str(self.token_expire_minutes),
             "VH_CORS_ORIGINS": ",".join(self.cors_origins),
             "VH_SECURE_COOKIES": "1" if self.secure_cookies else "0",
+            "VH_REGISTRATION_ENABLED": "1" if self.registration_enabled else "0",
+            "VH_REGISTRATION_REQUIRE_INVITE": "1" if self.registration_require_invite else "0",
+            "VH_REGISTRATION_DEFAULT_CLASS": str(self.registration_default_class),
         }
         if self.secret:
             env["VH_JWT_SECRET"] = self.secret
@@ -342,7 +348,7 @@ class VerlihubConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
-    mode: str = "api"  # "api", "hub", "both"
+    mode: str = "both"  # "api", "hub", "both"
     environment: str = "development"  # "development", "qa", "production"
     
     # Internal: config directory (set by load_config)
@@ -412,6 +418,9 @@ class VerlihubConfig:
                 token_expire_minutes=api.get("token_expire_minutes", config.api.token_expire_minutes),
                 cors_origins=api.get("cors_origins", config.api.cors_origins),
                 secure_cookies=api.get("secure_cookies", config.api.secure_cookies),
+                registration_enabled=api.get("registration_enabled", config.api.registration_enabled),
+                registration_require_invite=api.get("registration_require_invite", config.api.registration_require_invite),
+                registration_default_class=api.get("registration_default_class", config.api.registration_default_class),
             )
         
         # Hub
@@ -583,6 +592,9 @@ class VerlihubConfig:
             token_expire_minutes=int(os.getenv("VH_JWT_EXPIRE_MINUTES", str(config.api.token_expire_minutes))),
             cors_origins=cors_origins.split(",") if cors_origins else ["*"],
             secure_cookies=os.getenv("VH_SECURE_COOKIES", "0") == "1",
+            registration_enabled=os.getenv("VH_REGISTRATION_ENABLED", "1" if config.api.registration_enabled else "0").lower() in ("1", "true", "yes"),
+            registration_require_invite=os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "1" if config.api.registration_require_invite else "0").lower() in ("1", "true", "yes"),
+            registration_default_class=int(os.getenv("VH_REGISTRATION_DEFAULT_CLASS", str(config.api.registration_default_class))),
         )
         
         # Hub from environment
@@ -689,6 +701,9 @@ class VerlihubConfig:
                 "token_expire_minutes": self.api.token_expire_minutes,
                 "cors_origins": self.api.cors_origins,
                 "secure_cookies": self.api.secure_cookies,
+                "registration_enabled": self.api.registration_enabled,
+                "registration_require_invite": self.api.registration_require_invite,
+                "registration_default_class": self.api.registration_default_class,
             },
             "hub": {
                 "name": self.hub.name,
@@ -891,13 +906,13 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
             str_value = str(value)
             
             # Check if DB already has this setting
-            result = await session.exec(
+            result = await session.execute(
                 select(SetupList).where(
                     SetupList.file == file_key,
                     SetupList.var == var_key,
                 )
             )
-            existing = result.first()
+            existing = result.scalars().first()
             
             if existing is not None:
                 if force:
@@ -923,6 +938,51 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
                 applied, skipped, " (--force)" if force else "",
             )
         
+        # --- Seed API admin user ---
+        if config.api.username and config.api.password:
+            admin_nick = config.api.username
+            result = await session.execute(
+                select(RegUser).where(RegUser.nick == admin_nick)
+            )
+            existing_admin = result.scalars().first()
+            
+            if existing_admin is None:
+                try:
+                    import bcrypt as _bcrypt
+                    admin_pwd = _bcrypt.hashpw(
+                        config.api.password.encode("utf-8"),
+                        _bcrypt.gensalt(),
+                    ).decode("utf-8")
+                except ImportError:
+                    admin_pwd = config.api.password
+                
+                admin_user = RegUser(
+                    nick=admin_nick,
+                    login_pwd=admin_pwd,
+                    user_class=UserClass.ADMIN,
+                    authorised=True,
+                    reg_op="config-api",
+                    note_op="Bootstrap admin from api config",
+                )
+                session.add(admin_user)
+                logger.info("Created API admin user '%s' (class %d)", admin_nick, UserClass.ADMIN)
+            elif force:
+                try:
+                    import bcrypt as _bcrypt
+                    admin_pwd = _bcrypt.hashpw(
+                        config.api.password.encode("utf-8"),
+                        _bcrypt.gensalt(),
+                    ).decode("utf-8")
+                except ImportError:
+                    admin_pwd = config.api.password
+                existing_admin.login_pwd = admin_pwd
+                if existing_admin.user_class < UserClass.ADMIN:
+                    existing_admin.user_class = UserClass.ADMIN
+                session.add(existing_admin)
+                logger.info("Updated API admin user '%s'", admin_nick)
+            else:
+                logger.debug("API admin user '%s' already exists, skipping", admin_nick)
+        
         # --- User registration ---
         users_created = 0
         users_updated = 0
@@ -935,10 +995,10 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
                     continue
                 
                 # Check if user exists
-                result = await session.exec(
+                result = await session.execute(
                     select(RegUser).where(RegUser.nick == user_entry.nick)
                 )
-                existing_user = result.first()
+                existing_user = result.scalars().first()
                 
                 if existing_user is not None:
                     if force:

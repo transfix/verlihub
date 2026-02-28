@@ -245,11 +245,13 @@ target_link_libraries(libverlihub_so ${VERLIHUB_LIBS}) # pthread dl execinfo
 # ----------------------------------------------------------------------------------------------------
 # Python wheel build: install libverlihub.so into the wheel so auditwheel can
 # bundle it (and its transitive deps) alongside _verlihub_core.so.
+# Note: wheel.install-dir = "verlihub" in pyproject.toml maps CMAKE_INSTALL_PREFIX
+# to verlihub/ in the wheel, so DESTINATION must be "." to avoid doubling.
 
 if(PYTHON_WHEEL_BUILD)
 	install(TARGETS libverlihub_so
 		COMPONENT PythonModule
-		LIBRARY DESTINATION verlihub
+		LIBRARY DESTINATION .
 	)
 endif()
 

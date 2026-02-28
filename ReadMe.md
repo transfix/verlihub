@@ -1,6 +1,6 @@
 # Verlihub 1.7.0.0
 
-Verlihub is advanced NMDC protocol server for Linux operating systems that provides high level functionality such as:
+Verlihub is an advanced NMDC protocol server for Linux operating systems that provides high level functionality such as:
 
   * Low RAM and CPU usage
   * It can hold more than 25k users
@@ -16,6 +16,122 @@ Verlihub is advanced NMDC protocol server for Linux operating systems that provi
   * Web dashboard with real-time hub monitoring
   * REST API for programmatic hub management
   * Plus much more
+
+This repository contains **two ways to run a Verlihub hub**:
+
+| | **Legacy Verlihub** | **verlihub-py** |
+|---|---|---|
+| Entry point | `verlihub` binary (C++) | `verlihub-server` (Python) |
+| Database | MySQL / MariaDB required | SQLite, MySQL, or PostgreSQL |
+| Configuration | MySQL `SetupList` table + config dir | Single YAML file |
+| Web interface | — | FastAPI dashboard + REST API |
+| Build | `cmake && make && make install` | `pip install .` |
+| Plugins | Lua, Python, Perl (shared objects) | Same Lua/Python `.so` plugins |
+
+Both share the same C++ networking core (see [Shared Code Architecture](#shared-code-architecture) below).
+
+---
+
+# Legacy Verlihub (C++ standalone server)
+
+The original, battle-tested NMDC hub server that talks directly to MySQL.
+
+## Dependencies
+
+```
+Required:
+  GCC >= 4.8    CMake >= 3.16    MySQL >= 5.7    OpenSSL >= 1.1
+  LibICU >= 55   ZLib   PCRE   GetText   MaxMindDB   Make
+
+Optional:
+  Lua >= 5.2    Dialog (for vh --install wizard)
+```
+
+**Debian / Ubuntu:**
+
+```bash
+sudo apt install g++ make cmake \
+  libssl-dev libmysqlclient-dev libmaxminddb-dev \
+  libicu-dev libpcre3-dev zlib1g-dev gettext libasprintf-dev
+
+# Optional: Lua plugin support
+sudo apt install liblua5.4-dev    # or liblua5.2-dev
+```
+
+## Build & Install
+
+```bash
+git clone https://github.com/verlihub/verlihub.git
+cd verlihub
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+```
+
+### CMake Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `CMAKE_INSTALL_PREFIX` | `/usr/local` | Installation prefix |
+| `LIB_INSTALL_DIR` | `lib` | Library directory relative to prefix |
+| `PLUGIN_INSTALL_DIR` | `lib` | Plugin directory relative to prefix |
+| `WITH_LUA` | `ON` | Build Lua plugin |
+| `WITH_PYTHON` | `ON` | Build Python scripting plugin |
+| `USE_TLS_PROXY` | `OFF` | Build Go TLS proxy |
+| `USE_FEARTLS_PROXY` | `OFF` | Use FearTLS proxy |
+
+## First-time Setup
+
+After installing, use the interactive setup wizard:
+
+```bash
+vh --install
+```
+
+This walks you through:
+  1. MySQL database creation and credentials
+  2. Hub port, name, and address
+  3. Master admin account
+  4. Config directory (`/etc/verlihub` by default)
+
+## Running the Legacy Server
+
+```bash
+# Start the hub (foreground)
+verlihub -c /etc/verlihub
+
+# Using the vh management script
+vh --run                    # start hub
+vh --stop                   # stop hub
+vh --restart                # restart hub
+vh --status                 # check if running
+vh --install                # interactive setup wizard
+
+# Register users from the command line
+vh_regimporter --help       # import users from PtokaX/Aquila/YnHub
+
+# vhm - Verlihub Manager
+vhm                        # menu-based management interface
+```
+
+## Legacy Management Commands
+
+Once connected as admin via a DC client:
+
+```
+!reload          # reload hub configuration
+!reguser <nick> <class>  # register a user
+!delreg <nick>   # remove a registered user
+!topic <text>    # change hub topic
+!kick <nick>     # kick a user
+!ban <nick> <time> <reason>  # ban a user
+!luaload <script>   # load a Lua script
+!lualist            # list loaded Lua scripts
+```
+
+---
 
 # Python Stack (verlihub-py)
 
@@ -35,6 +151,74 @@ verlihub-py --config config.yml
 ```
 
 See `python/config.example.yml` for all available configuration options.
+
+## Programmatic Usage
+
+You can instantiate and run a Verlihub server entirely from Python — in a
+script or an interactive REPL:
+
+```python
+from verlihub.config import VerlihubConfig, load_config
+
+# Option 1: load from a YAML file
+config = VerlihubConfig.from_yaml("config.yml")
+
+# Option 2: construct in-memory with all defaults (SQLite, localhost:8000)
+config = VerlihubConfig()
+
+# Option 3: construct from a plain dict
+config = VerlihubConfig.from_dict({
+    "database": {"type": "sqlite", "path": ":memory:"},
+    "api": {"port": 9000, "username": "admin", "password": "secret"},
+    "hub": {"name": "My Hub", "port": 411},
+})
+
+# Apply config to environment variables (consumed by FastAPI lifespan)
+config.apply_to_env()
+```
+
+Then start the API server (runs uvicorn in the current process):
+
+```python
+import uvicorn
+uvicorn.run("verlihub.api.app:app", host="127.0.0.1", port=9000)
+```
+
+Or drive it from asyncio for scripting / testing:
+
+```python
+import asyncio
+from verlihub.api.app import create_app
+from verlihub.models.database import DatabaseConfig, init_database, close_database
+
+async def main():
+    config = VerlihubConfig.from_dict({
+        "database": {"type": "sqlite", "path": ":memory:"},
+        "api": {"port": 9000},
+    })
+    config.apply_to_env()
+
+    # initialise the database yourself
+    await init_database(config=DatabaseConfig())
+
+    app = create_app()          # FastAPI instance, ready for testing
+    # ... use httpx.AsyncClient(app=app) for in-process requests ...
+
+    await close_database()
+
+asyncio.run(main())
+```
+
+If the C++ NMDC core is compiled (`-DBUILD_PYTHON_BINDINGS=ON`), you can also
+start the hub:
+
+```python
+from verlihub.core import HubContext
+
+ctx = HubContext.create("/etc/verlihub")
+ctx.initialize()
+ctx.start(port=411, listen_ip="0.0.0.0")  # NMDC hub now accepting connections
+```
 
 # Lua Scripts & Ledokol
 
@@ -144,6 +328,83 @@ cd python && pytest tests/ -v
 
 # Full integration tests
 ./run_integration_tests.sh
+```
+
+# Shared Code Architecture
+
+Both the legacy `verlihub` binary and `verlihub-py` are built from the same
+source tree and share the proven C++ networking and protocol code:
+
+```
+src/                          ← shared C++ source (libverlihub.so)
+├── casyncsocketserver.*      ← async I/O event loop (poll/select)
+├── casyncconn.*              ← non-blocking TCP connection handling
+├── cconndc.*                 ← DC-specific connection state machine
+├── cdcproto.*                ← full NMDC protocol parser (legacy)
+├── cserverdc.*               ← legacy hub server (MySQL-dependent)
+├── cmysql.*                  ← MySQL client wrapper
+├── cuser.* / cusercollection.* ← user management, MyINFO storage
+├── cpluginmanager.*          ← plugin loading (Lua, Python, Perl)
+├── czlib.*                   ← zlib compression for ZPipe
+├── cicuconvert.*             ← ICU charset conversion
+├── cmaxminddb.*              ← GeoIP lookups
+├── cpcre.*                   ← PCRE regex engine
+├── clog.*                    ← logging framework
+├── stringutils.*             ← string helpers
+├── ...                       ← ~60 more legacy source files
+│
+├── core/                     ← new C++20 core library (verlihub_core_lib)
+│   ├── hub_context.*         ← HubContext: thread-safe central state
+│   ├── nmdc_hub_server.*     ← database-free NMDC server
+│   ├── nmdc_protocol.*       ← standalone NMDC protocol utilities
+│   └── thread_safe_collections.* ← lock-free containers
+│
+└── swig/                     ← Python bindings (SWIG)
+    └── verlihub_core.i       ← interface exposing HubContext to Python
+
+plugins/                      ← shared plugin binaries
+├── lua/                      ← liblua_pi.so — Lua scripting
+├── python/                   ← libpython_pi.so — Python scripting
+├── plugman/                  ← plug_pi.so — plugin manager
+├── chatroom/ forbid/ floodprot/ iplog/ isp/ messenger/ replacer/ stats/
+└── perl/                     ← libperl_pi.so — Perl scripting
+```
+
+## What each version uses
+
+**Legacy `verlihub` binary** uses all of `src/*.cpp` compiled into
+`libverlihub.so`, plus the `verlihub` executable (`verlihub.cpp`) which
+bootstraps `cServerDC` → MySQL → starts the event loop. Plugins load from
+disk at runtime.
+
+**`verlihub-py`** uses:
+
+| Layer | Source | Purpose |
+|-------|--------|---------|
+| **Socket I/O** | `casyncsocketserver.*`, `casyncconn.*` | The same battle-tested async event loop (poll/select) |
+| **Connection handling** | `cconndc.*`, `cconnchoose.*`, `cconnpoll.*` | TCP connection state machine, shared with legacy |
+| **Protocol** | `cdcproto.*` + `core/nmdc_protocol.*` | Legacy parser linked in; new standalone parser in core |
+| **Compression** | `czlib.*` | ZPipe support, same code |
+| **Encoding** | `cicuconvert.*` | ICU charset conversion, same code |
+| **GeoIP** | `cmaxminddb.*` | MaxMindDB lookups, same code |
+| **Plugin system** | `cpluginmanager.*`, `cpluginbase.*` | Same `.so` plugin ABI — Lua/Python plugins work on both |
+| **Hub server** | `core/nmdc_hub_server.*` | **New:** inherits `cAsyncSocketServer`, no MySQL dependency |
+| **Hub context** | `core/hub_context.*` | **New:** thread-safe state, replaces global singletons |
+| **SWIG bridge** | `swig/verlihub_core.i` | Exports `HubContext` to Python via `_verlihub_core.so` |
+
+The key difference: `NMDCHubServer` (`src/core/`) inherits from
+`cAsyncSocketServer` (`src/`) to reuse the socket infrastructure, but
+delegates all authentication and persistence to Python through the
+`IHubEventCallback` interface. This removes the hard MySQL dependency while
+keeping the proven networking code.
+
+## Build targets
+
+```
+libverlihub.so          ← all src/*.cpp (legacy + shared code)
+verlihub_core_lib.a     ← src/core/*.cpp (new C++20 library, links libverlihub.so)
+_verlihub_core.so       ← SWIG wrapper (links both above)
+verlihub                ← legacy binary (links libverlihub.so), not built for pip
 ```
 
 # Links

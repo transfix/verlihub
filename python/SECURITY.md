@@ -22,7 +22,7 @@ The VerliHub Python module implements several security measures:
 | Feature | Implementation |
 |---------|---------------|
 | Authentication | JWT tokens with configurable expiration |
-| Password Storage | bcrypt hashing via passlib |
+| Password Storage | bcrypt hashing (direct) |
 | SQL Injection | ORM-based queries (SQLModel/SQLAlchemy) |
 | XSS Prevention | Jinja2 auto-escaping |
 | CSRF Protection | SameSite cookies |
@@ -45,9 +45,14 @@ export VH_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))"
 # Token expiration in minutes (default: 30)
 export VH_JWT_EXPIRE_MINUTES=30
 
-# API admin credentials
+# API admin credentials (seeded into DB at startup)
 export VH_API_USERNAME=admin
 export VH_API_PASSWORD=strong_password_here
+
+# Self-registration (defaults shown)
+export VH_REGISTRATION_ENABLED=1           # Set to 0 to disable
+export VH_REGISTRATION_REQUIRE_INVITE=0    # Set to 1 to require invite codes
+export VH_REGISTRATION_DEFAULT_CLASS=1     # 1=Registered, 2=VIP
 ```
 
 **Security Notes:**
@@ -55,14 +60,17 @@ export VH_API_PASSWORD=strong_password_here
 - Use a minimum 32-byte (64 hex characters) secret
 - Rotate secrets periodically
 - Never commit secrets to version control
+- The `api.username/password` admin is inserted into the `RegUser` database table as an admin-class (5) user
+- All users share the same `RegUser` table and authenticate via bcrypt
+- Consider setting `VH_REGISTRATION_REQUIRE_INVITE=1` in production to control who can register
 
 ### Password Requirements
 
 The module uses bcrypt for password hashing:
 
 ```python
-from passlib.context import CryptContext
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
+hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
 ```
 
 **Best Practices:**
@@ -127,6 +135,8 @@ async def get_sensitive_data(
 |----------|---------------|---------|
 | `GET /api/health` | None | Health check |
 | `POST /api/auth/login` | None | Authentication |
+| `POST /api/auth/register` | None | Self-registration (if enabled) |
+| `GET /dashboard/register` | None | Registration page (if enabled) |
 | `GET /api/users` | Required | User listing |
 | `POST /api/bans` | Required | Ban creation |
 | `DELETE /api/*` | Required | Destructive operations |
@@ -340,6 +350,7 @@ secrets:
 
 - [ ] Set `VH_JWT_SECRET` to a strong random value
 - [ ] Set strong `VH_API_PASSWORD`
+- [ ] Review registration settings (`VH_REGISTRATION_ENABLED`, `VH_REGISTRATION_REQUIRE_INVITE`)
 - [ ] Configure CORS origins explicitly
 - [ ] Enable secure cookies (`VH_SECURE_COOKIES=1`)
 - [ ] Bind to localhost only (`VH_API_HOST=127.0.0.1`)
@@ -401,10 +412,16 @@ add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" alway
 2. **Change API admin password:**
    ```bash
    export VH_API_PASSWORD=new_strong_password
-   # Restart API server
+   # Restart with --force to update the password in the database
+   verlihub-server --force
    ```
 
-3. **Review access logs** for unauthorized activity
+3. **Disable self-registration** if compromised via registration:
+   ```bash
+   export VH_REGISTRATION_ENABLED=0
+   ```
+
+4. **Review access logs** for unauthorized activity
 
 4. **Check database** for unauthorized modifications
 

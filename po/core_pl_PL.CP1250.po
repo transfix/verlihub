@@ -74,7 +74,7 @@ msgstr "Na stale"
 #: ../src/cban.cpp:141 ../src/creguserinfo.cpp:121
 #, c-format
 msgid "User note: %s"
-msgstr "Notatka u¿ytkownika: %s"
+msgstr "Notatka uÅ¼ytkownika: %s"
 
 #: ../src/cban.cpp:157 ../src/creguserinfo.cpp:124
 #, c-format
@@ -176,7 +176,7 @@ msgstr "Haslo"
 
 #: ../src/cbanlist.cpp:726 ../src/cbanlist.cpp:776
 msgid "Reconnect"
-msgstr "Po³¹cz ponownie"
+msgstr "PoÅ‚Ä…cz ponownie"
 
 #: ../src/cbanlist.cpp:730 ../src/cbanlist.cpp:780
 msgid "Flood"
@@ -494,7 +494,7 @@ msgstr "Miasto"
 
 #: ../src/cdcconsole.cpp:462
 msgid "Please note, hub is no longer scheduled for restart."
-msgstr "Uwaga, zaplanowano ju¿ restart huba."
+msgstr "Uwaga, zaplanowano juÅ¼ restart huba."
 
 #: ../src/cdcconsole.cpp:464
 #, c-format
@@ -625,7 +625,7 @@ msgid ""
 "We would like to thank everyone in our support hub for their input and "
 "valuable support and of course everyone who continues to use this great hub "
 "software."
-msgstr "Chcielibysmy podziekowac wszystkim z huba Verlihub Administrator Zone za ich wklad i cenne wsparcie i oczywiscie wszystkim, którzy w dalszym ciagu chca korzystac z tego wspanialego oprogramowania."
+msgstr "Chcielibysmy podziekowac wszystkim z huba Verlihub Administrator Zone za ich wklad i cenne wsparcie i oczywiscie wszystkim, ktÃ³rzy w dalszym ciagu chca korzystac z tego wspanialego oprogramowania."
 
 #: ../src/cdcconsole.cpp:676
 msgid "Links"
@@ -787,11 +787,11 @@ msgstr "Nie jestes jeszcze zarejestrowany."
 #: ../src/cdcconsole.cpp:3445 ../src/cdcconsole.cpp:3446
 #: ../src/script_api.cpp:793 ../src/script_api.cpp:794
 msgid "You have been unregistered."
-msgstr "Zosta³eœ wyrejestrowany."
+msgstr "ZostaÅ‚eÅ› wyrejestrowany."
 
 #: ../src/cdcconsole.cpp:847
 msgid "User has been unregistered"
-msgstr "U¿ytkownik zosta³ wyrejestrowany."
+msgstr "UÅ¼ytkownik zostaÅ‚ wyrejestrowany."
 
 #: ../src/cdcconsole.cpp:850
 msgid "An error occured while unregistering."
@@ -815,7 +815,7 @@ msgstr "Twoj nick musi zaczynac sie od: %s"
 #: ../src/cdcconsole.cpp:897
 #, c-format
 msgid "You need to share at least: %s"
-msgstr "Musisz udostêpniæ co najmniej: %s"
+msgstr "Musisz udostÄ™pniÄ‡ co najmniej: %s"
 
 #: ../src/cdcconsole.cpp:908 ../src/cdcconsole.cpp:1075
 #: ../src/cdcproto.cpp:791
@@ -831,7 +831,7 @@ msgstr "Zostales zarejestrowany z klasa %d i haslem: %s"
 #: ../src/cdcconsole.cpp:941
 #, c-format
 msgid "New user has been registered with class %d"
-msgstr "Nowy u¿ytkownik zosta³ zarejestrowany z klas¹ %d"
+msgstr "Nowy uÅ¼ytkownik zostaÅ‚ zarejestrowany z klasÄ… %d"
 
 #: ../src/cdcconsole.cpp:945
 msgid "An error occured while registering."
@@ -897,7 +897,7 @@ msgstr "Haslo zostalo zaktualizowane."
 msgid ""
 "Please use: !hideme <class>, where <class> is the maximum class of users "
 "that may not see your kicks."
-msgstr "Prosze uzyc komendy !hideme <klasa>, gdzie <klasa> to maksymalna klasa uzytkowników, ktorzy nie beda widzieli, jak bedziesz kogos wykopywal."
+msgstr "Prosze uzyc komendy !hideme <klasa>, gdzie <klasa> to maksymalna klasa uzytkownikÃ³w, ktorzy nie beda widzieli, jak bedziesz kogos wykopywal."
 
 #: ../src/cdcconsole.cpp:1119
 #, c-format
@@ -921,7 +921,7 @@ msgstr[3] "Zaktualizowano zmienna max_users na %d na czas %d minut."
 #: ../src/cdcconsole.cpp:1166
 #, c-format
 msgid "Command usage: !class <nick> [class=%d]"
-msgstr "Sposób u¿ycia komendy: !class <nick> [class=%d]"
+msgstr "SposÃ³b uÅ¼ycia komendy: !class <nick> [class=%d]"
 
 #: ../src/cdcconsole.cpp:1166
 #, c-format
@@ -1468,7 +1468,7 @@ msgstr ""
 #, c-format
 msgid ""
 "classdif_reg value must be between %d and %d. Please correct this first."
-msgstr "Prawidlowa wartosc classdif_reg jest miedzy %d i %d. Proszê to poprawiæ."
+msgstr "Prawidlowa wartosc classdif_reg jest miedzy %d i %d. ProszÄ™ to poprawiÄ‡."
 
 #: ../src/cdcconsole.cpp:3268
 #, c-format
@@ -1888,7 +1888,7 @@ msgstr "Nie mozesz pobierac od uzytkownika, poniewaz jest on w trybie pasywnym: 
 msgid ""
 "You can't download from this user while your share is hidden, because you "
 "are in passive mode: %s"
-msgstr "Nie mozna pobrac od tego uzytkownika w czasie, gdy ma ukryte udostepnienie, poniewa¿ jestes w trybie pasywnym: %s"
+msgstr "Nie mozna pobrac od tego uzytkownika w czasie, gdy ma ukryte udostepnienie, poniewaÅ¼ jestes w trybie pasywnym: %s"
 
 #: ../src/cdcproto.cpp:2416 ../src/cdcproto.cpp:2690 ../src/cdcproto.cpp:2869
 msgid ""
@@ -2123,7 +2123,7 @@ msgstr "Polaczenia pasywne nie sa dopuszczone. Sprobuj skonfigurowac aktywne pol
 msgid ""
 "Your client tag is reporting less than 0 hubs or less than 0 slots, looks "
 "like a bug in your client."
-msgstr "Tag klienta zglasza mniej ni¿ 0 hubow lub mniej ni¿ 0 slotow, co wyglada na blad programistyczny w kliencie."
+msgstr "Tag klienta zglasza mniej niÅ¼ 0 hubow lub mniej niÅ¼ 0 slotow, co wyglada na blad programistyczny w kliencie."
 
 #: ../src/cdctag.cpp:95
 msgid "Unknown clients are not allowed in this hub."
@@ -2556,7 +2556,7 @@ msgstr "Uzytkownicy na liscie: %d"
 #: ../src/cinfoserver.cpp:565
 #, c-format
 msgid "Secure users: %d of %d"
-msgstr "Zabezpieczono u¿ytkowników: %d z %d "
+msgstr "Zabezpieczono uÅ¼ytkownikÃ³w: %d z %d "
 
 #: ../src/cinfoserver.cpp:566
 #, c-format
@@ -2630,7 +2630,7 @@ msgstr ""
 #: ../src/cmaxminddb.cpp:911
 #, c-format
 msgid "Database path: %s"
-msgstr "Œcie¿ka bazy danych: %s"
+msgstr "ÅšcieÅ¼ka bazy danych: %s"
 
 #: ../src/cmaxminddb.cpp:912
 #, c-format
@@ -2795,7 +2795,7 @@ msgstr "Ukryj klucz: %s"
 #: ../src/creguserinfo.cpp:113
 #, c-format
 msgid "Show key: %s"
-msgstr "Pokaza¿ klucz: %s"
+msgstr "PokazaÅ¼ klucz: %s"
 
 #: ../src/creguserinfo.cpp:114
 #, c-format
@@ -2945,23 +2945,23 @@ msgstr "Wysylanie informacji do: %s:%d"
 
 #: ../src/cserverdc.cpp:2031
 msgid "Connection error"
-msgstr "B³¹d po³¹czenia"
+msgstr "BÅ‚Ä…d poÅ‚Ä…czenia"
 
 #: ../src/cserverdc.cpp:2073
 msgid "Registration done"
-msgstr "Rejestracja zakoñczona"
+msgstr "Rejestracja zakoÅ„czona"
 
 #: ../src/cserverdc.cpp:2075
 msgid "Send error"
-msgstr "Wyœlij b³¹d"
+msgstr "WyÅ›lij bÅ‚Ä…d"
 
 #: ../src/cserverdc.cpp:2077
 msgid "Protocol error"
-msgstr "B³¹d protoko³u"
+msgstr "BÅ‚Ä…d protokoÅ‚u"
 
 #: ../src/cserverdc.cpp:2080 ../src/cserverdc.cpp:2083
 msgid "Read error"
-msgstr "B³¹d odczytu"
+msgstr "BÅ‚Ä…d odczytu"
 
 #: ../src/cserverdc.cpp:2095
 msgid "Finished registering in hublists."

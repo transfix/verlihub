@@ -186,6 +186,30 @@ class TestApiConfig:
         env = api.to_env()
         assert "VH_JWT_SECRET" not in env
 
+    def test_registration_defaults(self):
+        api = ApiConfig()
+        assert api.registration_enabled is True
+        assert api.registration_require_invite is False
+        assert api.registration_default_class == 1
+
+    def test_registration_to_env(self):
+        api = ApiConfig(
+            registration_enabled=False,
+            registration_require_invite=True,
+            registration_default_class=2,
+        )
+        env = api.to_env()
+        assert env["VH_REGISTRATION_ENABLED"] == "0"
+        assert env["VH_REGISTRATION_REQUIRE_INVITE"] == "1"
+        assert env["VH_REGISTRATION_DEFAULT_CLASS"] == "2"
+
+    def test_registration_to_env_defaults(self):
+        api = ApiConfig()  # All defaults
+        env = api.to_env()
+        assert env["VH_REGISTRATION_ENABLED"] == "1"
+        assert env["VH_REGISTRATION_REQUIRE_INVITE"] == "0"
+        assert env["VH_REGISTRATION_DEFAULT_CLASS"] == "1"
+
 
 # ======================================================================
 # VerlihubConfig.from_dict — full dictionary parsing
@@ -199,7 +223,7 @@ class TestVerlihubConfigFromDict:
         assert cfg.database.type == "sqlite"
         assert cfg.api.port == 8000
         assert cfg.hub.name == "My DC++ Hub"
-        assert cfg.mode == "api"
+        assert cfg.mode == "both"
 
     def test_database_section(self):
         cfg = VerlihubConfig.from_dict({
@@ -326,6 +350,32 @@ class TestVerlihubConfigFromDict:
         assert cfg.mode == "both"
         assert cfg.environment == "production"
 
+    def test_registration_settings_from_dict(self):
+        cfg = VerlihubConfig.from_dict({
+            "api": {
+                "registration_enabled": False,
+                "registration_require_invite": True,
+                "registration_default_class": 2,
+            }
+        })
+        assert cfg.api.registration_enabled is False
+        assert cfg.api.registration_require_invite is True
+        assert cfg.api.registration_default_class == 2
+
+    def test_registration_settings_default_from_dict(self):
+        cfg = VerlihubConfig.from_dict({})
+        assert cfg.api.registration_enabled is True
+        assert cfg.api.registration_require_invite is False
+        assert cfg.api.registration_default_class == 1
+
+    def test_registration_partial_override(self):
+        cfg = VerlihubConfig.from_dict({
+            "api": {"registration_require_invite": True}
+        })
+        assert cfg.api.registration_enabled is True  # default kept
+        assert cfg.api.registration_require_invite is True  # overridden
+        assert cfg.api.registration_default_class == 1  # default kept
+
 
 # ======================================================================
 # VerlihubConfig.from_env
@@ -402,6 +452,36 @@ class TestVerlihubConfigFromEnv:
         cfg = VerlihubConfig.from_env()
         assert cfg.mode == "both"
         assert cfg.environment == "production"
+
+    def test_from_env_registration_enabled_false(self, monkeypatch):
+        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "0")
+        cfg = VerlihubConfig.from_env()
+        assert cfg.api.registration_enabled is False
+
+    def test_from_env_registration_enabled_true(self, monkeypatch):
+        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "true")
+        cfg = VerlihubConfig.from_env()
+        assert cfg.api.registration_enabled is True
+
+    def test_from_env_registration_require_invite(self, monkeypatch):
+        monkeypatch.setenv("VH_REGISTRATION_REQUIRE_INVITE", "1")
+        cfg = VerlihubConfig.from_env()
+        assert cfg.api.registration_require_invite is True
+
+    def test_from_env_registration_default_class(self, monkeypatch):
+        monkeypatch.setenv("VH_REGISTRATION_DEFAULT_CLASS", "2")
+        cfg = VerlihubConfig.from_env()
+        assert cfg.api.registration_default_class == 2
+
+    def test_from_env_registration_defaults_when_unset(self, monkeypatch):
+        # Clear registration env vars
+        for key in ["VH_REGISTRATION_ENABLED", "VH_REGISTRATION_REQUIRE_INVITE",
+                     "VH_REGISTRATION_DEFAULT_CLASS"]:
+            monkeypatch.delenv(key, raising=False)
+        cfg = VerlihubConfig.from_env()
+        assert cfg.api.registration_enabled is True
+        assert cfg.api.registration_require_invite is False
+        assert cfg.api.registration_default_class == 1
 
 
 # ======================================================================
@@ -500,6 +580,26 @@ class TestVerlihubConfigToDict:
         d = cfg.to_dict()
         assert "password" not in d["database"]
         assert "password" not in d["api"]
+
+    def test_registration_fields_in_to_dict(self):
+        cfg = VerlihubConfig(
+            api=ApiConfig(
+                registration_enabled=False,
+                registration_require_invite=True,
+                registration_default_class=2,
+            ),
+        )
+        d = cfg.to_dict()
+        assert d["api"]["registration_enabled"] is False
+        assert d["api"]["registration_require_invite"] is True
+        assert d["api"]["registration_default_class"] == 2
+
+    def test_registration_defaults_in_to_dict(self):
+        cfg = VerlihubConfig()
+        d = cfg.to_dict()
+        assert d["api"]["registration_enabled"] is True
+        assert d["api"]["registration_require_invite"] is False
+        assert d["api"]["registration_default_class"] == 1
 
     def test_lua_scripts_serialized(self):
         cfg = VerlihubConfig(
@@ -668,3 +768,60 @@ class TestLoadConfig:
         cfg = load_config(config_dir=str(tmp_path))
         assert cfg.database.type == "sqlite"
         assert cfg.database.path == str(tmp_path / "verlihub.db")
+
+
+# ======================================================================
+# YAML round-trip for registration settings
+# ======================================================================
+
+
+class TestRegistrationYamlRoundTrip:
+
+    def test_yaml_registration_disabled(self, tmp_path):
+        yaml_content = """
+api:
+  registration_enabled: false
+  registration_require_invite: true
+  registration_default_class: 2
+"""
+        p = tmp_path / "config.yml"
+        p.write_text(yaml_content)
+        cfg = VerlihubConfig.from_yaml(str(p))
+        assert cfg.api.registration_enabled is False
+        assert cfg.api.registration_require_invite is True
+        assert cfg.api.registration_default_class == 2
+
+    def test_yaml_registration_defaults_when_absent(self, tmp_path):
+        yaml_content = """
+api:
+  port: 9999
+"""
+        p = tmp_path / "config.yml"
+        p.write_text(yaml_content)
+        cfg = VerlihubConfig.from_yaml(str(p))
+        assert cfg.api.registration_enabled is True
+        assert cfg.api.registration_require_invite is False
+        assert cfg.api.registration_default_class == 1
+
+    def test_env_overrides_yaml_registration(self, tmp_path, monkeypatch):
+        """Env vars should override YAML registration settings."""
+        yaml_content = """
+api:
+  registration_enabled: true
+  registration_require_invite: false
+"""
+        p = tmp_path / "config.yml"
+        p.write_text(yaml_content)
+
+        # Load from YAML first
+        cfg = VerlihubConfig.from_yaml(str(p))
+        assert cfg.api.registration_enabled is True
+
+        # Now override via env
+        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "0")
+        monkeypatch.setenv("VH_REGISTRATION_REQUIRE_INVITE", "1")
+        monkeypatch.setenv("VH_REGISTRATION_DEFAULT_CLASS", "3")
+        cfg2 = VerlihubConfig.from_env()
+        assert cfg2.api.registration_enabled is False
+        assert cfg2.api.registration_require_invite is True
+        assert cfg2.api.registration_default_class == 3

@@ -124,6 +124,12 @@ Environment Variables:
     )
     
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force YAML config values to overwrite existing database values",
+    )
+    
+    parser.add_argument(
         "--validate",
         action="store_true",
         help="Validate config and exit",
@@ -235,7 +241,7 @@ def main() -> None:
             from verlihub import __version__
             print(f"verlihub {__version__}")
         except ImportError:
-            print("verlihub 0.1.0")
+            print("verlihub 1.7.0.0")
         return
     
     # Setup logging
@@ -299,6 +305,30 @@ def main() -> None:
     
     # Apply config to environment
     config.apply_to_env()
+    
+    # Synchronize config with database (DB values preferred unless --force)
+    try:
+        from verlihub.config import apply_config_to_db
+        from verlihub.models.database import init_database, close_database
+        from verlihub.models.database import DatabaseConfig as DbConfig
+        
+        async def _sync_config():
+            # Initialize database
+            db_url = config.database.get_url(config._config_dir)
+            db_cfg = DbConfig()
+            db_cfg._url_override = db_url
+            await init_database(config=db_cfg)
+            # Apply YAML config respecting DB precedence
+            await apply_config_to_db(config, force=getattr(args, 'force', False))
+            await close_database()
+        
+        asyncio.run(_sync_config())
+        logger.info("Config-to-DB sync complete")
+    except Exception as e:
+        logger.warning("Config-to-DB sync skipped: %s", e)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
     
     # Get database display name
     config_dir = getattr(config, '_config_dir', str(Path.cwd()))

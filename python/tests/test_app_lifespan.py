@@ -333,4 +333,4 @@ class TestCreateApp:
         from verlihub.api.app import create_app
         app = create_app()
         assert app.title == "Thin Verlihub"
-        assert app.version == "0.1.0"
+        assert app.version == "1.7.0.0"

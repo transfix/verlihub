@@ -1,7 +1,7 @@
 """
 Web Dashboard for Verlihub.
 
-This module provides a web-based admin dashboard using:
+This module provides a web-based dashboard using:
 - FastAPI for routing
 - Jinja2 for templating
 - Bulma CSS for styling

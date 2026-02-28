@@ -1,5 +1,5 @@
 """
-Dashboard routes for the Verlihub web admin interface.
+Dashboard routes for the Verlihub web interface.
 
 Provides HTML pages for:
 - Login/authentication
@@ -10,6 +10,7 @@ Provides HTML pages for:
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,9 @@ from fastapi.staticfiles import StaticFiles
 from verlihub.api.auth import decode_token, TokenData
 from verlihub.api.deps import get_hub_context
 from verlihub.models import RegUser
+
+# Default Verlihub logo (GitHub avatar)
+VERLIHUB_DEFAULT_LOGO = "https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
 
 # Setup templates directory
 DASHBOARD_DIR = Path(__file__).parent
@@ -53,13 +57,23 @@ async def get_user_from_cookie(
 def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict:
     """Get base template context with common variables."""
     ctx = get_hub_context()
+
+    # Hub info: prefer live C++ context, fall back to env vars (set by YAML config)
+    hub_name = ctx.hub_name if ctx else os.getenv("VH_HUB_NAME", "Verlihub")
+    hub_description = os.getenv("VH_HUB_DESCRIPTION", "")
+    hub_topic = ctx.hub_topic if ctx else os.getenv("VH_HUB_TOPIC", "")
+    hub_logo = os.getenv("VH_HUB_LOGO", "")
+
     return {
         "request": request,
         "user": user,
         "hub_running": ctx.is_running if ctx else False,
-        "hub_name": ctx.hub_name if ctx else "Verlihub",
+        "hub_name": hub_name,
+        "hub_description": hub_description,
+        "hub_topic": hub_topic,
+        "hub_logo": hub_logo or VERLIHUB_DEFAULT_LOGO,
         "current_year": datetime.now(timezone.utc).year,
-        "version": "0.1.0",
+        "version": "1.7.0.0",
     }
 
 

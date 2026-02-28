@@ -202,6 +202,11 @@ class HubConfig:
     encoding: str = "CP1252"
     motd_file: str = ""
     max_users: int = 1000
+    logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
+    hublist_servers: list[str] = field(default_factory=lambda: [
+        "hublist.te-home.net",
+        "hublist.pwiam.com",
+    ])
 
 
 @dataclass
@@ -236,10 +241,14 @@ class PluginsConfig:
 
 
 @dataclass
-class LuaGithubScript:
-    """A Lua script to fetch from a GitHub repository."""
+class GithubScript:
+    """A script to fetch from a GitHub repository (used by Lua and Python)."""
     repo: str  # e.g. "Verlihub/ledokol"
     files: list[str] = field(default_factory=list)  # specific files, or empty for all
+
+
+# Keep legacy alias
+LuaGithubScript = GithubScript
 
 
 @dataclass
@@ -253,11 +262,58 @@ class LuaConfig:
     Scripts listed in ``github_scripts`` are fetched from GitHub on
     startup and placed in the hub's scripts directory. Scripts in
     ``autoload`` are loaded via ``!luaload`` after the hub starts.
+    
+    ``script_config`` is a dict mapping script names to their settings.
+    For example, ledokol settings are applied via ``!ledoset key value``.
     """
     enabled: bool = True
-    github_scripts: list[LuaGithubScript] = field(default_factory=list)
+    github_scripts: list[GithubScript] = field(default_factory=list)
     autoload: list[str] = field(default_factory=list)
-    ledokol_config: dict[str, Any] = field(default_factory=dict)
+    script_config: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class PythonConfig:
+    """
+    Python plugin and script configuration.
+    
+    Controls loading of the Python plugin (libpython_pi.so) and manages
+    Python scripts loaded into the hub.
+    
+    Scripts listed in ``github_scripts`` are fetched from GitHub on
+    startup. Scripts in ``autoload`` are loaded via ``+pyload``.
+    
+    ``script_config`` maps script names to their settings dict.
+    """
+    enabled: bool = True
+    github_scripts: list[GithubScript] = field(default_factory=list)
+    autoload: list[str] = field(default_factory=list)
+    script_config: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class UserEntry:
+    """A user account to pre-register."""
+    nick: str
+    password: str
+    note: str = ""
+
+
+@dataclass
+class UsersConfig:
+    """
+    User accounts to pre-register at startup.
+    
+    Accounts are inserted into the database if they don't already exist.
+    Existing accounts are NOT overwritten unless ``--force`` is passed.
+    
+    User classes: master (10), admin (5), operator (3), vip (2), registered (1).
+    """
+    masters: list[UserEntry] = field(default_factory=list)
+    admins: list[UserEntry] = field(default_factory=list)
+    operators: list[UserEntry] = field(default_factory=list)
+    vips: list[UserEntry] = field(default_factory=list)
+    registered: list[UserEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -279,8 +335,10 @@ class VerlihubConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     hub: HubConfig = field(default_factory=HubConfig)
     bots: BotsConfig = field(default_factory=BotsConfig)
+    users: UsersConfig = field(default_factory=UsersConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     lua: LuaConfig = field(default_factory=LuaConfig)
+    python: PythonConfig = field(default_factory=PythonConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
@@ -371,6 +429,8 @@ class VerlihubConfig:
                 encoding=hub.get("encoding", config.hub.encoding),
                 motd_file=hub.get("motd_file", config.hub.motd_file),
                 max_users=hub.get("max_users", config.hub.max_users),
+                logo=hub.get("logo", config.hub.logo),
+                hublist_servers=hub.get("hublist_servers", config.hub.hublist_servers),
             )
         
         # Bots
@@ -408,17 +468,60 @@ class VerlihubConfig:
         if "lua" in data:
             lua = data["lua"]
             github_scripts = [
-                LuaGithubScript(
+                GithubScript(
                     repo=gs.get("repo", ""),
                     files=gs.get("files", []),
                 )
                 for gs in lua.get("github_scripts", [])
             ]
+            # Support legacy "ledokol_config" key as well as new "script_config"
+            script_config = lua.get("script_config", {})
+            if not script_config and "ledokol_config" in lua:
+                ledokol_cfg = lua["ledokol_config"]
+                if ledokol_cfg:
+                    script_config = {"ledokol": ledokol_cfg}
             config.lua = LuaConfig(
                 enabled=lua.get("enabled", True),
                 github_scripts=github_scripts,
                 autoload=lua.get("autoload", []),
-                ledokol_config=lua.get("ledokol_config", {}),
+                script_config=script_config,
+            )
+        
+        # Python plugin & scripts
+        if "python" in data:
+            py = data["python"]
+            github_scripts = [
+                GithubScript(
+                    repo=gs.get("repo", ""),
+                    files=gs.get("files", []),
+                )
+                for gs in py.get("github_scripts", [])
+            ]
+            config.python = PythonConfig(
+                enabled=py.get("enabled", True),
+                github_scripts=github_scripts,
+                autoload=py.get("autoload", []),
+                script_config=py.get("script_config", {}),
+            )
+        
+        # Users
+        if "users" in data:
+            users = data["users"]
+            def _parse_user_list(entries: list) -> list[UserEntry]:
+                return [
+                    UserEntry(
+                        nick=u.get("nick", ""),
+                        password=u.get("password", ""),
+                        note=u.get("note", ""),
+                    )
+                    for u in (entries or [])
+                ]
+            config.users = UsersConfig(
+                masters=_parse_user_list(users.get("masters", [])),
+                admins=_parse_user_list(users.get("admins", [])),
+                operators=_parse_user_list(users.get("operators", [])),
+                vips=_parse_user_list(users.get("vips", [])),
+                registered=_parse_user_list(users.get("registered", [])),
             )
         
         # Logging
@@ -485,8 +588,12 @@ class VerlihubConfig:
         # Hub from environment
         config.hub = HubConfig(
             name=os.getenv("VH_HUB_NAME", config.hub.name),
+            description=os.getenv("VH_HUB_DESCRIPTION", config.hub.description),
+            host=os.getenv("VH_HUB_HOST", config.hub.host),
             port=int(os.getenv("VH_HUB_PORT", str(config.hub.port))),
             listen_host=os.getenv("VH_HUB_LISTEN", config.hub.listen_host),
+            topic=os.getenv("VH_HUB_TOPIC", config.hub.topic),
+            logo=os.getenv("VH_HUB_LOGO", config.hub.logo),
             max_users=int(os.getenv("VH_HUB_MAX_USERS", str(config.hub.max_users))),
         )
         
@@ -507,17 +614,25 @@ class VerlihubConfig:
         env_vars.update(self.database.to_env())
         env_vars.update(self.api.to_env())
         
+        # Hub settings (needed by dashboard in API-only mode)
+        env_vars["VH_HUB_NAME"] = self.hub.name
+        env_vars["VH_HUB_DESCRIPTION"] = self.hub.description
+        env_vars["VH_HUB_TOPIC"] = self.hub.topic
+        env_vars["VH_HUB_LOGO"] = self.hub.logo
+        env_vars["VH_HUB_PORT"] = str(self.hub.port)
+        env_vars["VH_HUB_HOST"] = self.hub.host
+
         for key, value in env_vars.items():
             os.environ[key] = value
-        
+
         logger.debug("Applied %d environment variables from config", len(env_vars))
-    
+
     def setup_logging(self) -> None:
         """Configure logging based on config settings."""
         level = getattr(logging, self.logging.level.upper(), logging.INFO)
-        
+
         handlers: list[logging.Handler] = [logging.StreamHandler()]
-        
+
         if self.logging.file:
             handlers.append(logging.FileHandler(self.logging.file))
         
@@ -577,9 +692,14 @@ class VerlihubConfig:
             },
             "hub": {
                 "name": self.hub.name,
+                "description": self.hub.description,
+                "host": self.hub.host,
                 "port": self.hub.port,
                 "listen_host": self.hub.listen_host,
+                "topic": self.hub.topic,
+                "logo": self.hub.logo,
                 "max_users": self.hub.max_users,
+                "hublist_servers": self.hub.hublist_servers,
             },
             "logging": {
                 "level": self.logging.level,
@@ -592,7 +712,16 @@ class VerlihubConfig:
                     for gs in self.lua.github_scripts
                 ],
                 "autoload": self.lua.autoload,
-                "ledokol_config": self.lua.ledokol_config,
+                "script_config": self.lua.script_config,
+            },
+            "python": {
+                "enabled": self.python.enabled,
+                "github_scripts": [
+                    {"repo": gs.repo, "files": gs.files}
+                    for gs in self.python.github_scripts
+                ],
+                "autoload": self.python.autoload,
+                "script_config": self.python.script_config,
             },
         }
 
@@ -672,3 +801,196 @@ def load_config(
         config.database.path = str(config_dir / "verlihub.db")
     
     return config
+
+
+# =============================================================================
+# Database-Config Synchronization
+# =============================================================================
+
+# Mapping of YAML config paths to SetupList (file, var) pairs.
+# Only settings that map to the C++ hub's SetupList are included.
+_HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
+    "hub.name": ("config", "hub_name"),
+    "hub.description": ("config", "hub_desc"),
+    "hub.host": ("config", "hub_host"),
+    "hub.port": ("config", "hub_port"),
+    "hub.listen_host": ("config", "listen_ip"),
+    "hub.owner": ("config", "hub_owner"),
+    "hub.topic": ("config", "hub_topic"),
+    "hub.category": ("config", "hub_category"),
+    "hub.encoding": ("config", "hub_encoding"),
+    "hub.max_users": ("config", "max_users"),
+    "bots.security.nick": ("config", "hub_security"),
+    "bots.op_chat.nick": ("config", "opchat_name"),
+}
+
+# User class mapping
+_USER_CLASS_MAP: dict[str, int] = {
+    "masters": 10,
+    "admins": 5,
+    "operators": 3,
+    "vips": 2,
+    "registered": 1,
+}
+
+
+def _get_nested(obj: Any, dotted_path: str) -> Any:
+    """Get a value from a nested object using dotted path notation."""
+    current = obj
+    for part in dotted_path.split("."):
+        if hasattr(current, part):
+            current = getattr(current, part)
+        else:
+            return None
+    return current
+
+
+async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> None:
+    """
+    Synchronize YAML configuration with the database.
+    
+    Behavior:
+    - Hub settings (SetupList): If the database already has a value for a
+      setting, the database value is preferred (YAML is ignored) unless
+      ``force=True``.
+    - User accounts: Users listed in ``config.users`` are registered in the
+      database if they don't already exist. If ``force=True``, existing
+      users have their passwords and classes updated.
+    
+    This function should be called after the database is initialized but
+    before the hub starts.
+    
+    Args:
+        config: The loaded VerlihubConfig
+        force: If True, overwrite database values with YAML values
+    """
+    try:
+        from sqlalchemy import select, text
+        from verlihub.models.database import get_database, get_async_session
+        from verlihub.models import SetupList, RegUser, UserClass
+    except ImportError as e:
+        logger.warning("Cannot apply config to DB (missing dependencies): %s", e)
+        return
+    
+    try:
+        db = get_database()
+    except RuntimeError:
+        logger.debug("Database not initialized, skipping config-to-DB sync")
+        return
+    
+    async with get_async_session() as session:
+        # --- Hub settings synchronization ---
+        applied = 0
+        skipped = 0
+        
+        for config_path, (file_key, var_key) in _HUB_SETTINGS_MAP.items():
+            value = _get_nested(config, config_path)
+            if value is None:
+                continue
+            
+            str_value = str(value)
+            
+            # Check if DB already has this setting
+            result = await session.exec(
+                select(SetupList).where(
+                    SetupList.file == file_key,
+                    SetupList.var == var_key,
+                )
+            )
+            existing = result.first()
+            
+            if existing is not None:
+                if force:
+                    existing.val = str_value
+                    session.add(existing)
+                    applied += 1
+                    logger.debug("Forced %s.%s = %s", file_key, var_key, str_value)
+                else:
+                    skipped += 1
+                    logger.debug(
+                        "Kept DB value for %s.%s = %s (YAML had %s)",
+                        file_key, var_key, existing.val, str_value,
+                    )
+            else:
+                entry = SetupList(file=file_key, var=var_key, val=str_value)
+                session.add(entry)
+                applied += 1
+                logger.debug("Set %s.%s = %s (new)", file_key, var_key, str_value)
+        
+        if applied or skipped:
+            logger.info(
+                "Hub settings: %d applied, %d kept from DB%s",
+                applied, skipped, " (--force)" if force else "",
+            )
+        
+        # --- User registration ---
+        users_created = 0
+        users_updated = 0
+        users_skipped = 0
+        
+        for class_name, user_class in _USER_CLASS_MAP.items():
+            user_list = getattr(config.users, class_name, [])
+            for user_entry in user_list:
+                if not user_entry.nick:
+                    continue
+                
+                # Check if user exists
+                result = await session.exec(
+                    select(RegUser).where(RegUser.nick == user_entry.nick)
+                )
+                existing_user = result.first()
+                
+                if existing_user is not None:
+                    if force:
+                        # Update password and class
+                        if user_entry.password:
+                            try:
+                                import bcrypt
+                                hashed = bcrypt.hashpw(
+                                    user_entry.password.encode("utf-8"),
+                                    bcrypt.gensalt(),
+                                ).decode("utf-8")
+                                existing_user.login_pwd = hashed
+                            except ImportError:
+                                existing_user.login_pwd = user_entry.password
+                        existing_user.user_class = user_class
+                        if user_entry.note:
+                            existing_user.note_op = user_entry.note
+                        session.add(existing_user)
+                        users_updated += 1
+                        logger.debug("Updated user %s (class %d)", user_entry.nick, user_class)
+                    else:
+                        users_skipped += 1
+                        logger.debug("User %s already exists, skipping", user_entry.nick)
+                else:
+                    # Create new user
+                    password = user_entry.password
+                    if password:
+                        try:
+                            import bcrypt
+                            password = bcrypt.hashpw(
+                                password.encode("utf-8"),
+                                bcrypt.gensalt(),
+                            ).decode("utf-8")
+                        except ImportError:
+                            pass  # Store plaintext if bcrypt not available
+                    
+                    new_user = RegUser(
+                        nick=user_entry.nick,
+                        login_pwd=password,
+                        user_class=user_class,
+                        reg_op="config",
+                        note_op=user_entry.note or "",
+                    )
+                    session.add(new_user)
+                    users_created += 1
+                    logger.info("Registered user %s (class %d)", user_entry.nick, user_class)
+        
+        if users_created or users_updated or users_skipped:
+            logger.info(
+                "Users: %d created, %d updated, %d skipped%s",
+                users_created, users_updated, users_skipped,
+                " (--force)" if force else "",
+            )
+        
+        await session.commit()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "verlihub"
-version = "0.1.0"
+version = "1.7.0.0"
 description = "Python FastAPI wrapper for Verlihub DC hub"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}

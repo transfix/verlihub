@@ -7,13 +7,36 @@
 #   verlihub-server -c config.yml
 #   verlihub-server -c config.yml --env production
 #
-# Priority: Command-line args > Environment vars > This file > Defaults
+# Priority: CLI args > Environment vars > This file > Database (unless --force)
+#
+# Database vs Config precedence:
+#   On startup, if the database already contains a value for a setting (e.g.
+#   hub.name was previously set via the web dashboard or !set command), the
+#   database value is kept and the YAML value is ignored. This prevents YAML
+#   from overwriting runtime changes made through the admin interface.
+#
+#   To force YAML values to overwrite the database, pass --force:
+#     verlihub-server -c config.yml --force
 
 # =============================================================================
 # Runtime Settings
 # =============================================================================
 
-# Mode: api (REST API only), hub (NMDC hub only), both (API + Hub)
+# Mode: api, hub, both
+#
+#   api  - REST API only. Provides user management (registration, login,
+#          password changes), ban management, invite codes, health checks,
+#          and the web dashboard — all backed by the database. Does NOT
+#          require the C++ NMDC core. Hub-dependent endpoints (online users,
+#          kick, broadcast, live stats, console) return HTTP 503.
+#          Use this mode when you want a standalone admin interface, or when
+#          deploying on a machine without the C++ libraries.
+#
+#   hub  - NMDC hub only. Runs the C++ hub core with Lua/Python plugin
+#          support. No REST API or web dashboard.
+#
+#   both - Full stack: REST API + NMDC hub running concurrently.
+#
 mode: api
 
 # Environment: development, qa, production
@@ -29,6 +52,11 @@ environment: development
 #   database:
 #     type: sqlite
 #     # path: /path/to/verlihub.db  # Optional: defaults to config_dir/verlihub.db
+#
+# SQLite in-memory (no disk writes, data lost on restart — useful for testing):
+#   database:
+#     type: sqlite
+#     path: ":memory:"
 #
 # MySQL:
 #   database:
@@ -105,13 +133,27 @@ hub:
   port: 4111
   listen_host: "0.0.0.0"
   
-  # If registering with hublist, full address clients use
+  # Hub list registration
+  # When host is set to a non-empty value (e.g. "hub.example.com:4111"), the hub
+  # will register itself on public hub lists so DC++ clients can discover it.
+  # Leave host empty to keep the hub unlisted / private.
   host: ""  # e.g., "hub.example.com:4111"
+  
+  # Hub list servers to register on (only used when host is non-empty).
+  # Defaults to the well-known public hub lists if not specified.
+  # hublist_servers:
+  #   - "hublist.te-home.net"
+  #   - "hublist.pwiam.com"
+  #   - "hublist.example.org"  # add your own
   
   # Hub info
   owner: ""
   topic: ""
   category: ""
+  
+  # Logo URL — displayed on the dashboard login screen and navbar.
+  # Leave empty to use the default Verlihub logo.
+  logo: ""  # e.g., "https://example.com/my-hub-logo.png"
   
   # Encoding for legacy clients
   encoding: "CP1252"
@@ -135,15 +177,50 @@ bots:
     description: "Operator chat"
 
 # =============================================================================
-# Plugin Configuration
+# User Accounts
 # =============================================================================
+# Pre-register user accounts at startup. These are inserted into the database
+# if they don't already exist. Existing accounts are NOT overwritten unless
+# --force is passed on the command line.
+#
+# User classes: master (10), admin (5), operator (3), vip (2), registered (1)
+users:
+  masters:
+    - nick: admin
+      password: changeme_admin_password
+      note: "Primary administrator"
+    # - nick: admin2
+    #   password: another_password
+
+  admins: []
+    # - nick: moderator1
+    #   password: mod_password
+    #   note: "Trusted moderator"
+
+  operators: []
+    # - nick: op1
+    #   password: op_password
+
+  vips: []
+    # - nick: vipuser
+    #   password: vip_password
+
+  registered: []
+    # - nick: regular1
+    #   password: user_password
+
+# =============================================================================
+# Plugin Configuration (generic C++ plugins)
+# =============================================================================
+# For plugins that are not Lua or Python scripts (e.g. plugman, or any custom
+# C++ shared library plugin). Lua and Python have their own sections below.
 plugins:
   # Plugin directory (leave empty for default)
   directory: ""
   
-  # Plugin list (for Python plugins)
+  # Generic plugin list
   list: []
-    # - name: example_plugin
+    # - name: my_custom_plugin
     #   enabled: true
     #   autoload: true
     #   config:
@@ -152,8 +229,11 @@ plugins:
 # =============================================================================
 # Lua Plugin & Scripts
 # =============================================================================
+# The Lua plugin (liblua_pi.so) enables loading Lua scripts into the hub.
+# Scripts extend the hub with features like chat management, security,
+# entertainment, etc.
 lua:
-  # Enable the Lua plugin (liblua_pi.so)
+  # Enable the Lua plugin
   enabled: true
   
   # Fetch scripts from GitHub repos on startup
@@ -161,15 +241,51 @@ lua:
     - repo: "Verlihub/ledokol"
       files:
         - "ledokol.lua"
+    # - repo: "username/my-lua-script"
+    #   files: []
   
   # Scripts to auto-load (via !luaload)
   autoload:
     - "ledokol.lua"
   
-  # Ledokol configuration (applied via !ledoset)
-  ledokol_config: {}
-    # antispam_class: 3
-    # calculator: 1
+  # Per-script configuration
+  # Each key is a script name, value is a map of settings applied after loading.
+  # For ledokol, settings are applied via !ledoset key value.
+  # For other scripts, the convention is !<scriptname>set key value.
+  script_config: {}
+    # ledokol:
+    #   antispam_class: 3
+    #   calculator: 1
+    #   chat_history: 1
+    #   chat_history_lines: 50
+    # my_other_script:
+    #   some_setting: some_value
+
+# =============================================================================
+# Python Plugin & Scripts
+# =============================================================================
+# The Python plugin (libpython_pi.so) enables loading Python scripts into
+# the hub. Works similarly to the Lua plugin but for Python scripts.
+python:
+  # Enable the Python plugin
+  enabled: true
+  
+  # Fetch scripts from GitHub repos on startup
+  github_scripts: []
+    # - repo: "username/my-python-hub-script"
+    #   files:
+    #     - "my_script.py"
+  
+  # Scripts to auto-load (via +pyload)
+  autoload: []
+    # - "my_script.py"
+  
+  # Per-script configuration
+  # Each key is a script name, value is a map of settings.
+  script_config: {}
+    # my_script:
+    #   api_key: "abc123"
+    #   max_retries: 3
 
 # =============================================================================
 # Logging Configuration

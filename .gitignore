@@ -8,6 +8,9 @@
 docker-compose.production.yml
 production.yml
 *.production.yml
+
+# SQLite databases
+*.db
 # Python
 __pycache__/
 *.py[cod]

@@ -24,7 +24,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "verlihub"
-version = "0.1.0"
+version = "1.7.0.0"
 description = "Python FastAPI wrapper for Verlihub DC hub with native C++ core"
 readme = "python/README.md"
 license = {text = "GPL-3.0-or-later"}

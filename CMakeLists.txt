@@ -459,7 +459,10 @@ endif()
 
 ADD_SUBDIRECTORY(src)
 
-if(NOT PYTHON_WHEEL_BUILD)
+if(PYTHON_WHEEL_BUILD)
+	# Wheel builds: only build plugins (lua + python + plugman), skip install-only assets
+	ADD_SUBDIRECTORY(plugins)
+else()
 	ADD_SUBDIRECTORY(plugins)
 	ADD_SUBDIRECTORY(share)
 	ADD_SUBDIRECTORY(scripts)

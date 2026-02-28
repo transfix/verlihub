@@ -64,7 +64,7 @@ class TestLuaConfig:
         assert cfg.enabled is True
         assert cfg.github_scripts == []
         assert cfg.autoload == []
-        assert cfg.ledokol_config == {}
+        assert cfg.script_config == {}
 
     def test_enabled_false(self):
         cfg = LuaConfig(enabled=False)
@@ -80,11 +80,11 @@ class TestLuaConfig:
         cfg = LuaConfig(autoload=["ledokol.lua", "another.lua"])
         assert cfg.autoload == ["ledokol.lua", "another.lua"]
 
-    def test_with_ledokol_config(self):
-        lconf = {"calculator": "1", "hubchat_history": "50", "anti_spam": "1"}
-        cfg = LuaConfig(ledokol_config=lconf)
-        assert cfg.ledokol_config["calculator"] == "1"
-        assert cfg.ledokol_config["anti_spam"] == "1"
+    def test_with_script_config(self):
+        sconf = {"ledokol": {"calculator": "1", "hubchat_history": "50", "anti_spam": "1"}}
+        cfg = LuaConfig(script_config=sconf)
+        assert cfg.script_config["ledokol"]["calculator"] == "1"
+        assert cfg.script_config["ledokol"]["anti_spam"] == "1"
 
     def test_full_construction(self):
         cfg = LuaConfig(
@@ -94,11 +94,11 @@ class TestLuaConfig:
                 LuaGithubScript(repo="some/other-scripts"),
             ],
             autoload=["ledokol.lua"],
-            ledokol_config={"calculator": "1"},
+            script_config={"ledokol": {"calculator": "1"}},
         )
         assert len(cfg.github_scripts) == 2
         assert cfg.autoload == ["ledokol.lua"]
-        assert cfg.ledokol_config == {"calculator": "1"}
+        assert cfg.script_config == {"ledokol": {"calculator": "1"}}
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +115,11 @@ class TestVerlihubConfigLua:
                 {"repo": "Verlihub/ledokol", "files": ["ledokol.lua"]},
             ],
             "autoload": ["ledokol.lua"],
-            "ledokol_config": {
-                "calculator": "1",
-                "hubchat_history": "50",
+            "script_config": {
+                "ledokol": {
+                    "calculator": "1",
+                    "hubchat_history": "50",
+                },
             },
         }
     }
@@ -129,14 +131,14 @@ class TestVerlihubConfigLua:
         assert cfg.lua.github_scripts[0].repo == "Verlihub/ledokol"
         assert cfg.lua.github_scripts[0].files == ["ledokol.lua"]
         assert cfg.lua.autoload == ["ledokol.lua"]
-        assert cfg.lua.ledokol_config["calculator"] == "1"
+        assert cfg.lua.script_config["ledokol"]["calculator"] == "1"
 
     def test_from_dict_without_lua_uses_defaults(self):
         cfg = VerlihubConfig.from_dict({})
         assert cfg.lua.enabled is True
         assert cfg.lua.github_scripts == []
         assert cfg.lua.autoload == []
-        assert cfg.lua.ledokol_config == {}
+        assert cfg.lua.script_config == {}
 
     def test_from_dict_lua_disabled(self):
         cfg = VerlihubConfig.from_dict({"lua": {"enabled": False}})
@@ -163,7 +165,7 @@ class TestVerlihubConfigLua:
         assert len(d["lua"]["github_scripts"]) == 1
         assert d["lua"]["github_scripts"][0]["repo"] == "Verlihub/ledokol"
         assert d["lua"]["autoload"] == ["ledokol.lua"]
-        assert d["lua"]["ledokol_config"]["calculator"] == "1"
+        assert d["lua"]["script_config"]["ledokol"]["calculator"] == "1"
 
     def test_to_dict_default_lua(self):
         cfg = VerlihubConfig()
@@ -171,7 +173,7 @@ class TestVerlihubConfigLua:
         assert d["lua"]["enabled"] is True
         assert d["lua"]["github_scripts"] == []
         assert d["lua"]["autoload"] == []
-        assert d["lua"]["ledokol_config"] == {}
+        assert d["lua"]["script_config"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +211,8 @@ lua:
                 assert len(cfg.lua.github_scripts) == 1
                 assert cfg.lua.github_scripts[0].repo == "Verlihub/ledokol"
                 assert cfg.lua.autoload == ["ledokol.lua"]
-                assert cfg.lua.ledokol_config["anti_spam"] == "1"
+                # Legacy ledokol_config key is auto-wrapped as script_config["ledokol"]
+                assert cfg.lua.script_config["ledokol"]["anti_spam"] == "1"
                 assert cfg.mode == "hub"
             finally:
                 os.unlink(f.name)
@@ -234,7 +237,8 @@ lua:
             try:
                 cfg = VerlihubConfig.from_yaml(f.name)
                 d = cfg.to_dict()
-                assert d["lua"]["ledokol_config"]["hubchat_history"] == "50"
+                # Legacy ledokol_config is emitted as script_config["ledokol"]
+                assert d["lua"]["script_config"]["ledokol"]["hubchat_history"] == "50"
             finally:
                 os.unlink(f.name)
 
@@ -301,11 +305,11 @@ class TestDashboardLuaIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Ledokol config specifics
+# Script config (per-script settings)
 # ---------------------------------------------------------------------------
 
-class TestLedokolConfig:
-    """Test ledokol-specific config values."""
+class TestScriptConfig:
+    """Test per-script config values using script_config."""
 
     LEDOKOL_SETTINGS = {
         "calculator": "1",
@@ -317,27 +321,38 @@ class TestLedokolConfig:
         "news_enable": "1",
     }
 
-    def test_ledokol_config_preserved(self):
-        cfg = LuaConfig(ledokol_config=self.LEDOKOL_SETTINGS)
-        assert len(cfg.ledokol_config) == 7
-        assert cfg.ledokol_config["anti_flood"] == "1"
+    def test_script_config_preserved(self):
+        cfg = LuaConfig(script_config={"ledokol": self.LEDOKOL_SETTINGS})
+        assert len(cfg.script_config["ledokol"]) == 7
+        assert cfg.script_config["ledokol"]["anti_flood"] == "1"
 
-    def test_ledokol_config_from_yaml_dict(self):
+    def test_legacy_ledokol_config_from_yaml_dict(self):
+        """Legacy ledokol_config key is auto-wrapped as script_config['ledokol']."""
         data = {
             "lua": {
                 "ledokol_config": self.LEDOKOL_SETTINGS,
             }
         }
         cfg = VerlihubConfig.from_dict(data)
-        assert cfg.lua.ledokol_config["hub_topic_enable"] == "1"
+        assert cfg.lua.script_config["ledokol"]["hub_topic_enable"] == "1"
 
-    def test_ledokol_config_roundtrip(self):
+    def test_script_config_roundtrip(self):
         cfg = VerlihubConfig.from_dict({
-            "lua": {"ledokol_config": self.LEDOKOL_SETTINGS}
+            "lua": {"script_config": {"ledokol": self.LEDOKOL_SETTINGS}}
         })
         d = cfg.to_dict()
-        assert d["lua"]["ledokol_config"] == self.LEDOKOL_SETTINGS
+        assert d["lua"]["script_config"]["ledokol"] == self.LEDOKOL_SETTINGS
 
-    def test_empty_ledokol_config(self):
+    def test_empty_script_config(self):
         cfg = VerlihubConfig.from_dict({"lua": {}})
-        assert cfg.lua.ledokol_config == {}
+        assert cfg.lua.script_config == {}
+
+    def test_multiple_scripts(self):
+        """script_config supports multiple scripts with separate settings."""
+        sconf = {
+            "ledokol": {"calculator": "1"},
+            "my_custom_script": {"debug": "true", "log_level": "2"},
+        }
+        cfg = LuaConfig(script_config=sconf)
+        assert cfg.script_config["ledokol"]["calculator"] == "1"
+        assert cfg.script_config["my_custom_script"]["debug"] == "true"

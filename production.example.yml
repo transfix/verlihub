@@ -42,9 +42,16 @@ hub:
   # Basic identity
   name: "My DC++ Hub"
   description: "Welcome to My Hub!"
-  # Full hub address for clients (used in hublist registrations)
-  # Example: "nmdcs://hub.example.com:411" or "dc://hub.example.com:4111"
+  # Full hub address for clients.
+  # When set to a non-empty value (e.g. "nmdcs://hub.example.com:411"), the hub
+  # registers itself on public hub lists so DC++ clients can discover it.
+  # Leave empty to keep the hub unlisted / private.
   host: ""
+  # Hub list servers to register on (only used when host is non-empty).
+  # Defaults to the well-known public hub lists if not specified.
+  # hublist_servers:
+  #   - "hublist.te-home.net"
+  #   - "hublist.pwiam.com"
   # Hub owner name (shown in hub info)
   owner: ""
   # Hub topic/tagline (can also be set with !topic command)
@@ -55,6 +62,9 @@ hub:
   # Branding URLs (shown in some clients)
   icon_url: ""      # Small icon (favicon style)
   logo_url: ""      # Larger logo image
+  # Logo for the web dashboard (login screen & navbar).
+  # Leave empty to use the default Verlihub logo.
+  logo: ""          # e.g., "https://example.com/my-hub-logo.png"
   
   # Character encoding for legacy clients (default: CP1252)
   # Common options: CP1252, UTF-8, ISO-8859-1
@@ -343,16 +353,46 @@ lua:
     - "ledokol.lua"
     # - "another_script.lua"
   
-  # Ledokol configuration (applied via !ledoset after loading)
+  # Per-script configuration
+  # Each key is a script name, value is a map of settings applied after loading.
+  # For ledokol, settings are applied via !ledoset key value.
   # See https://github.com/Verlihub/ledokol/wiki/Ledokol-Configuration
-  ledokol_config: {}
-    # antispam_class: 3
-    # calculator: 1
-    # chat_history: 1
-    # chat_history_lines: 50
-    # news: 1
-    # releases: 1
-    # friendly_hubs: 1
+  script_config: {}
+    # ledokol:
+    #   antispam_class: 3
+    #   calculator: 1
+    #   chat_history: 1
+    #   chat_history_lines: 50
+    #   news: 1
+    #   releases: 1
+    #   friendly_hubs: 1
+    # my_other_lua_script:
+    #   some_setting: some_value
+
+# =============================================================================
+# Python Plugin & Scripts
+# =============================================================================
+# The Python plugin (libpython_pi.so) enables loading Python scripts into
+# the hub. Works similarly to the Lua plugin but for Python scripts.
+python:
+  # Enable the Python plugin
+  enabled: true
+  
+  # Fetch scripts from GitHub repos on startup
+  github_scripts: []
+    # - repo: "username/my-python-hub-script"
+    #   files:
+    #     - "my_script.py"
+  
+  # Scripts to auto-load (via +pyload)
+  autoload: []
+    # - "my_script.py"
+  
+  # Per-script configuration
+  script_config: {}
+    # my_script:
+    #   api_key: "abc123"
+    #   max_retries: 3
 
 # Python Plugin Mode
 #   single: Single interpreter with dispatcher (supports FastAPI, threading)

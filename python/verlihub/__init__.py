@@ -9,7 +9,7 @@
 # Copyright (C) 2006-2026 Verlihub Team, info at verlihub dot net
 # Licensed under GPL v3
 
-__version__ = "0.1.0"
+__version__ = "1.7.0.0"
 
 # Import configuration module
 from verlihub.config import VerlihubConfig, load_config

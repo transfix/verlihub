@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ hub_name }} Dashboard{% endblock %}</title>
+    <title>{% block title %}{{ hub_name }}{% endblock %}</title>
     
     <!-- Bulma CSS from CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
@@ -16,9 +16,39 @@
         :root {
             --vh-primary: #00d1b2;
             --vh-primary-dark: #00b89c;
+            --vh-primary-light: #ebfffc;
+            --vh-info: #3298dc;
+            --vh-info-dark: #2793da;
+            --vh-success: #48c774;
+            --vh-success-dark: #3ec46d;
+            --vh-warning: #ffdd57;
+            --vh-warning-dark: #ffd83d;
+            --vh-danger: #f14668;
+            --vh-danger-dark: #ef2e55;
             --vh-dark-bg: #1a1a2e;
             --vh-dark-card: #16213e;
             --vh-dark-text: #e4e4e4;
+            --vh-dark-border: #2a2a4a;
+        }
+        
+        /* Full-height layout */
+        html, body {
+            min-height: 100vh;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        
+        .section.main-section {
+            flex: 1;
+        }
+        
+        .footer {
+            padding: 1.5rem;
+            flex-shrink: 0;
         }
         
         /* Dark theme */
@@ -71,8 +101,96 @@
         
         [data-theme="dark"] .footer {
             background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
         }
         
+        [data-theme="dark"] .section {
+            background-color: var(--vh-dark-bg);
+        }
+
+        /* Button colors — consistent in both themes */
+        .button.is-primary {
+            background-color: var(--vh-primary);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-primary:hover, .button.is-primary:focus {
+            background-color: var(--vh-primary-dark);
+        }
+        .button.is-info {
+            background-color: var(--vh-info);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-info:hover, .button.is-info:focus {
+            background-color: var(--vh-info-dark);
+        }
+        .button.is-success {
+            background-color: var(--vh-success);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-success:hover, .button.is-success:focus {
+            background-color: var(--vh-success-dark);
+        }
+        .button.is-warning {
+            background-color: var(--vh-warning);
+            border-color: transparent;
+            color: rgba(0,0,0,0.7);
+        }
+        .button.is-warning:hover, .button.is-warning:focus {
+            background-color: var(--vh-warning-dark);
+        }
+        .button.is-danger {
+            background-color: var(--vh-danger);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-danger:hover, .button.is-danger:focus {
+            background-color: var(--vh-danger-dark);
+        }
+
+        [data-theme="dark"] .button.is-light {
+            background-color: #2a2a4a;
+            border-color: var(--vh-dark-border);
+            color: var(--vh-dark-text);
+        }
+        [data-theme="dark"] .button.is-light:hover {
+            background-color: #353560;
+        }
+        [data-theme="dark"] .button:not(.is-primary):not(.is-info):not(.is-success):not(.is-warning):not(.is-danger):not(.is-light):not(.is-link) {
+            background-color: #2a2a4a;
+            border-color: var(--vh-dark-border);
+            color: var(--vh-dark-text);
+        }
+        [data-theme="dark"] .button:not(.is-primary):not(.is-info):not(.is-success):not(.is-warning):not(.is-danger):not(.is-light):not(.is-link):hover {
+            background-color: #353560;
+        }
+        [data-theme="dark"] .button.is-link.is-light {
+            background-color: rgba(50, 152, 220, 0.15);
+            color: #6fb8ef;
+        }
+        [data-theme="dark"] .button.is-info.is-light {
+            background-color: rgba(50, 152, 220, 0.15);
+            color: #6fb8ef;
+        }
+        [data-theme="dark"] .button.is-warning.is-light {
+            background-color: rgba(255, 221, 87, 0.15);
+            color: #ffe680;
+        }
+        [data-theme="dark"] .button.is-danger.is-light {
+            background-color: rgba(241, 70, 104, 0.15);
+            color: #f77e96;
+        }
+        [data-theme="dark"] .button.is-success.is-light {
+            background-color: rgba(72, 199, 116, 0.15);
+            color: #7ede9e;
+        }
+        [data-theme="dark"] .button.is-primary.is-light {
+            background-color: rgba(0, 209, 178, 0.15);
+            color: #3ee7d0;
+        }
+
         /* Common styles */
         .hero-body {
             padding: 1.5rem;
@@ -169,6 +287,26 @@
         .user-table tr.is-online {
             background-color: rgba(72, 199, 116, 0.1);
         }
+
+        /* Navbar hub info */
+        .navbar-hub-info {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            line-height: 1.2;
+        }
+        .navbar-hub-info .hub-name {
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .navbar-hub-info .hub-meta {
+            font-size: 0.7rem;
+            opacity: 0.75;
+            max-width: 280px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
     </style>
     
     {% block extra_head %}{% endblock %}
@@ -178,10 +316,17 @@
     <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
         <div class="navbar-brand">
             <a class="navbar-item" href="/dashboard/">
-                <img src="https://avatars1.githubusercontent.com/u/1856420?v=3&s=300"
-                     alt="Verlihub" 
+                <img src="{{ hub_logo }}"
+                     alt="{{ hub_name }}" 
                      style="height: 28px; width: 28px; border-radius: 50%; margin-right: 0.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.15);">
-                <strong>{{ hub_name }}</strong>
+                <div class="navbar-hub-info">
+                    <span class="hub-name">{{ hub_name }}</span>
+                    {% if hub_topic %}
+                    <span class="hub-meta">{{ hub_topic }}</span>
+                    {% elif hub_description %}
+                    <span class="hub-meta">{{ hub_description }}</span>
+                    {% endif %}
+                </div>
             </a>
             
             <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarMain">
@@ -263,7 +408,7 @@
     <div id="notification-container" class="notification-container"></div>
     
     <!-- Main content -->
-    <section class="section" style="margin-top: 52px;">
+    <section class="section main-section" style="margin-top: 52px;">
         {% block content %}{% endblock %}
     </section>
     
@@ -271,7 +416,7 @@
     <footer class="footer">
         <div class="content has-text-centered">
             <p>
-                <strong>Verlihub Dashboard</strong> v{{ version }}
+                <strong>Verlihub</strong> v{{ version }}
                 &copy; {{ current_year }}
             </p>
         </div>

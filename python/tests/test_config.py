@@ -44,6 +44,10 @@ class TestDatabaseConfigGetUrl:
         db = DatabaseConfig(type="sqlite")
         assert db.get_url() == "sqlite+aiosqlite:///:memory:"
 
+    def test_sqlite_explicit_memory_path(self):
+        db = DatabaseConfig(type="sqlite", path=":memory:")
+        assert db.get_url() == "sqlite+aiosqlite:///:memory:"
+
     def test_sqlite_with_path(self):
         db = DatabaseConfig(type="sqlite", path="/var/lib/vh/test.db")
         assert db.get_url() == "sqlite+aiosqlite:////var/lib/vh/test.db"
@@ -224,6 +228,40 @@ class TestVerlihubConfigFromDict:
         assert cfg.hub.port == 5000
         assert cfg.hub.max_users == 500
 
+    def test_hub_description_and_topic(self):
+        cfg = VerlihubConfig.from_dict({
+            "hub": {"description": "Best hub", "topic": "Files"}
+        })
+        assert cfg.hub.description == "Best hub"
+        assert cfg.hub.topic == "Files"
+
+    def test_hub_logo(self):
+        cfg = VerlihubConfig.from_dict({
+            "hub": {"logo": "https://example.com/logo.png"}
+        })
+        assert cfg.hub.logo == "https://example.com/logo.png"
+
+    def test_hub_logo_default_empty(self):
+        cfg = VerlihubConfig.from_dict({})
+        assert cfg.hub.logo == ""
+
+    def test_hub_hublist_servers(self):
+        cfg = VerlihubConfig.from_dict({
+            "hub": {"hublist_servers": ["hl1.example.com", "hl2.example.com"]}
+        })
+        assert cfg.hub.hublist_servers == ["hl1.example.com", "hl2.example.com"]
+
+    def test_hub_hublist_servers_defaults(self):
+        cfg = VerlihubConfig.from_dict({})
+        assert "hublist.te-home.net" in cfg.hub.hublist_servers
+        assert "hublist.pwiam.com" in cfg.hub.hublist_servers
+
+    def test_hub_host_for_hublist_registration(self):
+        cfg = VerlihubConfig.from_dict({
+            "hub": {"host": "hub.example.com:4111"}
+        })
+        assert cfg.hub.host == "hub.example.com:4111"
+
     def test_bots_section(self):
         cfg = VerlihubConfig.from_dict({
             "bots": {
@@ -260,14 +298,14 @@ class TestVerlihubConfigFromDict:
                     {"repo": "Verlihub/ledokol", "files": ["reg.lua"]},
                 ],
                 "autoload": ["reg.lua", "stats.lua"],
-                "ledokol_config": {"motd": True},
+                "script_config": {"ledokol": {"motd": True}},
             }
         })
         assert cfg.lua.enabled is True
         assert len(cfg.lua.github_scripts) == 1
         assert cfg.lua.github_scripts[0].repo == "Verlihub/ledokol"
         assert cfg.lua.autoload == ["reg.lua", "stats.lua"]
-        assert cfg.lua.ledokol_config == {"motd": True}
+        assert cfg.lua.script_config == {"ledokol": {"motd": True}}
 
     def test_logging_section(self):
         cfg = VerlihubConfig.from_dict({
@@ -347,6 +385,17 @@ class TestVerlihubConfigFromEnv:
         assert cfg.hub.port == 5000
         assert cfg.hub.max_users == 500
 
+    def test_from_env_hub_description_topic_logo(self, monkeypatch):
+        monkeypatch.setenv("VH_HUB_DESCRIPTION", "Env description")
+        monkeypatch.setenv("VH_HUB_TOPIC", "Env topic")
+        monkeypatch.setenv("VH_HUB_LOGO", "https://env.com/logo.png")
+        monkeypatch.setenv("VH_HUB_HOST", "env.example.com:411")
+        cfg = VerlihubConfig.from_env()
+        assert cfg.hub.description == "Env description"
+        assert cfg.hub.topic == "Env topic"
+        assert cfg.hub.logo == "https://env.com/logo.png"
+        assert cfg.hub.host == "env.example.com:411"
+
     def test_from_env_mode(self, monkeypatch):
         monkeypatch.setenv("VH_MODE", "both")
         monkeypatch.setenv("VH_ENV", "production")
@@ -422,6 +471,27 @@ class TestVerlihubConfigToDict:
         assert "logging" in d
         assert "lua" in d
 
+    def test_hub_fields_in_to_dict(self):
+        cfg = VerlihubConfig(
+            hub=HubConfig(
+                name="RoundTrip",
+                description="Desc",
+                host="rt.example.com:411",
+                topic="RT Topic",
+                logo="https://rt.example.com/logo.png",
+                max_users=200,
+                hublist_servers=["hl.custom.org"],
+            ),
+        )
+        d = cfg.to_dict()
+        assert d["hub"]["name"] == "RoundTrip"
+        assert d["hub"]["description"] == "Desc"
+        assert d["hub"]["host"] == "rt.example.com:411"
+        assert d["hub"]["topic"] == "RT Topic"
+        assert d["hub"]["logo"] == "https://rt.example.com/logo.png"
+        assert d["hub"]["max_users"] == 200
+        assert d["hub"]["hublist_servers"] == ["hl.custom.org"]
+
     def test_password_not_in_output(self):
         cfg = VerlihubConfig(
             database=DatabaseConfig(password="secret123"),
@@ -436,13 +506,13 @@ class TestVerlihubConfigToDict:
             lua=LuaConfig(
                 github_scripts=[LuaGithubScript(repo="A/B", files=["x.lua"])],
                 autoload=["x.lua"],
-                ledokol_config={"motd": True},
+                script_config={"ledokol": {"motd": True}},
             ),
         )
         d = cfg.to_dict()
         assert d["lua"]["github_scripts"] == [{"repo": "A/B", "files": ["x.lua"]}]
         assert d["lua"]["autoload"] == ["x.lua"]
-        assert d["lua"]["ledokol_config"] == {"motd": True}
+        assert d["lua"]["script_config"] == {"ledokol": {"motd": True}}
 
 
 # ======================================================================
@@ -462,6 +532,25 @@ class TestApplyToEnv:
         assert os.environ["VH_DB_HOST"] == "h1"
         assert os.environ["VH_API_HOST"] == "0.0.0.0"
         assert os.environ["VH_API_PORT"] == "9090"
+
+    def test_sets_hub_env_vars(self, monkeypatch):
+        cfg = VerlihubConfig(
+            hub=HubConfig(
+                name="TestHub",
+                description="A test hub",
+                topic="Testing",
+                logo="https://example.com/logo.png",
+                host="hub.example.com:4111",
+                port=4111,
+            ),
+        )
+        cfg.apply_to_env()
+        assert os.environ["VH_HUB_NAME"] == "TestHub"
+        assert os.environ["VH_HUB_DESCRIPTION"] == "A test hub"
+        assert os.environ["VH_HUB_TOPIC"] == "Testing"
+        assert os.environ["VH_HUB_LOGO"] == "https://example.com/logo.png"
+        assert os.environ["VH_HUB_HOST"] == "hub.example.com:4111"
+        assert os.environ["VH_HUB_PORT"] == "4111"
 
 
 # ======================================================================
@@ -503,6 +592,38 @@ hub:
         assert cfg.database.path == "/tmp/test.db"
         assert cfg.api.port == 9999
         assert cfg.hub.name == "YamlHub"
+
+    def test_from_yaml_hub_logo_and_hublist(self, tmp_path):
+        yaml_content = """
+hub:
+  name: LogoHub
+  logo: "https://cdn.example.com/logo.png"
+  host: "hub.example.com:4111"
+  hublist_servers:
+    - "hl1.example.com"
+    - "hl2.example.com"
+"""
+        p = tmp_path / "config.yml"
+        p.write_text(yaml_content)
+
+        cfg = VerlihubConfig.from_yaml(str(p))
+        assert cfg.hub.name == "LogoHub"
+        assert cfg.hub.logo == "https://cdn.example.com/logo.png"
+        assert cfg.hub.host == "hub.example.com:4111"
+        assert cfg.hub.hublist_servers == ["hl1.example.com", "hl2.example.com"]
+
+    def test_from_yaml_sqlite_memory(self, tmp_path):
+        yaml_content = """
+database:
+  type: sqlite
+  path: ":memory:"
+"""
+        p = tmp_path / "config.yml"
+        p.write_text(yaml_content)
+
+        cfg = VerlihubConfig.from_yaml(str(p))
+        assert cfg.database.path == ":memory:"
+        assert cfg.database.get_url() == "sqlite+aiosqlite:///:memory:"
 
     def test_from_yaml_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):

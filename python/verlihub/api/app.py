@@ -111,7 +111,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Thin Verlihub",
         description="REST API for Verlihub DC hub management",
-        version="0.1.0",
+        version="1.7.0.0",
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
@@ -146,6 +146,13 @@ def create_app() -> FastAPI:
             "hub_initialized": ctx is not None,
             "hub_running": ctx.is_running if ctx else False,
         }
+    
+    # Root redirect to dashboard
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        """Redirect root to dashboard."""
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/dashboard/")
     
     return app
 

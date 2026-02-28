@@ -80,17 +80,18 @@ lua:
         - ledokol.lua
   autoload:
     - ledokol.lua
-  ledokol_config:
-    calculator: "1"
-    hubchat_history: "50"
-    anti_spam: "1"
+  script_config:
+    ledokol:
+      calculator: "1"
+      hubchat_history: "50"
+      anti_spam: "1"
 ```
 
 When `lua.enabled` is `true`:
   1. Scripts listed in `github_scripts` are cloned from GitHub on startup
   2. The Lua plugin (`liblua_pi.so`) is registered and loaded
   3. Scripts in `autoload` are loaded via `!luaload` after the hub starts
-  4. Settings in `ledokol_config` are applied via `!ledoset`
+  4. Per-script settings in `script_config` are applied via `!ledoset` (for ledokol) or equivalent commands
 
 ## Dashboard Integration
 

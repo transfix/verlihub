@@ -259,6 +259,7 @@ class HubContext:
     def request_shutdown(self, signal_code: int = 0) -> None:
         """Request hub shutdown (can be called from signal handler)."""
         self._cpp.RequestShutdown(signal_code)
+        self._shutdown_event.set()
     
     async def wait_for_shutdown(self) -> None:
         """Wait asynchronously for hub shutdown."""
@@ -333,21 +334,37 @@ async def create_hub(config_dir: str | Path) -> AsyncGenerator[HubContext, None]
 
 def setup_signal_handlers(ctx: HubContext) -> None:
     """
-    Set up Unix signal handlers to gracefully shutdown the hub.
-    
-    Handles SIGTERM, SIGINT, and SIGHUP.
+    Set up signal handlers to gracefully shutdown the hub.
+
+    Uses :meth:`asyncio.loop.add_signal_handler` when an event loop is
+    running so the callback is invoked safely inside the loop (important
+    because :class:`asyncio.Event.set` is *not* signal-safe).  Falls back
+    to the classic :func:`signal.signal` API otherwise.
+
+    Handles SIGTERM, SIGINT and SIGHUP.
     """
-    def shutdown_handler(signum: int, frame: Any) -> None:
-        logger.info("Received signal %d, shutting down...", signum)
-        ctx.request_shutdown(signum)
-    
-    def reload_handler(signum: int, frame: Any) -> None:
-        logger.info("Received SIGHUP, reloading configuration...")
-        ctx.cpp.RequestReload()
-    
-    signal.signal(signal.SIGTERM, shutdown_handler)
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGHUP, reload_handler)
+    loop: asyncio.AbstractEventLoop | None = None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+
+    if loop is not None:
+        # asyncio-safe: the callback runs inside the event loop.
+        loop.add_signal_handler(signal.SIGINT, ctx.request_shutdown, signal.SIGINT)
+        loop.add_signal_handler(signal.SIGTERM, ctx.request_shutdown, signal.SIGTERM)
+        loop.add_signal_handler(
+            signal.SIGHUP, lambda: ctx.cpp.RequestReload()
+        )
+    else:
+        # Fallback for non-asyncio callers.
+        def _shutdown(signum: int, _frame: Any) -> None:
+            logger.info("Received signal %d, shutting down...", signum)
+            ctx.request_shutdown(signum)
+
+        signal.signal(signal.SIGTERM, _shutdown)
+        signal.signal(signal.SIGINT, _shutdown)
+        signal.signal(signal.SIGHUP, lambda _s, _f: ctx.cpp.RequestReload())
 
 
 async def run_hub_server(

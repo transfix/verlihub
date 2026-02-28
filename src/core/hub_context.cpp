@@ -533,6 +533,15 @@ void HubContext::TimerThreadFunc(std::stop_token stop_token) {
             break;
         }
         
+        // If Python (or a signal) called RequestShutdown(), trigger Stop()
+        // from the timer thread so the server loop is interrupted.
+        if (HasPendingShutdown()) {
+            Log(1, "Pending shutdown detected — stopping hub");
+            // Stop() is safe to call from any thread.
+            Stop();
+            break;
+        }
+        
         // Handle pending reload
         if (HasPendingReload()) {
             Log(1, "Processing pending reload...");

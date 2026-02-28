@@ -355,15 +355,12 @@ def main() -> None:
 ╚════════════════════════════════════════════════════════════════╝
 """)
     
-    # Handle shutdown signals
-    def signal_handler(sig, frame):
-        logger.info("Received shutdown signal, exiting...")
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Run based on mode
+    # Run based on mode.
+    # Signal handling is mode-specific:
+    #   api  – uvicorn installs its own SIGINT/SIGTERM handlers.
+    #   hub  – setup_signal_handlers() uses asyncio.loop.add_signal_handler
+    #          so Ctrl-C sets the shutdown event and the coroutine exits.
+    #   both – same as hub (API thread is daemon and dies with the process).
     mode = config.mode
     
     if mode == "api":

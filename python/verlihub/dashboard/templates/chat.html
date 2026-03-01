@@ -311,7 +311,8 @@
             if (!data.success) {
                 appendSystem('Failed to send message: ' + (data.detail || 'unknown error'));
             }
-            // The actual chat message will arrive back via WebSocket
+            // The WebSocket broadcast will show this message to everyone
+            // including us, so no need for optimistic append here.
         } catch (e) {
             appendSystem('Failed to send: ' + e.message);
         }

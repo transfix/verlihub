@@ -257,6 +257,18 @@ async def send_chat_message(
     except AttributeError:
         # Fallback if send_chat_as not available
         success = ctx.send_to_all(f"<{user.nick}> {request.message}")
+
+    if success:
+        # Broadcast via WebSocket so all dashboard users see it.
+        # The C++ SendChatToAll only sends to DC clients, it does NOT
+        # trigger the OnChatMessage callback, so we must emit manually.
+        from verlihub.dashboard.websocket import broadcast_hub_event
+        await broadcast_hub_event("chat", {
+            "nick": user.nick,
+            "message": request.message,
+            "user_class": user.user_class,
+        })
+
     return {"success": success}
 
 

@@ -71,7 +71,7 @@
                     <th>Class</th>
                     <th>Share</th>
                     <th>Client</th>
-                    <th>Connected</th>
+                    <th>Online For</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -82,8 +82,8 @@
                     <td><code>{{ u.ip or '' }}</code></td>
                     <td><span class="tag">{{ u.user_class }}</span></td>
                     <td>{{ u.share or 0 }}</td>
-                    <td>{{ u.client or '' }}</td>
-                    <td>{{ u.status or '' }}</td>
+                    <td>{{ u.get('client', '') or u.get('tag', '') or '' }}</td>
+                    <td>{% set lt = u.get('login_time', 0) or 0 %}{% if lt >= 3600 %}{{ (lt // 3600) }}h {{ ((lt % 3600) // 60) }}m{% elif lt >= 60 %}{{ (lt // 60) }}m{% elif lt > 0 %}{{ lt }}s{% else %}-{% endif %}</td>
                     <td>
                         <div class="buttons are-small">
                             <button class="button is-info is-light" title="Info">

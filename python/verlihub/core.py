@@ -319,6 +319,7 @@ class HubContext:
                     "tag": snap.tag,
                     "speed": snap.speed,
                     "email": snap.email,
+                    "login_time": getattr(snap, 'login_time', 0),
                     "status": "",
                 })
             return user_list
@@ -350,6 +351,7 @@ class HubContext:
                     "tag": snap.tag,
                     "speed": snap.speed,
                     "email": snap.email,
+                    "login_time": getattr(snap, 'login_time', 0),
                     "status": "",
                 }
         except (AttributeError, TypeError):

@@ -220,7 +220,7 @@
                         <strong>${escapeHtml(user.nick)}</strong>
                     </td>
                     <td>
-                        <span class="tag ${getClassColor(user.class)}">${getClassName(user.class)}</span>
+                        <span class="tag ${getClassColor(user.user_class)}">${getClassName(user.user_class)}</span>
                     </td>
                     <td>${formatBytes(user.share || 0)}</td>
                     <td>
@@ -344,7 +344,7 @@
     
     function getClassName(classNum) {
         const classes = {
-            0: 'Guest',
+            0: 'User',
             1: 'Registered',
             2: 'VIP',
             3: 'Operator',
@@ -352,7 +352,7 @@
             5: 'Admin',
             10: 'Master',
         };
-        return classes[classNum] || `Class ${classNum}`;
+        return classes[classNum] ?? 'User';
     }
     
     function getClassColor(classNum) {

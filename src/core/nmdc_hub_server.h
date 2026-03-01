@@ -46,6 +46,7 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <chrono>
 
 namespace nVerliHub {
 
@@ -108,6 +109,7 @@ struct NMDCClient {
     int user_class{0};       ///< 0=guest, 1=reg, 3=vip, 5=op, 10=admin
     std::string lock;        ///< Lock string sent to this client
     int login_attempts{0};   ///< Password attempt counter
+    std::chrono::steady_clock::time_point connect_time; ///< When the client connected
 };
 
 // ============================================================================

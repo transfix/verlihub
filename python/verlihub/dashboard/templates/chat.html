@@ -205,8 +205,8 @@
     }
 
     function getClassName(cls) {
-        const names = {0:'Guest',1:'Reg',2:'VIP',3:'Op',4:'Cheef',5:'Admin',10:'Master'};
-        return names[cls] || `C${cls}`;
+        const names = {0:'User',1:'Reg',2:'VIP',3:'Op',4:'Cheef',5:'Admin',10:'Master'};
+        return names[cls] ?? 'User';
     }
 
     function getClassColor(cls) {

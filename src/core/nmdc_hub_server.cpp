@@ -22,11 +22,30 @@
 #include "hub_context.h"  // For IHubEventCallback
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 
 namespace nVerliHub {
 
 using namespace nSocket;
 using namespace nEnums;
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Extract DC client name from NMDC tag like "<EiskaltDC++ V:2.4.2,M:A,...>"
+static std::string ExtractClientName(const std::string& tag) {
+    if (tag.size() < 3 || tag.front() != '<') return {};
+    // Find " V:" which separates name from version
+    auto pos = tag.find(" V:");
+    if (pos == std::string::npos) {
+        // No version info — try up to closing >
+        pos = tag.find('>');
+        if (pos == std::string::npos) return {};
+        return tag.substr(1, pos - 1);
+    }
+    return tag.substr(1, pos - 1);  // skip leading '<'
+}
 
 // =============================================================================
 // Constructor / Destructor
@@ -101,6 +120,7 @@ int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
     client.ip = ip;
     client.lock = NMDCProtocol::GenerateLock();
     client.state = NMDCConnState::WaitingKey;
+    client.connect_time = std::chrono::steady_clock::now();
 
     // Send $Lock
     std::string lock_msg = NMDCProtocol::MakeLock(client.lock);
@@ -642,6 +662,9 @@ bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) 
     out.tag         = c.myinfo.tag;
     out.speed       = c.myinfo.speed;
     out.email       = c.myinfo.email;
+    out.client_name = ExtractClientName(c.myinfo.tag);
+    out.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - c.connect_time).count();
     return true;
 }
 
@@ -660,6 +683,9 @@ std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
         s.tag         = c.myinfo.tag;
         s.speed       = c.myinfo.speed;
         s.email       = c.myinfo.email;
+        s.client_name = ExtractClientName(c.myinfo.tag);
+        s.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - c.connect_time).count();
         result.push_back(std::move(s));
     }
     return result;

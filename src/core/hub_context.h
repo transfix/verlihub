@@ -118,6 +118,7 @@ struct UserInfoSnapshot {
     std::string email;
     std::string country;     ///< Two-letter ISO country code (GeoIP)
     std::string client_name; ///< DC client software extracted from tag
+    long login_time{0};      ///< Seconds since connection
 };
 
 /**

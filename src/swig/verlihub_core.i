@@ -541,6 +541,7 @@ Returns:
                 'tag': snap.tag,
                 'speed': snap.speed,
                 'email': snap.email,
+                'login_time': snap.login_time,
                 'status': '',
             }
         return None
@@ -574,6 +575,7 @@ Returns:
                 'tag': snap.tag,
                 'speed': snap.speed,
                 'email': snap.email,
+                'login_time': snap.login_time,
                 'status': '',
             })
         return result

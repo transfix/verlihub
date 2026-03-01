@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from verlihub.api.auth import decode_token, TokenData
 from verlihub.api.deps import get_hub_context
+from verlihub.config import get_config_optional
 from verlihub.models import RegUser
 
 # Default Verlihub logo (GitHub avatar)
@@ -58,11 +59,12 @@ def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict
     """Get base template context with common variables."""
     ctx = get_hub_context()
 
-    # Hub info: prefer live C++ context, fall back to env vars (set by YAML config)
-    hub_name = ctx.hub_name if ctx else os.getenv("VH_HUB_NAME", "Verlihub")
-    hub_description = os.getenv("VH_HUB_DESCRIPTION", "")
-    hub_topic = ctx.hub_topic if ctx else os.getenv("VH_HUB_TOPIC", "")
-    hub_logo = os.getenv("VH_HUB_LOGO", "")
+    # Hub info: prefer live C++ context, fall back to config singleton
+    cfg = get_config_optional()
+    hub_name = ctx.hub_name if ctx else (cfg.hub.name if cfg else "Verlihub")
+    hub_description = cfg.hub.description if cfg else ""
+    hub_topic = ctx.hub_topic if ctx else (cfg.hub.topic if cfg else "")
+    hub_logo = cfg.hub.logo if cfg else ""
 
     return {
         "request": request,
@@ -205,9 +207,9 @@ async def register_page(
     invite: Optional[str] = None,
 ):
     """Public registration page."""
-    import os
-    registration_enabled = os.getenv("VH_REGISTRATION_ENABLED", "true").lower() in ("1", "true", "yes")
-    require_invite = os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "false").lower() in ("1", "true", "yes")
+    cfg = get_config_optional()
+    registration_enabled = cfg.api.registration_enabled if cfg else True
+    require_invite = cfg.api.registration_require_invite if cfg else False
     
     context = get_base_context(request)
     context["error"] = error
@@ -221,10 +223,10 @@ async def register_page(
 @dashboard_router.post("/register")
 async def register_submit(request: Request):
     """Handle registration form submission."""
-    import os
     import re
-    registration_enabled = os.getenv("VH_REGISTRATION_ENABLED", "true").lower() in ("1", "true", "yes")
-    require_invite = os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "false").lower() in ("1", "true", "yes")
+    cfg = get_config_optional()
+    registration_enabled = cfg.api.registration_enabled if cfg else True
+    require_invite = cfg.api.registration_require_invite if cfg else False
     
     if not registration_enabled:
         return RedirectResponse(
@@ -285,7 +287,7 @@ async def register_submit(request: Request):
             
             # Handle invite code
             from verlihub.models import UserClass
-            default_class = int(os.getenv("VH_REGISTRATION_DEFAULT_CLASS", str(UserClass.REGISTERED)))
+            default_class = cfg.api.registration_default_class if cfg else UserClass.REGISTERED
             user_class = default_class
             invite = None
             
@@ -523,16 +525,16 @@ async def logs_page(
     return templates.TemplateResponse(request, "logs.html", context)
 
 
-@dashboard_router.get("/console", response_class=HTMLResponse)
-async def console_page(
+@dashboard_router.get("/chat", response_class=HTMLResponse)
+async def chat_page(
     request: Request,
     user: Optional[TokenData] = Depends(get_user_from_cookie),
     access_token: Optional[str] = Cookie(default=None),
 ):
-    """Hub command console page."""
+    """Hub chat page — real-time chat with hub command support."""
     if user is None:
         return RedirectResponse(
-            url="/dashboard/login?next_url=/dashboard/console",
+            url="/dashboard/login?next_url=/dashboard/chat",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
@@ -542,9 +544,9 @@ async def console_page(
     # Pass the token for API calls
     token = access_token[7:] if access_token and access_token.startswith("Bearer ") else access_token
     context["auth_token"] = token or ""
-    context["can_edit"] = user.user_class >= 3  # Operator+ can use console
+    context["user_count"] = ctx.user_count if ctx else 0
     
-    return templates.TemplateResponse(request, "console.html", context)
+    return templates.TemplateResponse(request, "chat.html", context)
 
 
 @dashboard_router.get("/plugins", response_class=HTMLResponse)
@@ -1425,10 +1427,110 @@ SPA_DASHBOARD_HTML = '''<!DOCTYPE html>
         });
 
         function startPolling() {
+            // Polling replaced by WebSocket — kept as fallback if WS fails
             if (pollInterval) clearInterval(pollInterval);
             pollInterval = setInterval(() => {
-                fetchOpsAndBots().then(() => loadTab(currentTab));
-            }, 30000);
+                if (!spaWsConnected) {
+                    fetchOpsAndBots().then(() => loadTab(currentTab));
+                }
+            }, 60000); // Very slow fallback only if WS is down
+        }
+
+        // =================================================================
+        // WebSocket real-time updates for SPA dashboard
+        // =================================================================
+        let spaWs = null;
+        let spaWsConnected = false;
+        let spaReconnectTimer = null;
+        let spaReconnectDelay = 1000;
+        let spaPingTimer = null;
+
+        function spaWsConnect() {
+            if (spaWs && (spaWs.readyState === WebSocket.OPEN || spaWs.readyState === WebSocket.CONNECTING)) return;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/hub`;
+
+            try { spaWs = new WebSocket(wsUrl); } catch (e) {
+                spaReconnectSchedule();
+                return;
+            }
+
+            spaWs.onopen = function() {
+                spaWsConnected = true;
+                spaReconnectDelay = 1000;
+                spaPingStart();
+            };
+
+            spaWs.onmessage = function(event) {
+                try {
+                    const msg = JSON.parse(event.data);
+                    spaHandleWsMessage(msg);
+                } catch (e) {}
+            };
+
+            spaWs.onclose = function() {
+                spaWsConnected = false;
+                spaPingStop();
+                spaReconnectSchedule();
+            };
+
+            spaWs.onerror = function() {};
+        }
+
+        function spaReconnectSchedule() {
+            if (spaReconnectTimer) clearTimeout(spaReconnectTimer);
+            spaReconnectTimer = setTimeout(() => {
+                spaWsConnect();
+                spaReconnectDelay = Math.min(spaReconnectDelay * 1.5, 10000);
+            }, spaReconnectDelay);
+        }
+
+        function spaPingStart() {
+            spaPingStop();
+            spaPingTimer = setInterval(() => {
+                if (spaWs && spaWs.readyState === WebSocket.OPEN) {
+                    spaWs.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, 25000);
+        }
+
+        function spaPingStop() {
+            if (spaPingTimer) { clearInterval(spaPingTimer); spaPingTimer = null; }
+        }
+
+        function spaHandleWsMessage(msg) {
+            if (msg.type === 'pong') return;
+
+            if (msg.type === 'connected' || msg.type === 'stats') {
+                // Live update uptime counter
+                if (msg.uptime) {
+                    hubStartTime = Date.now() - (msg.uptime * 1000);
+                    if (!uptimeUpdateInterval) {
+                        uptimeUpdateInterval = setInterval(updateUptimeDisplay, 1000);
+                    }
+                }
+
+                // If we're on the hub tab, update the stats cards in-place
+                if (currentTab === 'hub') {
+                    const userCountEl = document.querySelector('.card-value');
+                    // Re-render hub tab for fresh stats
+                    loadTab('hub');
+                }
+
+                // If we're on the users tab, update with live user list
+                if (currentTab === 'users' && msg.users) {
+                    // Store for next render
+                    currentUsers = msg.users;
+                }
+            }
+
+            if (msg.type === 'user_join' || msg.type === 'user_leave' || msg.type === 'user_login') {
+                // Refresh users tab if visible
+                if (currentTab === 'users') {
+                    loadTab('users');
+                }
+            }
         }
 
         // Close modal on escape key
@@ -1436,10 +1538,16 @@ SPA_DASHBOARD_HTML = '''<!DOCTYPE html>
             if (e.key === 'Escape') closeUserDetail();
         });
 
+        // Reconnect on tab focus
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && !spaWsConnected) spaWsConnect();
+        });
+
         // Initial load
         fetchOpsAndBots().then(() => {
             loadTab('hub');
             startPolling();
+            spaWsConnect();
         });
     </script>
 </body>

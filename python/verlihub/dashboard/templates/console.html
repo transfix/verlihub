@@ -118,9 +118,9 @@
     </div>
     <div class="level-right">
         <div class="level-item">
-            <span class="tag is-{% if hub_running %}success{% else %}danger{% endif %} is-medium">
+            <span class="tag is-medium" id="console-hub-status">
                 <i class="fas fa-circle mr-1" style="font-size: 8px;"></i>
-                {% if hub_running %}Connected{% else %}Disconnected{% endif %}
+                <span id="console-status-text">Connecting...</span>
             </span>
         </div>
     </div>
@@ -441,5 +441,31 @@
         div.textContent = text;
         return div.innerHTML;
     }
+
+    // WebSocket real-time status for console page
+    function updateConsoleStatus(connected, hubRunning) {
+        const badge = document.getElementById('console-hub-status');
+        const text = document.getElementById('console-status-text');
+        if (connected && hubRunning) {
+            badge.className = 'tag is-success is-medium';
+            text.textContent = 'Connected';
+        } else if (connected) {
+            badge.className = 'tag is-success is-medium';
+            text.textContent = 'Connected';
+        } else {
+            badge.className = 'tag is-danger is-medium';
+            text.textContent = 'Disconnected';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        VHWebSocket.on('ws_connected', s => updateConsoleStatus(true, s.hub_running));
+        VHWebSocket.on('ws_disconnected', () => updateConsoleStatus(false, false));
+        VHWebSocket.on('stats', msg => updateConsoleStatus(true, msg.hub_running !== false));
+        VHWebSocket.on('connected', msg => updateConsoleStatus(true, msg.hub_running !== false));
+        // Set initial state from WH global
+        const s = VHWebSocket.getState();
+        updateConsoleStatus(s.connected, s.hub_running);
+    });
 </script>
 {% endblock %}

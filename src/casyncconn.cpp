@@ -110,7 +110,7 @@ cAsyncConn::cAsyncConn(int desc, cAsyncSocketServer *s, tConnType ct): // incomi
 */
 	meLineStatus(AC_LS_NO_LINE),
 	mBufEnd(0),
-	mBufReadPos(0),
+	mBufRead_pos(0),
 	mCloseAfter(0, 0)
 {
 	if (mxServer) {
@@ -184,7 +184,7 @@ cAsyncConn::cAsyncConn(const string &host, int port/*, bool udp*/): // outgoing 
 	mxLine(NULL),
 	meLineStatus(AC_LS_NO_LINE),
 	mBufEnd(0),
-	mBufReadPos(0),
+	mBufRead_pos(0),
 	mCloseAfter(0, 0)
 {
 	memset(&mAddrIN, 0, sizeof(struct sockaddr_in));
@@ -257,8 +257,8 @@ int cAsyncConn::ReadLineLocal()
 	if (!mxLine)
 		throw "ReadLine with null line pointer";
 
-	char *pos, *buf = msBuffer.data() + mBufReadPos;
-	int len = mBufEnd - mBufReadPos;
+	char *pos, *buf = msBuffer.data() + mBufRead_pos;
+	int len = mBufEnd - mBufRead_pos;
 
 	if (NULL == (pos = (char*)memchr(buf, mSeparator, len))) {
 		if ((mxLine->size() + len) > mLineSizeMax) {
@@ -268,13 +268,13 @@ int cAsyncConn::ReadLineLocal()
 
 		mxLine->append((char*)buf, len);
 		mBufEnd = 0;
-		mBufReadPos = 0;
+		mBufRead_pos = 0;
 		return len;
 	}
 
 	len = pos - buf;
 	mxLine->append((char*)buf, len);
-	mBufReadPos += len + 1;
+	mBufRead_pos += len + 1;
 	meLineStatus = AC_LS_LINE_DONE;
 	return len + 1;
 }
@@ -344,7 +344,7 @@ int cAsyncConn::ReadAll(const unsigned int tries, const unsigned int sleep)
 
 	int buf_len = 0; //addr_len = sizeof(struct sockaddr)
 	unsigned int i = 0;
-	mBufReadPos = 0;
+	mBufRead_pos = 0;
 	mBufEnd = 0;
 	//bool udp = (this->GetType() == eCT_CLIENTUDP);
 
@@ -689,8 +689,18 @@ int cAsyncConn::BindSocket(int sock, int port, const char *ia)
 	mAddrIN.sin_port = htons(port);
 	memset(&(mAddrIN.sin_zero), '\0', 8);
 
-	if (::bind(sock, (struct sockaddr*)&mAddrIN, sizeof(mAddrIN)) == -1) // bind socket to port
+	if (::bind(sock, (struct sockaddr*)&mAddrIN, sizeof(mAddrIN)) == -1) { // bind socket to port
+		int err = errno;
+
+		if (ErrLog(0)) {
+			if (err == EADDRINUSE)
+				LogStream() << "Bind failed: port " << port << " is already in use by another process" << endl;
+			else
+				LogStream() << "Bind failed on port " << port << ": " << strerror(err) << " (errno=" << err << ")" << endl;
+		}
+
 		return INVALID_SOCKET;
+	}
 
 	return sock;
 }
@@ -701,7 +711,8 @@ int cAsyncConn::ListenSock(int sock, const unsigned int blog)
 		return INVALID_SOCKET;
 
 	if (listen(sock, blog) == -1) { // note: this is backlog
-		vhErr(0) << "Error listening" << endl;
+		int err = errno;
+		vhErr(0) << "Listen failed: " << strerror(err) << " (errno=" << err << ")" << endl;
 		return INVALID_SOCKET;
 	}
 

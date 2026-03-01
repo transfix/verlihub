@@ -97,6 +97,7 @@ def app():
     ctx.find_user = lambda nick: nick == "Alice"
     ctx.kick_user = mock.MagicMock(return_value=True)
     ctx.send_to_user = mock.MagicMock(return_value=True)
+    ctx.send_chat_as = mock.MagicMock(return_value=True)
 
     test_app.dependency_overrides[hub_mod.get_hub_context] = lambda: ctx
     test_app.dependency_overrides[stats_mod.get_hub_context] = lambda: ctx
@@ -744,8 +745,8 @@ class TestAuthRegisterDB:
         assert resp.status_code == 400
 
     async def test_register_disabled(self, client):
-        """Test registration when disabled via env var."""
-        with mock.patch("verlihub.api.routes.auth.REGISTRATION_ENABLED", False):
+        """Test registration when disabled via config."""
+        with mock.patch("verlihub.api.routes.auth._reg_enabled", return_value=False):
             resp = await client.post("/api/v1/auth/register", json={
                 "nick": "disabledreg",
                 "password": "testpass123",
@@ -754,7 +755,7 @@ class TestAuthRegisterDB:
 
     async def test_register_require_invite_without_code(self, client):
         """Test registration when invite required but not provided."""
-        with mock.patch("verlihub.api.routes.auth.REGISTRATION_REQUIRE_INVITE", True):
+        with mock.patch("verlihub.api.routes.auth._reg_require_invite", return_value=True):
             resp = await client.post("/api/v1/auth/register", json={
                 "nick": "noinvite",
                 "password": "testpass123",

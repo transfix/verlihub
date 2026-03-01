@@ -208,30 +208,29 @@ class TestCookieAuth:
         assert response.status_code == 303
 
 
-class TestConsolePage:
-    """Test console page routes."""
-    
-    def test_console_requires_operator(self, client, operator_token):
-        """Test that console page works with operator class."""
+class TestChatPage:
+    """Test chat page routes."""
+
+    def test_chat_requires_auth(self, client, operator_token):
+        """Test that chat page works with operator class."""
         response = client.get(
-            "/dashboard/console",
-            cookies={"access_token": f"Bearer {operator_token}"}
+            "/dashboard/chat",
+            cookies={"access_token": f"Bearer {operator_token}"},
         )
-        # Should load (or 500 if hub unavailable)
         assert response.status_code in [200, 500]
-    
-    def test_console_shows_command_interface(self, client, operator_token):
-        """Test that console page shows command interface elements."""
+
+    def test_chat_shows_chat_interface(self, client, operator_token):
+        """Test that chat page shows chat interface elements."""
         response = client.get(
-            "/dashboard/console",
-            cookies={"access_token": f"Bearer {operator_token}"}
+            "/dashboard/chat",
+            cookies={"access_token": f"Bearer {operator_token}"},
         )
         if response.status_code == 200:
-            assert b"command" in response.content.lower()
-    
-    def test_console_unauthenticated_redirects(self, client):
-        """Test that console page redirects without auth."""
-        response = client.get("/dashboard/console", follow_redirects=False)
+            assert b"chat" in response.content.lower()
+
+    def test_chat_unauthenticated_redirects(self, client):
+        """Test that chat page redirects without auth."""
+        response = client.get("/dashboard/chat", follow_redirects=False)
         assert response.status_code == 303
 
 

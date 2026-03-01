@@ -9,6 +9,7 @@ import asyncio
 import logging
 import signal
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -175,6 +176,7 @@ class HubContext:
         self._event_handler = HubEventHandler()
         self._cpp.SetEventCallback(self._event_handler)
         self._shutdown_event = asyncio.Event()
+        self._start_time: float | None = None
     
     @classmethod
     def create(cls, config_dir: str | Path) -> Optional["HubContext"]:
@@ -219,6 +221,22 @@ class HubContext:
         return self._cpp.GetTotalShare()
     
     @property
+    def uptime(self) -> int:
+        """Get hub uptime in seconds (0 if not running)."""
+        if self._start_time is None or not self.is_running:
+            return 0
+        return int(time.monotonic() - self._start_time)
+
+    @property
+    def port(self) -> int:
+        """Get the hub listen port from config."""
+        try:
+            cfg = self._cpp.GetHubConfig()
+            return cfg.listen_port
+        except Exception:
+            return 411
+
+    @property
     def hub_name(self) -> str:
         """Get hub name."""
         return self._cpp.GetHubName()
@@ -249,7 +267,10 @@ class HubContext:
             port: Port to listen on (0 = use config)
             listen_ip: IP to bind to (empty = use config)
         """
-        return self._cpp.Start(port, listen_ip)
+        result = self._cpp.Start(port, listen_ip)
+        if result:
+            self._start_time = time.monotonic()
+        return result
     
     def stop(self) -> None:
         """Stop the hub server."""
@@ -270,10 +291,74 @@ class HubContext:
     def get_user_nicks(self) -> list[str]:
         """Get list of all online user nicknames."""
         return list(self._cpp.GetUserNicks())
+
+    def get_user_list(self) -> list[dict]:
+        """
+        Get full info for all online users.
+        
+        Uses GetUserInfoSnapshots() for a single-lock, race-free snapshot
+        of all user data from the NMDCHubServer.
+        
+        Returns a list of dicts with keys:
+        - nick, user_class, share, ip, country, client, status
+        - description, tag, speed, email
+        """
+        try:
+            # Prefer the efficient single-lock C++ method
+            snapshots = self._cpp.GetUserInfoSnapshots()
+            user_list = []
+            for snap in snapshots:
+                user_list.append({
+                    "nick": snap.nick,
+                    "user_class": snap.user_class,
+                    "share": snap.share,
+                    "ip": snap.ip,
+                    "country": snap.country,
+                    "client": snap.client_name,
+                    "description": snap.description,
+                    "tag": snap.tag,
+                    "speed": snap.speed,
+                    "email": snap.email,
+                    "status": "",
+                })
+            return user_list
+        except (AttributeError, TypeError):
+            # Fallback: SWIG module too old or method unavailable
+            logger.warning("GetUserInfoSnapshots not available, falling back to nick list")
+            return [{"nick": n, "user_class": 0, "share": 0, "ip": "",
+                      "country": "", "client": "", "status": ""}
+                     for n in self.get_user_nicks()]
+
+    def get_user_info(self, nick: str) -> dict | None:
+        """
+        Get info for a single online user.
+        
+        Returns a dict with user info, or None if not found.
+        """
+        try:
+            from verlihub import verlihub_core
+            snap = verlihub_core.UserInfoSnapshot()
+            if self._cpp.GetUserInfo(nick, snap):
+                return {
+                    "nick": snap.nick,
+                    "user_class": snap.user_class,
+                    "share": snap.share,
+                    "ip": snap.ip,
+                    "country": snap.country,
+                    "client": snap.client_name,
+                    "description": snap.description,
+                    "tag": snap.tag,
+                    "speed": snap.speed,
+                    "email": snap.email,
+                    "status": "",
+                }
+        except (AttributeError, TypeError):
+            pass
+        return None
     
     def find_user(self, nick: str) -> bool:
         """Check if a user is online."""
-        return self._cpp.FindUser(nick) is not None
+        return nick in self.get_user_nicks()
     
     def send_to_user(self, nick: str, message: str) -> bool:
         """Send a message to a specific user."""
@@ -286,7 +371,11 @@ class HubContext:
     def send_to_class(self, message: str, min_class: int, max_class: int) -> bool:
         """Send message to users in class range."""
         return self._cpp.SendToClass(message, min_class, max_class)
-    
+
+    def send_chat_as(self, nick: str, message: str) -> bool:
+        """Send a chat message to all users, formatted as <nick> message."""
+        return self._cpp.SendToOpChat(message, nick)
+
     def kick_user(self, op_nick: str, nick: str, reason: str) -> bool:
         """Kick a user from the hub."""
         return self._cpp.KickUser(op_nick, nick, reason)
@@ -315,21 +404,29 @@ class HubContext:
 async def create_hub(config_dir: str | Path) -> AsyncGenerator[HubContext, None]:
     """
     Async context manager for creating and managing a hub.
+
+    Publishes the context to the global singleton (``set_hub_context``) so
+    that the FastAPI lifespan and other modules can discover it without
+    creating a second instance.
     
     Example:
         async with create_hub("/etc/verlihub") as ctx:
             if ctx.initialize() and ctx.start():
                 await ctx.wait_for_shutdown()
     """
+    from verlihub.api.deps import set_hub_context
+
     ctx = HubContext.create(config_dir)
     if ctx is None:
         raise RuntimeError(f"Failed to create HubContext for {config_dir}")
-    
+
+    set_hub_context(ctx)
     try:
         yield ctx
     finally:
         if ctx.is_running:
             ctx.stop()
+        set_hub_context(None)
 
 
 def setup_signal_handlers(ctx: HubContext) -> None:

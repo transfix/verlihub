@@ -627,6 +627,45 @@ uint64_t NMDCHubServer::GetTotalShare() const {
     return m_total_share.load(std::memory_order_relaxed);
 }
 
+bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) const {
+    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    auto it = m_nick_to_conn.find(nick);
+    if (it == m_nick_to_conn.end()) return false;
+    auto cit = m_clients.find(it->second);
+    if (cit == m_clients.end()) return false;
+    const NMDCClient& c = cit->second;
+    if (c.state != NMDCConnState::LoggedIn) return false;
+    out.nick        = c.nick;
+    out.ip          = c.ip;
+    out.user_class  = c.user_class;
+    out.share       = c.myinfo.share_size;
+    out.description = c.myinfo.description;
+    out.tag         = c.myinfo.tag;
+    out.speed       = c.myinfo.speed;
+    out.email       = c.myinfo.email;
+    return true;
+}
+
+std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
+    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::vector<UserInfoSnapshot> result;
+    result.reserve(m_clients.size());
+    for (auto& [conn, c] : m_clients) {
+        if (c.state != NMDCConnState::LoggedIn) continue;
+        UserInfoSnapshot s;
+        s.nick        = c.nick;
+        s.ip          = c.ip;
+        s.user_class  = c.user_class;
+        s.share       = c.myinfo.share_size;
+        s.description = c.myinfo.description;
+        s.tag         = c.myinfo.tag;
+        s.speed       = c.myinfo.speed;
+        s.email       = c.myinfo.email;
+        result.push_back(std::move(s));
+    }
+    return result;
+}
+
 // =============================================================================
 // Public User Management API
 // =============================================================================

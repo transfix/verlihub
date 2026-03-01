@@ -229,7 +229,7 @@ namespace nVerliHub {
 				 */
 				bool BufferEmpty()
 				{
-					 return mBufEnd == mBufReadPos;
+					 return mBufEnd == mBufRead_pos;
 				}
 
 				/*
@@ -253,6 +253,12 @@ namespace nVerliHub {
 				size_t GetFlushCapacity() const
 				{
 					return mBufFlush.capacity();
+				}
+
+				/// Get the maximum output buffer size.
+				unsigned long GetMaxBuffer() const
+				{
+					return mMaxBuffer;
 				}
 
 				/**
@@ -672,7 +678,7 @@ namespace nVerliHub {
 				/// Current position in the buffer.
 				/// The position is pushed forward when a new line is read from the buffer.
 				/// @see ReadLineLocal()
-				unsigned int mBufReadPos;
+				unsigned int mBufRead_pos;
 
 				/// The time when the connection has been closed.
 				cTime mCloseAfter;

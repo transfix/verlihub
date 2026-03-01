@@ -117,8 +117,7 @@ api:
   # Authentication
   # REQUIRED in production - generate with: python -c "import secrets; print(secrets.token_hex(32))"
   secret: ""  # If empty, random secret generated (tokens invalidate on restart)
-  username: admin  # Bootstrap admin account (seeded into DB at startup)
-  password: ""  # REQUIRED in production
+  # Admin accounts are configured in the 'users:' section below
   
   # Token settings
   token_expire_minutes: 60
@@ -203,11 +202,9 @@ bots:
 #
 # User classes: master (10), admin (5), operator (3), vip (2), registered (1)
 #
-# Note: The api.username / api.password admin is ALSO seeded into the database
-# as an admin-class user. You do NOT need to duplicate it here.
-# All users (including the api admin) share the same RegUser table and can
-# log into the dashboard. Users can also self-register from the login screen
-# if registration_enabled is true.
+# All users share the same RegUser table and can log into the dashboard.
+# Users can also self-register from the login screen if
+# registration_enabled is true.
 users:
   masters:
     - nick: admin

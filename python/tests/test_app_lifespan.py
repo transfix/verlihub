@@ -122,8 +122,11 @@ class TestLifespanSwig:
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_available_autostart(self, _init, _close):
-        """When SWIG module is available and VH_AUTO_START=1, hub starts."""
+        """When SWIG module is available and mode is 'both', hub starts."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig, HubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         mock_ctx = MagicMock()
         mock_ctx.initialize.return_value = True
@@ -144,27 +147,61 @@ class TestLifespanSwig:
                 return mock_core_module
             return real_import(name, *args, **kwargs)
 
+        # Set config singleton with auto-start mode
+        cfg = VerlihubConfig(
+            mode="both",
+            hub=HubConfig(port=4111, listen_host="127.0.0.1"),
+        )
+        cfg._config_dir = "/tmp/vh_test"
+
+        # Ensure no existing hub context so lifespan enters the creation path
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        env = {
-            "VH_AUTO_START": "1",
-            "VH_PORT": "4111",
-            "VH_LISTEN_IP": "127.0.0.1",
-            "VH_CONFIG_DIR": "/tmp/vh_test",
-        }
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch.dict("os.environ", env, clear=False), \
-             patch("verlihub.api.app.get_hub_context", return_value=mock_ctx):
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    mock_ctx.initialize.assert_called_once()
+                    mock_ctx.start.assert_called_once_with(4111, "127.0.0.1")
+            # Shutdown should stop the hub (lifespan started it)
+            mock_ctx.stop.assert_called_once()
+        finally:
+            _deps_mod._hub_context = old_ctx
+
+    @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
+    @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
+    async def test_lifespan_reuses_existing_hub_context(self, _init, _close):
+        """When a hub context already exists, lifespan skips creation."""
+        from verlihub.api.app import lifespan
+        import verlihub.api.deps as _deps_mod
+
+        mock_ctx = MagicMock()
+        mock_ctx.is_running = True
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = mock_ctx
+
+        app = MagicMock()
+        try:
             async with lifespan(app):
-                mock_ctx.initialize.assert_called_once()
-                mock_ctx.start.assert_called_once_with(4111, "127.0.0.1")
-        # Shutdown should stop the hub
-        mock_ctx.stop.assert_called_once()
+                # Should NOT have tried to create or initialize a new hub
+                mock_ctx.initialize.assert_not_called()
+                mock_ctx.start.assert_not_called()
+            # Shutdown should NOT stop the hub (lifespan didn't start it)
+            mock_ctx.stop.assert_not_called()
+        finally:
+            _deps_mod._hub_context = old_ctx
 
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_init_failure(self, _init, _close):
         """When HubContext.initialize() returns False."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig, HubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         mock_ctx = MagicMock()
         mock_ctx.initialize.return_value = False
@@ -184,17 +221,33 @@ class TestLifespanSwig:
                 return mock_core_module
             return real_import(name, *args, **kwargs)
 
+        cfg = VerlihubConfig(
+            mode="both",
+            hub=HubConfig(port=411),
+        )
+        cfg._config_dir = "/tmp/vh_test"
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("verlihub.api.app.get_hub_context", return_value=mock_ctx):
-            async with lifespan(app):
-                pass
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    mock_ctx.initialize.assert_called_once()
+                    mock_ctx.start.assert_not_called()
+        finally:
+            _deps_mod._hub_context = old_ctx
 
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_create_fails(self, _init, _close):
         """When HubContext.create() returns None."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig, HubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         mock_hub_context_cls = MagicMock()
         mock_hub_context_cls.create.return_value = None
@@ -210,17 +263,32 @@ class TestLifespanSwig:
                 return mock_core_module
             return real_import(name, *args, **kwargs)
 
+        cfg = VerlihubConfig(
+            mode="both",
+            hub=HubConfig(port=411),
+        )
+        cfg._config_dir = "/tmp/vh_test"
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("verlihub.api.app.get_hub_context", return_value=None):
-            async with lifespan(app):
-                pass
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    pass
+        finally:
+            _deps_mod._hub_context = old_ctx
 
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_start_fails(self, _init, _close):
         """When hub.start() returns False."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig, HubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         mock_ctx = MagicMock()
         mock_ctx.initialize.return_value = True
@@ -241,19 +309,33 @@ class TestLifespanSwig:
                 return mock_core_module
             return real_import(name, *args, **kwargs)
 
+        # Set config singleton with auto-start mode
+        cfg = VerlihubConfig(
+            mode="both",
+            hub=HubConfig(port=411),
+        )
+        cfg._config_dir = "/tmp/vh_test"
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        env = {"VH_AUTO_START": "1", "VH_PORT": "411", "VH_CONFIG_DIR": "/tmp/vh_test"}
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch.dict("os.environ", env, clear=False), \
-             patch("verlihub.api.app.get_hub_context", return_value=mock_ctx):
-            async with lifespan(app):
-                mock_ctx.start.assert_called_once()
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    mock_ctx.start.assert_called_once()
+        finally:
+            _deps_mod._hub_context = old_ctx
 
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_no_autostart(self, _init, _close):
-        """When VH_AUTO_START is not set, hub is initialized but not started."""
+        """When mode is 'api', hub is initialized but not started."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         mock_ctx = MagicMock()
         mock_ctx.initialize.return_value = True
@@ -273,19 +355,30 @@ class TestLifespanSwig:
                 return mock_core_module
             return real_import(name, *args, **kwargs)
 
+        # Set config singleton with api-only mode (no auto-start)
+        cfg = VerlihubConfig(mode="api")
+        cfg._config_dir = "/tmp/vh_test"
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        env = {"VH_AUTO_START": "0", "VH_CONFIG_DIR": "/tmp/vh_test"}
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch.dict("os.environ", env, clear=False), \
-             patch("verlihub.api.app.get_hub_context", return_value=mock_ctx):
-            async with lifespan(app):
-                mock_ctx.start.assert_not_called()
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    mock_ctx.start.assert_not_called()
+        finally:
+            _deps_mod._hub_context = old_ctx
 
     @patch("verlihub.api.app.close_database", new_callable=AsyncMock)
     @patch("verlihub.api.app.init_database", new_callable=AsyncMock)
     async def test_lifespan_swig_generic_exception(self, _init, _close):
         """When SWIG init raises a generic exception."""
         from verlihub.api.app import lifespan
+        from verlihub.config import VerlihubConfig, HubConfig
+        import verlihub.config as _config_mod
+        import verlihub.api.deps as _deps_mod
 
         import builtins
         real_import = builtins.__import__
@@ -295,11 +388,23 @@ class TestLifespanSwig:
                 raise RuntimeError("SWIG init failed")
             return real_import(name, *args, **kwargs)
 
+        cfg = VerlihubConfig(
+            mode="both",
+            hub=HubConfig(port=411),
+        )
+        cfg._config_dir = "/tmp/vh_test"
+
+        old_ctx = _deps_mod._hub_context
+        _deps_mod._hub_context = None
+
         app = MagicMock()
-        with patch("builtins.__import__", side_effect=fake_import), \
-             patch("verlihub.api.app.get_hub_context", return_value=None):
-            async with lifespan(app):
-                pass  # Should not raise
+        try:
+            with patch("builtins.__import__", side_effect=fake_import), \
+                 patch.object(_config_mod, "_config", cfg):
+                async with lifespan(app):
+                    pass  # Should not raise
+        finally:
+            _deps_mod._hub_context = old_ctx
 
 
 # ===================================================================

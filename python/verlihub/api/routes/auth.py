@@ -3,7 +3,6 @@ Authentication API endpoints.
 """
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime
 
@@ -34,10 +33,22 @@ from verlihub.models import (
 router = APIRouter()
 
 
-# Registration settings via environment variables
-REGISTRATION_ENABLED = os.getenv("VH_REGISTRATION_ENABLED", "true").lower() in ("1", "true", "yes")
-REGISTRATION_REQUIRE_INVITE = os.getenv("VH_REGISTRATION_REQUIRE_INVITE", "false").lower() in ("1", "true", "yes")
-REGISTRATION_DEFAULT_CLASS = int(os.getenv("VH_REGISTRATION_DEFAULT_CLASS", str(UserClass.REGISTERED)))
+def _reg_enabled() -> bool:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_enabled if cfg else True
+
+
+def _reg_require_invite() -> bool:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_require_invite if cfg else False
+
+
+def _reg_default_class() -> int:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_default_class if cfg else UserClass.REGISTERED
 
 
 @router.post("/register", response_model=Token)
@@ -56,7 +67,7 @@ async def register(
     
     Returns a JWT token so the user is immediately logged in.
     """
-    if not REGISTRATION_ENABLED:
+    if not _reg_enabled():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is disabled",
@@ -92,10 +103,10 @@ async def register(
         )
     
     # Handle invite code
-    user_class = REGISTRATION_DEFAULT_CLASS
+    user_class = _reg_default_class()
     invite = None
     
-    if REGISTRATION_REQUIRE_INVITE and not request.invite_code:
+    if _reg_require_invite() and not request.invite_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An invite code is required for registration",

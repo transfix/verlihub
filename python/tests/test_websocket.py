@@ -213,33 +213,50 @@ class TestSyncWrappers:
     async def test_emit_hub_event_creates_task(self):
         from verlihub.dashboard import websocket as ws_mod
 
-        with patch.object(ws_mod.manager, "broadcast", new_callable=AsyncMock):
-            ws_mod.emit_hub_event("test_event", {"key": "val"})
-            # Allow the task to run
-            await asyncio.sleep(0.05)
+        loop = asyncio.get_running_loop()
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = loop  # register the running loop
+        try:
+            with patch.object(ws_mod.manager, "broadcast", new_callable=AsyncMock) as mock_bc:
+                ws_mod.emit_hub_event("test_event", {"key": "val"})
+                # Allow the scheduled coroutine to run
+                await asyncio.sleep(0.05)
+                mock_bc.assert_called_once()
+        finally:
+            ws_mod._ws_loop = old_loop
 
     async def test_emit_log_creates_task(self):
         from verlihub.dashboard import websocket as ws_mod
 
-        with patch.object(ws_mod.manager, "broadcast", new_callable=AsyncMock):
-            ws_mod.emit_log("warning", "test warning")
-            await asyncio.sleep(0.05)
+        loop = asyncio.get_running_loop()
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = loop
+        try:
+            with patch.object(ws_mod.manager, "broadcast", new_callable=AsyncMock) as mock_bc:
+                ws_mod.emit_log("warning", "test warning")
+                await asyncio.sleep(0.05)
+                mock_bc.assert_called_once()
+        finally:
+            ws_mod._ws_loop = old_loop
 
     def test_emit_hub_event_no_loop_no_raise(self):
-        """When no event loop is running, emit should silently pass."""
+        """When _ws_loop is None, emit should silently pass."""
         from verlihub.dashboard import websocket as ws_mod
-        # This runs outside of async context — should not raise
-        # (The except RuntimeError path)
-        # We need to ensure no loop is running:
-        with patch("verlihub.dashboard.websocket.asyncio.get_running_loop",
-                   side_effect=RuntimeError("no loop")):
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = None
+        try:
             ws_mod.emit_hub_event("test", {})  # Should not raise
+        finally:
+            ws_mod._ws_loop = old_loop
 
     def test_emit_log_no_loop_no_raise(self):
         from verlihub.dashboard import websocket as ws_mod
-        with patch("verlihub.dashboard.websocket.asyncio.get_running_loop",
-                   side_effect=RuntimeError("no loop")):
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = None
+        try:
             ws_mod.emit_log("info", "test")  # Should not raise
+        finally:
+            ws_mod._ws_loop = old_loop
 
 
 # ======================================================================

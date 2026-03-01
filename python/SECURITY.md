@@ -60,7 +60,7 @@ export VH_REGISTRATION_DEFAULT_CLASS=1     # 1=Registered, 2=VIP
 - Use a minimum 32-byte (64 hex characters) secret
 - Rotate secrets periodically
 - Never commit secrets to version control
-- The `api.username/password` admin is inserted into the `RegUser` database table as an admin-class (5) user
+- Admin accounts are defined in the `users:` section of the config and seeded into the `RegUser` database table
 - All users share the same `RegUser` table and authenticate via bcrypt
 - Consider setting `VH_REGISTRATION_REQUIRE_INVITE=1` in production to control who can register
 

@@ -31,6 +31,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _cfg():
+    """Return the config singleton (or ``None`` when running headless tests)."""
+    from verlihub.config import get_config_optional
+    return get_config_optional()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -42,21 +48,24 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Starting Thin Verlihub...")
     
-    # Get configuration directory from environment or use default
-    config_dir = os.getenv("VH_CONFIG_DIR", "/etc/verlihub")
+    cfg = _cfg()
+    config_dir = cfg._config_dir if cfg else os.getenv("VH_CONFIG_DIR", "/etc/verlihub")
     
     # Initialize database (Python-side, supports any backend)
     try:
-        # Use environment variables for database config
-        logger.info("Using environment variables for database config")
-        config = DatabaseConfig(config_dir=config_dir)
-        await init_database(config=config)
+        logger.info("Initialising database...")
+        if cfg:
+            db_url = cfg.database.get_url(config_dir)
+            db_config = DatabaseConfig(url=db_url)
+        else:
+            db_config = DatabaseConfig(config_dir=config_dir)
+        await init_database(config=db_config)
         logger.info("Database connected")
 
-        # Seed admin / user accounts from YAML config into the live DB
+        # Seed user accounts from YAML config into the live DB
         try:
             from verlihub.config import apply_config_to_db, load_config
-            yaml_cfg = load_config(config_dir=config_dir)
+            yaml_cfg = cfg or load_config(config_dir=config_dir)
             if yaml_cfg is not None:
                 await apply_config_to_db(yaml_cfg)
                 logger.info("Config-to-DB sync complete (lifespan)")
@@ -68,46 +77,105 @@ async def lifespan(app: FastAPI):
     
     # Initialize hub context (if SWIG module is available)
     # The C++ core is now database-free - it only handles NMDC protocol
-    try:
-        from verlihub.core import HubContext
-        
-        # Ensure config directory exists
-        Path(config_dir).mkdir(parents=True, exist_ok=True)
-        
-        ctx = HubContext.create(config_dir)
-        if ctx is not None:
-            set_hub_context(ctx)
-            if ctx.initialize():
-                # Auto-start hub if VH_AUTO_START is set
-                if os.getenv("VH_AUTO_START", "0") == "1":
-                    port = int(os.getenv("VH_PORT", "411"))
-                    listen_ip = os.getenv("VH_LISTEN_IP", "0.0.0.0")
-                    if ctx.start(port, listen_ip):
-                        logger.info("Hub started on %s:%d", listen_ip, port)
+    #
+    # In "both" mode the hub is started by run_both() / run_hub() *before*
+    # uvicorn boots, so the global hub context is already populated.  We
+    # must NOT create a second HubContext — just re-use the existing one.
+    hub_started_by_lifespan = False
+    existing_ctx = get_hub_context()
+
+    if existing_ctx is not None:
+        logger.info("Re-using existing hub context (started externally)")
+    else:
+        try:
+            from verlihub.core import HubContext
+
+            # Ensure config directory exists
+            Path(config_dir).mkdir(parents=True, exist_ok=True)
+
+            ctx = HubContext.create(config_dir)
+            if ctx is not None:
+                set_hub_context(ctx)
+
+                # Feed YAML config to the C++ director callback so
+                # Initialize() → LoadConfiguration() sees the right values.
+                if cfg:
+                    hub_section: dict[str, str] = {
+                        "hub_name": cfg.hub.name,
+                        "hub_topic": cfg.hub.topic,
+                        "hub_desc": cfg.hub.description,
+                        "hub_owner": cfg.hub.owner,
+                        "hub_encoding": cfg.hub.encoding,
+                        "listen_port": str(cfg.hub.port),
+                        "listen_ip": cfg.hub.listen_host,
+                        "max_users": str(cfg.hub.max_users),
+                    }
+                    ctx.events.set_config({"hub": hub_section})
+
+                if ctx.initialize():
+                    # Auto-start when the lifespan is the sole manager
+                    auto_start = (cfg and cfg.mode in ("both", "hub"))
+                    if auto_start:
+                        hub_port = cfg.hub.port if cfg else 411
+                        listen_ip = cfg.hub.listen_host if cfg else "0.0.0.0"
+                        if ctx.start(hub_port, listen_ip):
+                            hub_started_by_lifespan = True
+                            logger.info("Hub started on %s:%d", listen_ip, hub_port)
+                        else:
+                            logger.error(
+                                "Failed to start hub on port %d — is another "
+                                "instance already running on that port?",
+                                hub_port,
+                            )
                     else:
-                        logger.error("Failed to start hub")
+                        logger.info("Hub initialized (use /api/v1/hub/start to start)")
                 else:
-                    logger.info("Hub initialized (use /api/v1/hub/start to start)")
+                    logger.error("Failed to initialize hub context")
             else:
-                logger.error("Failed to initialize hub context")
-        else:
-            logger.warning("Failed to create hub context")
-    except ImportError:
-        logger.warning(
-            "SWIG module not available - running in API-only mode. "
-            "Build with -DBUILD_PYTHON_BINDINGS=ON to enable hub control."
-        )
-    except Exception as e:
-        logger.error("Failed to initialize hub: %s", e)
+                logger.warning("Failed to create hub context")
+        except ImportError:
+            logger.warning(
+                "SWIG module not available - running in API-only mode. "
+                "Build with -DBUILD_PYTHON_BINDINGS=ON to enable hub control."
+            )
+        except Exception as e:
+            logger.error("Failed to initialize hub: %s", e)
     
+    # Wire hub events to WebSocket broadcaster & start stats task
+    ctx = get_hub_context()
+    if ctx is not None:
+        try:
+            from verlihub.dashboard.websocket import (
+                hub_event_broadcaster,
+                start_stats_task,
+            )
+            ctx.events.register('user_connect', hub_event_broadcaster.on_user_connect)
+            ctx.events.register('user_disconnect', hub_event_broadcaster.on_user_disconnect)
+            ctx.events.register('user_login', hub_event_broadcaster.on_user_login)
+            ctx.events.register('user_logout', hub_event_broadcaster.on_user_disconnect)
+            ctx.events.register('chat_message', hub_event_broadcaster.on_chat_message)
+            ctx.events.register('hub_started', hub_event_broadcaster.on_hub_started)
+            ctx.events.register('hub_stopping', hub_event_broadcaster.on_hub_stopping)
+            start_stats_task()
+            logger.info("WebSocket event broadcasting enabled")
+        except Exception as ws_err:
+            logger.warning("WebSocket event wiring failed: %s", ws_err)
+
     yield
     
     # Shutdown
     logger.info("Shutting down Thin Verlihub...")
     
-    # Stop hub if running
+    # Stop stats broadcast
+    try:
+        from verlihub.dashboard.websocket import stop_stats_task
+        stop_stats_task()
+    except Exception:
+        pass
+
+    # Stop hub only if the lifespan started it (not if run_hub owns it)
     ctx = get_hub_context()
-    if ctx is not None and ctx.is_running:
+    if hub_started_by_lifespan and ctx is not None and ctx.is_running:
         logger.info("Stopping hub...")
         ctx.stop()
     
@@ -128,7 +196,8 @@ def create_app() -> FastAPI:
     )
     
     # Configure CORS
-    allowed_origins = os.getenv("VH_CORS_ORIGINS", "*").split(",")
+    cfg = _cfg()
+    allowed_origins = cfg.api.cors_origins if cfg else ["*"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
@@ -174,13 +243,13 @@ app = create_app()
 # Entry point for running directly
 if __name__ == "__main__":
     import uvicorn
-    
-    host = os.getenv("VH_API_HOST", "0.0.0.0")
-    port = int(os.getenv("VH_API_PORT", "8000"))
-    
+
+    cfg = _cfg()
+    host = cfg.api.host if cfg else "0.0.0.0"
+    port = cfg.api.port if cfg else 8000
+
     uvicorn.run(
         "verlihub.api.app:app",
         host=host,
         port=port,
-        reload=os.getenv("VH_DEBUG", "0") == "1",
     )

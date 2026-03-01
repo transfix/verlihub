@@ -8,7 +8,6 @@ Covers:
 - Dashboard login uses user_class (not class_)
 - Registration page renders correctly with hub branding
 """
-import os
 
 import pytest
 import pytest_asyncio
@@ -27,7 +26,19 @@ from verlihub.api.auth import (
     verify_password,
     Permission,
 )
-from verlihub.config import VerlihubConfig, ApiConfig, UsersConfig, UserEntry
+from verlihub.config import VerlihubConfig, UsersConfig, UserEntry, ApiConfig
+import verlihub.config as _config_mod
+
+
+def _set_reg_config(monkeypatch, *, enabled=True, require_invite=False, default_class=1):
+    """Set the config singleton to control registration settings in tests."""
+    cfg = VerlihubConfig()
+    cfg.api = ApiConfig(
+        registration_enabled=enabled,
+        registration_require_invite=require_invite,
+        registration_default_class=default_class,
+    )
+    monkeypatch.setattr(_config_mod, "_config", cfg)
 
 
 # =============================================================================
@@ -36,15 +47,17 @@ from verlihub.config import VerlihubConfig, ApiConfig, UsersConfig, UserEntry
 
 
 class TestAdminSeeding:
-    """Test that api.username/password is seeded into RegUser."""
+    """Test that users section is seeded into RegUser."""
 
     @pytest.mark.asyncio
-    async def test_admin_seeded_on_first_run(self, db: Database, db_session: AsyncSession):
-        """Config admin should be created in RegUser table."""
+    async def test_master_seeded_on_first_run(self, db: Database, db_session: AsyncSession):
+        """Config master user should be created in RegUser table."""
         from verlihub.config import apply_config_to_db
 
         cfg = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="secret123"),
+            users=UsersConfig(
+                masters=[UserEntry(nick="hub_admin", password="secret123")],
+            ),
         )
         await apply_config_to_db(cfg, force=False)
 
@@ -54,22 +67,23 @@ class TestAdminSeeding:
         user = result.scalar_one_or_none()
 
         assert user is not None
-        assert user.user_class == UserClass.ADMIN
-        assert user.authorised is True
-        assert user.reg_op == "config-api"
+        assert user.user_class == UserClass.MASTER
+        assert user.reg_op == "config"
         # Password should be hashed (bcrypt hashes start with $2b$)
         assert user.login_pwd.startswith("$2b$")
         # Verify password actually works
         assert verify_password("secret123", user.login_pwd)
 
     @pytest.mark.asyncio
-    async def test_admin_not_overwritten_without_force(self, db: Database, db_session: AsyncSession):
-        """Existing admin user should not be overwritten without --force."""
+    async def test_user_not_overwritten_without_force(self, db: Database, db_session: AsyncSession):
+        """Existing user should not be overwritten without --force."""
         from verlihub.config import apply_config_to_db
 
-        # First run: create admin
+        # First run: create master
         cfg = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="original_pw"),
+            users=UsersConfig(
+                masters=[UserEntry(nick="hub_admin", password="original_pw")],
+            ),
         )
         await apply_config_to_db(cfg, force=False)
 
@@ -81,7 +95,9 @@ class TestAdminSeeding:
 
         # Second run with different password, no force
         cfg2 = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="new_password"),
+            users=UsersConfig(
+                masters=[UserEntry(nick="hub_admin", password="new_password")],
+            ),
         )
         await apply_config_to_db(cfg2, force=False)
 
@@ -89,19 +105,23 @@ class TestAdminSeeding:
         assert user.login_pwd == original_hash  # Unchanged
 
     @pytest.mark.asyncio
-    async def test_admin_overwritten_with_force(self, db: Database, db_session: AsyncSession):
-        """Admin password updated when --force is used."""
+    async def test_user_overwritten_with_force(self, db: Database, db_session: AsyncSession):
+        """User password updated when --force is used."""
         from verlihub.config import apply_config_to_db
 
         # First run
         cfg = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="original_pw"),
+            users=UsersConfig(
+                admins=[UserEntry(nick="hub_admin", password="original_pw")],
+            ),
         )
         await apply_config_to_db(cfg, force=False)
 
         # Second run with force
         cfg2 = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="forced_new_pw"),
+            users=UsersConfig(
+                admins=[UserEntry(nick="hub_admin", password="forced_new_pw")],
+            ),
         )
         await apply_config_to_db(cfg2, force=True)
 
@@ -112,13 +132,11 @@ class TestAdminSeeding:
         assert verify_password("forced_new_pw", user.login_pwd)
 
     @pytest.mark.asyncio
-    async def test_admin_not_seeded_without_password(self, db: Database, db_session: AsyncSession):
-        """No admin created if password is empty."""
+    async def test_no_users_seeded_with_empty_config(self, db: Database, db_session: AsyncSession):
+        """No users created if users section is empty."""
         from verlihub.config import apply_config_to_db
 
-        cfg = VerlihubConfig(
-            api=ApiConfig(username="admin", password=""),
-        )
+        cfg = VerlihubConfig()
         await apply_config_to_db(cfg, force=False)
 
         result = await db_session.execute(
@@ -128,26 +146,17 @@ class TestAdminSeeding:
         assert user is None
 
     @pytest.mark.asyncio
-    async def test_admin_and_yaml_users_both_seeded(self, db: Database, db_session: AsyncSession):
-        """Config admin and users section are both created."""
+    async def test_multiple_user_classes_seeded(self, db: Database, db_session: AsyncSession):
+        """Users from multiple class lists are all created."""
         from verlihub.config import apply_config_to_db
 
         cfg = VerlihubConfig(
-            api=ApiConfig(username="api_admin", password="admin_pw"),
             users=UsersConfig(
                 masters=[UserEntry(nick="master1", password="master_pw")],
                 registered=[UserEntry(nick="user1", password="user_pw")],
             ),
         )
         await apply_config_to_db(cfg, force=False)
-
-        # API admin should exist
-        result = await db_session.execute(
-            select(RegUser).where(RegUser.nick == "api_admin")
-        )
-        admin = result.scalar_one_or_none()
-        assert admin is not None
-        assert admin.user_class == UserClass.ADMIN
 
         # Master should exist
         result = await db_session.execute(
@@ -166,29 +175,32 @@ class TestAdminSeeding:
         assert user.user_class == UserClass.REGISTERED
 
     @pytest.mark.asyncio
-    async def test_admin_class_preserved_if_higher(self, db: Database, db_session: AsyncSession):
-        """If existing admin already has class >= ADMIN, force doesn't lower it."""
+    async def test_user_class_updated_with_force(self, db: Database, db_session: AsyncSession):
+        """If existing user already has a class, force updates it."""
         from verlihub.config import apply_config_to_db
 
-        # Create a MASTER user manually
-        master = RegUser(
+        # Create an ADMIN user manually
+        admin = RegUser(
             nick="hub_admin",
             login_pwd=hash_password("old_pw"),
-            user_class=UserClass.MASTER,
+            user_class=UserClass.ADMIN,
             authorised=True,
             reg_op="manual",
         )
-        db_session.add(master)
+        db_session.add(admin)
         await db_session.commit()
 
-        # Run apply_config with force
+        # Run apply_config with force to promote to MASTER
         cfg = VerlihubConfig(
-            api=ApiConfig(username="hub_admin", password="new_pw"),
+            users=UsersConfig(
+                masters=[UserEntry(nick="hub_admin", password="new_pw")],
+            ),
         )
         await apply_config_to_db(cfg, force=True)
 
-        await db_session.refresh(master)
-        assert master.user_class == UserClass.MASTER  # Not lowered to ADMIN
+        await db_session.refresh(admin)
+        assert admin.user_class == UserClass.MASTER
+        assert verify_password("new_pw", admin.login_pwd)
 
 
 # =============================================================================
@@ -254,11 +266,13 @@ class TestDatabaseAuthentication:
 
     @pytest.mark.asyncio
     async def test_authenticate_admin_from_config(self, db: Database, db_session: AsyncSession):
-        """Admin seeded from config should authenticate correctly."""
+        """Admin seeded from users config should authenticate correctly."""
         from verlihub.config import apply_config_to_db
 
         cfg = VerlihubConfig(
-            api=ApiConfig(username="cfg_admin", password="cfg_pw"),
+            users=UsersConfig(
+                admins=[UserEntry(nick="cfg_admin", password="cfg_pw")],
+            ),
         )
         await apply_config_to_db(cfg, force=False)
 
@@ -390,14 +404,14 @@ class TestDashboardRegistrationPage:
 
     def test_register_page_invite_code_optional_by_default(self, client, monkeypatch):
         """Invite code should be optional when require_invite is false."""
-        monkeypatch.setenv("VH_REGISTRATION_REQUIRE_INVITE", "0")
+        _set_reg_config(monkeypatch, enabled=True, require_invite=False)
         response = client.get("/dashboard/register")
         assert response.status_code == 200
         assert "Optional" in response.text
 
     def test_register_page_disabled_shows_warning(self, client, monkeypatch):
         """When registration disabled, page shows warning."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "0")
+        _set_reg_config(monkeypatch, enabled=False)
         response = client.get("/dashboard/register")
         assert response.status_code == 200
         assert "disabled" in response.text.lower()
@@ -444,7 +458,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_short_nick_rejected(self, client, monkeypatch):
         """Nick shorter than 2 chars should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "1")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/dashboard/register",
             data={
@@ -460,7 +474,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_invalid_nick_rejected(self, client, monkeypatch):
         """Nick with invalid characters should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "1")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/dashboard/register",
             data={
@@ -476,7 +490,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_short_password_rejected(self, client, monkeypatch):
         """Password shorter than 4 chars should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "1")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/dashboard/register",
             data={
@@ -492,7 +506,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_password_mismatch_rejected(self, client, monkeypatch):
         """Mismatched passwords should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "1")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/dashboard/register",
             data={
@@ -508,7 +522,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_when_disabled_rejected(self, client, monkeypatch):
         """Registration should be rejected when disabled."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "0")
+        _set_reg_config(monkeypatch, enabled=False)
         response = client.post(
             "/dashboard/register",
             data={
@@ -524,8 +538,7 @@ class TestDashboardRegistrationSubmit:
 
     def test_register_requires_invite_when_configured(self, client, monkeypatch):
         """Registration without invite code should fail when invite required."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "1")
-        monkeypatch.setenv("VH_REGISTRATION_REQUIRE_INVITE", "1")
+        _set_reg_config(monkeypatch, enabled=True, require_invite=True)
         response = client.post(
             "/dashboard/register",
             data={
@@ -556,7 +569,7 @@ class TestApiRegistrationEndpoint:
 
     def test_register_api_enabled_by_default(self, client, monkeypatch):
         """Registration should be enabled by default."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "true")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/api/v1/auth/register",
             json={"nick": "newuser", "password": "password123"},
@@ -566,7 +579,7 @@ class TestApiRegistrationEndpoint:
 
     def test_register_api_disabled(self, client, monkeypatch):
         """Registration should be rejected when disabled."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "false")
+        _set_reg_config(monkeypatch, enabled=False)
         response = client.post(
             "/api/v1/auth/register",
             json={"nick": "newuser", "password": "password123"},
@@ -575,7 +588,7 @@ class TestApiRegistrationEndpoint:
 
     def test_register_api_nick_validation(self, client, monkeypatch):
         """Short nicks should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "true")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/api/v1/auth/register",
             json={"nick": "x", "password": "password123"},
@@ -584,7 +597,7 @@ class TestApiRegistrationEndpoint:
 
     def test_register_api_password_too_short(self, client, monkeypatch):
         """Short passwords should be rejected."""
-        monkeypatch.setenv("VH_REGISTRATION_ENABLED", "true")
+        _set_reg_config(monkeypatch, enabled=True)
         response = client.post(
             "/api/v1/auth/register",
             json={"nick": "validuser", "password": "ab"},

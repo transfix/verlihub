@@ -166,8 +166,6 @@ class ApiConfig:
     host: str = "127.0.0.1"
     port: int = 8000
     secret: str = ""
-    username: str = "admin"
-    password: str = ""
     token_expire_minutes: int = 60
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
     secure_cookies: bool = False
@@ -180,8 +178,6 @@ class ApiConfig:
         env = {
             "VH_API_HOST": self.host,
             "VH_API_PORT": str(self.port),
-            "VH_API_USERNAME": self.username,
-            "VH_API_PASSWORD": self.password,
             "VH_JWT_EXPIRE_MINUTES": str(self.token_expire_minutes),
             "VH_CORS_ORIGINS": ",".join(self.cors_origins),
             "VH_SECURE_COOKIES": "1" if self.secure_cookies else "0",
@@ -413,8 +409,6 @@ class VerlihubConfig:
                 host=api.get("host", config.api.host),
                 port=api.get("port", config.api.port),
                 secret=api.get("secret", config.api.secret),
-                username=api.get("username", config.api.username),
-                password=api.get("password", config.api.password),
                 token_expire_minutes=api.get("token_expire_minutes", config.api.token_expire_minutes),
                 cors_origins=api.get("cors_origins", config.api.cors_origins),
                 secure_cookies=api.get("secure_cookies", config.api.secure_cookies),
@@ -587,8 +581,6 @@ class VerlihubConfig:
             host=os.getenv("VH_API_HOST", config.api.host),
             port=int(os.getenv("VH_API_PORT", str(config.api.port))),
             secret=os.getenv("VH_JWT_SECRET", config.api.secret),
-            username=os.getenv("VH_API_USERNAME", config.api.username),
-            password=os.getenv("VH_API_PASSWORD", config.api.password),
             token_expire_minutes=int(os.getenv("VH_JWT_EXPIRE_MINUTES", str(config.api.token_expire_minutes))),
             cors_origins=cors_origins.split(",") if cors_origins else ["*"],
             secure_cookies=os.getenv("VH_SECURE_COOKIES", "0") == "1",
@@ -619,8 +611,13 @@ class VerlihubConfig:
         """
         Export configuration to environment variables.
         
-        This allows components that read from environment to use
-        settings from the YAML config.
+        This is **not** used for in-process configuration — modules should
+        read from the config singleton via ``get_config()`` instead.
+        
+        The env vars are still exported for:
+        - Subprocess / Docker child processes that may read ``VH_*`` vars
+        - Legacy ``models.database.DatabaseConfig`` fallback paths
+        - External CLI tools (e.g. ``verlihub-cli``)
         """
         env_vars = {}
         env_vars.update(self.database.to_env())
@@ -674,8 +671,6 @@ class VerlihubConfig:
         if self.environment == "production":
             if not self.api.secret:
                 issues.append("CRITICAL: No API secret set for production")
-            if not self.api.password:
-                issues.append("CRITICAL: No API password set for production")
             if "*" in self.api.cors_origins:
                 issues.append("WARNING: Wildcard CORS origins in production")
             if not self.api.secure_cookies:
@@ -704,7 +699,6 @@ class VerlihubConfig:
             "api": {
                 "host": self.api.host,
                 "port": self.api.port,
-                "username": self.api.username,
                 "token_expire_minutes": self.api.token_expire_minutes,
                 "cors_origins": self.api.cors_origins,
                 "secure_cookies": self.api.secure_cookies,
@@ -746,6 +740,44 @@ class VerlihubConfig:
                 "script_config": self.python.script_config,
             },
         }
+
+
+# =============================================================================
+# Config Singleton — single source of truth for in-process access
+# =============================================================================
+
+_config: Optional[VerlihubConfig] = None
+
+
+def set_config(config: VerlihubConfig) -> None:
+    """
+    Set the global configuration singleton.
+
+    Call this once during startup (after loading YAML / CLI overrides)
+    so that every module can access config via ``get_config()`` without
+    an env-var round-trip.
+    """
+    global _config
+    _config = config
+
+
+def get_config() -> VerlihubConfig:
+    """
+    Return the global ``VerlihubConfig`` instance.
+
+    Raises ``RuntimeError`` if ``set_config()`` has not been called yet.
+    """
+    if _config is None:
+        raise RuntimeError(
+            "get_config() called before set_config(). "
+            "Ensure the config is loaded during startup."
+        )
+    return _config
+
+
+def get_config_optional() -> Optional[VerlihubConfig]:
+    """Return the global config or ``None`` if not yet initialised."""
+    return _config
 
 
 def load_config(
@@ -944,51 +976,6 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
                 "Hub settings: %d applied, %d kept from DB%s",
                 applied, skipped, " (--force)" if force else "",
             )
-        
-        # --- Seed API admin user ---
-        if config.api.username and config.api.password:
-            admin_nick = config.api.username
-            result = await session.execute(
-                select(RegUser).where(RegUser.nick == admin_nick)
-            )
-            existing_admin = result.scalars().first()
-            
-            if existing_admin is None:
-                try:
-                    import bcrypt as _bcrypt
-                    admin_pwd = _bcrypt.hashpw(
-                        config.api.password.encode("utf-8"),
-                        _bcrypt.gensalt(),
-                    ).decode("utf-8")
-                except ImportError:
-                    admin_pwd = config.api.password
-                
-                admin_user = RegUser(
-                    nick=admin_nick,
-                    login_pwd=admin_pwd,
-                    user_class=UserClass.ADMIN,
-                    authorised=True,
-                    reg_op="config-api",
-                    note_op="Bootstrap admin from api config",
-                )
-                session.add(admin_user)
-                logger.info("Created API admin user '%s' (class %d)", admin_nick, UserClass.ADMIN)
-            elif force:
-                try:
-                    import bcrypt as _bcrypt
-                    admin_pwd = _bcrypt.hashpw(
-                        config.api.password.encode("utf-8"),
-                        _bcrypt.gensalt(),
-                    ).decode("utf-8")
-                except ImportError:
-                    admin_pwd = config.api.password
-                existing_admin.login_pwd = admin_pwd
-                if existing_admin.user_class < UserClass.ADMIN:
-                    existing_admin.user_class = UserClass.ADMIN
-                session.add(existing_admin)
-                logger.info("Updated API admin user '%s'", admin_nick)
-            else:
-                logger.debug("API admin user '%s' already exists, skipping", admin_nick)
         
         # --- User registration ---
         users_created = 0

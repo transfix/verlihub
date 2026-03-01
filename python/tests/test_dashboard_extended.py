@@ -116,8 +116,16 @@ class TestRegisterPage:
         resp = await client.get("/dashboard/register?invite=CODE123")
         assert resp.status_code == 200
 
-    @patch.dict(os.environ, {"VH_REGISTRATION_ENABLED": "false"})
-    async def test_register_page_disabled(self, client):
+    @patch("verlihub.dashboard.routes.get_config_optional")
+    async def test_register_page_disabled(self, mock_cfg, client):
+        cfg = MagicMock()
+        cfg.api.registration_enabled = False
+        cfg.api.registration_require_invite = False
+        cfg.hub.name = "Test"
+        cfg.hub.description = ""
+        cfg.hub.topic = ""
+        cfg.hub.logo = ""
+        mock_cfg.return_value = cfg
         resp = await client.get("/dashboard/register")
         assert resp.status_code == 200
 
@@ -160,8 +168,16 @@ class TestRegisterSubmitValidation:
         assert resp.status_code == 303
         assert "error=" in resp.headers["location"]
 
-    @patch.dict(os.environ, {"VH_REGISTRATION_ENABLED": "false"})
-    async def test_register_disabled(self, client):
+    @patch("verlihub.dashboard.routes.get_config_optional")
+    async def test_register_disabled(self, mock_cfg, client):
+        cfg = MagicMock()
+        cfg.api.registration_enabled = False
+        cfg.api.registration_require_invite = False
+        cfg.hub.name = "Test"
+        cfg.hub.description = ""
+        cfg.hub.topic = ""
+        cfg.hub.logo = ""
+        mock_cfg.return_value = cfg
         resp = await client.post(
             "/dashboard/register",
             data={"nick": "nick", "password": "pass", "confirm_password": "pass"},
@@ -169,11 +185,16 @@ class TestRegisterSubmitValidation:
         assert resp.status_code == 303
         assert "disabled" in resp.headers["location"].lower() or "error=" in resp.headers["location"]
 
-    @patch.dict(os.environ, {
-        "VH_REGISTRATION_REQUIRE_INVITE": "true",
-        "VH_REGISTRATION_ENABLED": "true",
-    })
-    async def test_register_invite_required_no_code(self, client):
+    @patch("verlihub.dashboard.routes.get_config_optional")
+    async def test_register_invite_required_no_code(self, mock_cfg, client):
+        cfg = MagicMock()
+        cfg.api.registration_enabled = True
+        cfg.api.registration_require_invite = True
+        cfg.hub.name = "Test"
+        cfg.hub.description = ""
+        cfg.hub.topic = ""
+        cfg.hub.logo = ""
+        mock_cfg.return_value = cfg
         resp = await client.post(
             "/dashboard/register",
             data={"nick": "validnick", "password": "pass1234", "confirm_password": "pass1234", "invite_code": ""},
@@ -233,7 +254,7 @@ class TestUnauthenticatedRedirects:
         "/dashboard/bans",
         "/dashboard/config",
         "/dashboard/logs",
-        "/dashboard/console",
+        "/dashboard/chat",
         "/dashboard/plugins",
         "/dashboard/invites",
     ])
@@ -277,8 +298,8 @@ class TestAuthenticatedPages:
         resp = await client.get("/dashboard/logs", cookies=_cookie())
         assert resp.status_code == 200
 
-    async def test_console_page(self, client):
-        resp = await client.get("/dashboard/console", cookies=_cookie("op", 3))
+    async def test_chat_page(self, client):
+        resp = await client.get("/dashboard/chat", cookies=_cookie("op", 3))
         assert resp.status_code == 200
 
     async def test_plugins_page(self, client):

@@ -135,12 +135,20 @@ async def websocket_hub(websocket: WebSocket):
         return
     
     try:
-        # Send initial connection confirmation
-        await manager.send_personal(websocket, {
+        # Send initial connection confirmation with full hub state
+        from verlihub.api.deps import get_hub_context as _get_ctx
+        _ctx = _get_ctx()
+        initial_state = {
             "type": "connected",
             "message": "Connected to hub events",
             "time": datetime.now(timezone.utc).isoformat(),
-        })
+            "hub_running": _ctx.is_running if _ctx else False,
+            "user_count": _ctx.user_count if _ctx else 0,
+            "share_total": _ctx.total_share if _ctx else 0,
+            "uptime": _ctx.uptime if _ctx else 0,
+            "users": _ctx.get_user_list() if _ctx and hasattr(_ctx, 'get_user_list') else [],
+        }
+        await manager.send_personal(websocket, initial_state)
         
         # Keep connection alive and handle incoming messages
         while True:
@@ -252,24 +260,36 @@ async def broadcast_log(level: str, message: str, log_type: str = "system"):
     await manager.broadcast("logs", entry)
 
 
-# Synchronous wrappers for calling from non-async code
-def emit_hub_event(event_type: str, data: dict):
-    """Emit a hub event (sync wrapper)."""
-    try:
-        loop = asyncio.get_running_loop()
-        asyncio.create_task(broadcast_hub_event(event_type, data))
-    except RuntimeError:
-        # No event loop running
-        pass
+# ---------------------------------------------------------------------------
+# Thread-safe synchronous wrappers for pushing events from any thread
+# (including the C++ server thread which is NOT an asyncio thread).
+# ---------------------------------------------------------------------------
+
+_ws_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-def emit_log(level: str, message: str, log_type: str = "system"):
-    """Emit a log entry (sync wrapper)."""
-    try:
-        loop = asyncio.get_running_loop()
-        asyncio.create_task(broadcast_log(level, message, log_type))
-    except RuntimeError:
-        pass
+def set_ws_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Store the asyncio event loop that the WebSocket manager runs on.
+
+    Must be called from within the running event loop (e.g. during lifespan
+    startup or ``start_stats_task``).
+    """
+    global _ws_loop
+    _ws_loop = loop
+
+
+def emit_hub_event(event_type: str, data: dict) -> None:
+    """Schedule a hub event broadcast (safe to call from any thread)."""
+    loop = _ws_loop
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(broadcast_hub_event(event_type, data), loop)
+
+
+def emit_log(level: str, message: str, log_type: str = "system") -> None:
+    """Schedule a log broadcast (safe to call from any thread)."""
+    loop = _ws_loop
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(broadcast_log(level, message, log_type), loop)
 
 
 # --- Background task for periodic stats updates ---
@@ -277,29 +297,32 @@ def emit_log(level: str, message: str, log_type: str = "system"):
 _stats_task: Optional[asyncio.Task] = None
 
 
+def _collect_stats_sync() -> Optional[dict]:
+    """Collect hub stats in a worker thread (avoids blocking the event loop)."""
+    from verlihub.api.deps import get_hub_context
+    ctx = get_hub_context()
+    if ctx is None:
+        return None
+    try:
+        return {
+            "type": "stats",
+            "user_count": ctx.user_count,
+            "share_total": ctx.total_share,
+            "hub_running": ctx.is_running,
+            "uptime": ctx.uptime,
+            "users": ctx.get_user_list() if hasattr(ctx, 'get_user_list') else [],
+        }
+    except Exception:
+        return None
+
+
 async def _stats_broadcast_loop():
     """Background task to broadcast hub stats periodically."""
-    from verlihub.api.deps import get_hub_context
-    
     while True:
         try:
             await asyncio.sleep(5)  # Update every 5 seconds
-            
-            ctx = get_hub_context()
-            if ctx and ctx.is_running:
-                stats = {
-                    "type": "stats",
-                    "user_count": ctx.user_count,
-                    "share_total": ctx.total_share,
-                    "hub_running": True,
-                }
-                
-                # Get uptime if available
-                try:
-                    stats["uptime"] = ctx.uptime
-                except AttributeError:
-                    pass
-                
+            stats = await asyncio.to_thread(_collect_stats_sync)
+            if stats is not None:
                 await manager.broadcast("hub", stats)
         except Exception as e:
             logger.error(f"Stats broadcast error: {e}")
@@ -311,6 +334,7 @@ def start_stats_task():
     if _stats_task is None or _stats_task.done():
         try:
             loop = asyncio.get_running_loop()
+            set_ws_event_loop(loop)  # remember for cross-thread emit
             _stats_task = loop.create_task(_stats_broadcast_loop())
             logger.info("Started hub stats broadcast task")
         except RuntimeError:
@@ -341,29 +365,35 @@ class HubEventBroadcaster:
     """
     
     def on_user_connect(self, nick: str, ip: str) -> bool:
-        """Handle user connect event."""
-        emit_hub_event("user_join", {
-            "nick": nick,
-            "ip": ip,
-        })
+        """Handle user connect event.
+
+        IMPORTANT: This is called from the C++ server thread while
+        m_clients_mutex is held.  We must NOT call back into C++
+        methods that acquire the same mutex (e.g. get_user_list /
+        GetUserInfoSnapshots) or we will deadlock.
+        """
+        emit_hub_event("user_join", {"nick": nick, "ip": ip})
         emit_log("info", f"User connected: {nick}", "connection")
         return True
-    
-    def on_user_disconnect(self, nick: str) -> None:
-        """Handle user disconnect event."""
-        emit_hub_event("user_leave", {
-            "nick": nick,
-        })
-        emit_log("info", f"User disconnected: {nick}", "connection")
-    
+
     def on_user_login(self, nick: str, user_class: int) -> bool:
-        """Handle user login event."""
-        emit_hub_event("user_login", {
-            "nick": nick,
-            "user_class": user_class,
-        })
+        """Handle user login event.
+
+        Called from C++ while m_clients_mutex is held — do NOT call
+        back into the C++ core.
+        """
+        emit_hub_event("user_login", {"nick": nick, "user_class": user_class})
         return True
-    
+
+    def on_user_disconnect(self, nick: str) -> None:
+        """Handle user disconnect event.
+
+        Called from C++ while m_clients_mutex is held — do NOT call
+        back into the C++ core.
+        """
+        emit_hub_event("user_leave", {"nick": nick})
+        emit_log("info", f"User disconnected: {nick}", "connection")
+
     def on_chat_message(self, nick: str, message: str) -> bool:
         """Handle main chat message."""
         emit_hub_event("chat", {
@@ -371,12 +401,12 @@ class HubEventBroadcaster:
             "message": message,
         })
         return True
-    
+
     def on_private_message(self, from_nick: str, to_nick: str, message: str) -> bool:
         """Handle private message (for logging, not broadcast)."""
         emit_log("debug", f"PM from {from_nick} to {to_nick}", "pm")
         return True
-    
+
     def on_hub_started(self) -> None:
         """Handle hub started event."""
         emit_hub_event("hub_status", {
@@ -384,7 +414,7 @@ class HubEventBroadcaster:
             "message": "Hub has started",
         })
         emit_log("info", "Hub started", "system")
-    
+
     def on_hub_stopping(self) -> None:
         """Handle hub stopping event."""
         emit_hub_event("hub_status", {

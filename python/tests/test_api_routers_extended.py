@@ -78,6 +78,23 @@ def make_mock_hub_ctx(**overrides):
     ctx.get_user_host = lambda nick: user_hosts.get(nick, "")
     ctx.get_bot_description = lambda nick: f"{nick} bot"
 
+    # get_user_list — returns full user info dicts (used by stats & users endpoints)
+    def _get_user_list():
+        result = []
+        for nick in ctx.get_user_nicks():
+            result.append({
+                "nick": nick,
+                "user_class": user_classes.get(nick, 0),
+                "share": user_shares.get(nick, 0),
+                "ip": user_ips.get(nick, ""),
+                "country": user_ccs.get(nick, ""),
+                "host": user_hosts.get(nick, ""),
+                "client": "",
+                "status": "",
+            })
+        return result
+    ctx.get_user_list = _get_user_list
+
     # Geo info
     ctx.get_user_geo = lambda nick: {
         "country": "United States" if user_ccs.get(nick) == "US" else "Germany",
@@ -99,6 +116,7 @@ def make_mock_hub_ctx(**overrides):
     ctx.send_to_user = mock.MagicMock(return_value=True)
     ctx.send_to_all = mock.MagicMock(return_value=True)
     ctx.send_to_class = mock.MagicMock(return_value=True)
+    ctx.send_chat_as = mock.MagicMock(return_value=True)
     ctx.request_shutdown = mock.MagicMock()
     ctx.cpp = mock.MagicMock()
 
@@ -228,6 +246,24 @@ class TestHubStatusWithContext:
         )
         assert resp.status_code == 200
         mock_ctx.send_to_class.assert_called_once_with("VIP msg", 2, 5)
+
+    def test_chat_message(self, client, op_header, mock_ctx):
+        resp = client.post(
+            "/api/v1/hub/chat",
+            json={"message": "Hello from chat"},
+            headers=op_header,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        mock_ctx.send_chat_as.assert_called_once_with("op_user", "Hello from chat")
+
+    def test_chat_requires_operator(self, client, user_header):
+        resp = client.post(
+            "/api/v1/hub/chat",
+            json={"message": "Hello"},
+            headers=user_header,
+        )
+        assert resp.status_code == 403
 
     def test_shutdown(self, client, master_header, mock_ctx):
         resp = client.post("/api/v1/hub/shutdown", headers=master_header)
@@ -360,6 +396,13 @@ class TestStatsWithContext:
         mock_ctx.get_user_host = lambda nick: ""
         mock_ctx.get_user_geo = lambda nick: {"country": "", "city": "", "region": "", "asn": ""}
         mock_ctx.get_user_myinfo = lambda nick: {"description": "", "tag": "", "email": ""}
+
+        # Update get_user_list to match the new mock data
+        mock_ctx.get_user_list = lambda: [
+            {"nick": n, "user_class": classes.get(n, 0), "share": shares.get(n, 0),
+             "ip": ips.get(n, ""), "country": "", "host": "", "client": "", "status": ""}
+            for n in mock_ctx.get_user_nicks()
+        ]
 
         resp = client.get("/api/v1/stats/users/detailed")
         assert resp.status_code == 200

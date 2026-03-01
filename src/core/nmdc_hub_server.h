@@ -50,6 +50,7 @@
 namespace nVerliHub {
 
 // Forward declarations
+struct UserInfoSnapshot;
 class IHubEventCallback;
 class NMDCHubServer;
 
@@ -201,6 +202,12 @@ public:
 
     /// Get total share in bytes
     uint64_t GetTotalShare() const;
+
+    /// Get snapshot of a single user by nick (thread-safe copy)
+    bool GetUserInfo(const std::string& nick, UserInfoSnapshot& out) const;
+
+    /// Get snapshots of ALL logged-in users (thread-safe, single lock)
+    std::vector<UserInfoSnapshot> GetUserInfoSnapshots() const;
 
     // =========================================================================
     // User Management

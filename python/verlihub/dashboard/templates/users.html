@@ -79,11 +79,11 @@
                 {% for u in online_users %}
                 <tr>
                     <td><strong>{{ u.nick }}</strong></td>
-                    <td><code>{{ u.ip }}</code></td>
-                    <td><span class="tag">{{ u.class }}</span></td>
-                    <td>{{ u.share }}</td>
-                    <td>{{ u.client }}</td>
-                    <td>{{ u.connected }}</td>
+                    <td><code>{{ u.ip or '' }}</code></td>
+                    <td><span class="tag">{{ u.user_class }}</span></td>
+                    <td>{{ u.share or 0 }}</td>
+                    <td>{{ u.client or '' }}</td>
+                    <td>{{ u.status or '' }}</td>
                     <td>
                         <div class="buttons are-small">
                             <button class="button is-info is-light" title="Info">
@@ -134,12 +134,12 @@
                     <td>
                         <strong>{{ u.nick }}</strong>
                         {% if u.nick in online_users|map(attribute='nick') %}
-                        <span class="tag is-success is-light ml-2">Online</span>
+                        <span class="tag is-primary is-light ml-2">Online</span>
                         {% endif %}
                     </td>
                     <td>
-                        <span class="tag {% if u.class_ >= 10 %}is-danger{% elif u.class_ >= 5 %}is-warning{% elif u.class_ >= 3 %}is-info{% else %}is-light{% endif %}">
-                            {{ u.class_ }}
+                        <span class="tag {% if u.user_class >= 10 %}is-danger{% elif u.user_class >= 5 %}is-warning{% elif u.user_class >= 3 %}is-info{% else %}is-light{% endif %}">
+                            {{ u.user_class }}
                         </span>
                     </td>
                     <td>{{ u.reg_date.strftime('%Y-%m-%d') if u.reg_date else '-' }}</td>
@@ -150,7 +150,7 @@
                             <button class="button is-info is-light" onclick="editUser('{{ u.nick }}')" title="Edit">
                                 <i class="fas fa-edit"></i>
                             </button>
-                            {% if u.class_ < user.user_class %}
+                            {% if u.user_class < user.user_class %}
                             <button class="button is-danger is-light" onclick="deleteUser('{{ u.nick }}')" title="Delete">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -249,7 +249,7 @@
             </form>
         </section>
         <footer class="modal-card-foot">
-            <button class="button is-success" onclick="saveUser()">
+            <button class="button is-primary" onclick="saveUser()">
                 <i class="fas fa-save mr-2"></i> Save
             </button>
             <button class="button" onclick="closeUserModal()">Cancel</button>
@@ -403,6 +403,74 @@
         if (e.key === 'Enter') {
             searchUsers();
         }
+    });
+
+    // =====================================================================
+    // WebSocket real-time updates for online user list
+    // =====================================================================
+    function renderOnlineUsers(users) {
+        const tbody = document.getElementById('online-users-body');
+        const countBadge = document.getElementById('online-count');
+        if (countBadge) countBadge.textContent = users.length;
+
+        if (!users || users.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="has-text-centered has-text-grey">
+                        <i class="fas fa-user-slash fa-2x mb-3"></i>
+                        <p>No users online</p>
+                    </td>
+                </tr>`;
+            return;
+        }
+
+        tbody.innerHTML = users.map(u => `
+            <tr>
+                <td><strong>${escapeHtml(u.nick)}</strong></td>
+                <td><code>${escapeHtml(u.ip || '')}</code></td>
+                <td><span class="tag">${u.user_class || 0}</span></td>
+                <td>${formatBytes(u.share || 0)}</td>
+                <td>${escapeHtml(u.client || '')}</td>
+                <td>${escapeHtml(u.status || '')}</td>
+                <td>
+                    <div class="buttons are-small">
+                        <button class="button is-info is-light" title="Info"><i class="fas fa-info-circle"></i></button>
+                        <button class="button is-success is-light" title="Message"><i class="fas fa-envelope"></i></button>
+                        <button class="button is-warning is-light" title="Kick"><i class="fas fa-shoe-prints"></i></button>
+                        <button class="button is-danger is-light" title="Ban"><i class="fas fa-ban"></i></button>
+                    </div>
+                </td>
+            </tr>`).join('');
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text || '';
+        return div.innerHTML;
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    // Listen for WS updates
+    document.addEventListener('DOMContentLoaded', () => {
+        VHWebSocket.on('stats', msg => {
+            if (msg.users) renderOnlineUsers(msg.users);
+        });
+        VHWebSocket.on('connected', msg => {
+            if (msg.users) renderOnlineUsers(msg.users);
+        });
+        VHWebSocket.on('user_join', () => {
+            if (VHWebSocket.state.users.length) renderOnlineUsers(VHWebSocket.state.users);
+        });
+        VHWebSocket.on('user_leave', () => {
+            if (VHWebSocket.state.users.length) renderOnlineUsers(VHWebSocket.state.users);
+        });
     });
 </script>
 {% endblock %}

@@ -228,6 +228,10 @@
             background-color: #f14668;
         }
         
+        .status-indicator.is-warning {
+            background-color: #ffdd57;
+        }
+        
         .user-class-badge {
             font-size: 0.75rem;
         }
@@ -349,8 +353,8 @@
                 <a class="navbar-item" href="/dashboard/bans">
                     <i class="fas fa-ban mr-2"></i> Bans
                 </a>
-                <a class="navbar-item" href="/dashboard/console">
-                    <i class="fas fa-terminal mr-2"></i> Console
+                <a class="navbar-item" href="/dashboard/chat">
+                    <i class="fas fa-comments mr-2"></i> Chat
                 </a>
                 <a class="navbar-item" href="/dashboard/plugins">
                     <i class="fas fa-puzzle-piece mr-2"></i> Plugins
@@ -369,8 +373,8 @@
             
             <div class="navbar-end">
                 <div class="navbar-item">
-                    <span class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}"></span>
-                    <span>{% if hub_running %}Online{% else %}Offline{% endif %}</span>
+                    <span id="ws-status-indicator" class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}"></span>
+                    <span id="ws-status-label">{% if hub_running %}Online{% else %}Offline{% endif %}</span>
                 </div>
                 
                 <a class="navbar-item theme-toggle" onclick="toggleTheme()">
@@ -524,6 +528,171 @@
             
             return response.json();
         }
+
+        // =====================================================================
+        // Global WebSocket Client — provides real-time hub updates to all pages
+        // =====================================================================
+        const VHWebSocket = (function() {
+            let ws = null;
+            let reconnectTimer = null;
+            let reconnectDelay = 1000; // start at 1s, back off to 10s
+            const MAX_RECONNECT_DELAY = 10000;
+            let intentionallyClosed = false;
+            let pingTimer = null;
+
+            // Track live state
+            const state = {
+                connected: false,
+                hub_running: {{ 'true' if hub_running else 'false' }},
+                user_count: 0,
+                share_total: 0,
+                uptime: 0,
+                users: [],
+            };
+
+            // Event listeners: { 'event_type': [fn, fn, ...] }
+            const listeners = {};
+
+            function on(eventType, fn) {
+                if (!listeners[eventType]) listeners[eventType] = [];
+                listeners[eventType].push(fn);
+            }
+
+            function off(eventType, fn) {
+                if (!listeners[eventType]) return;
+                listeners[eventType] = listeners[eventType].filter(f => f !== fn);
+            }
+
+            function emit(eventType, data) {
+                (listeners[eventType] || []).forEach(fn => {
+                    try { fn(data); } catch (e) { console.error('WS listener error:', e); }
+                });
+            }
+
+            function updateNavbar() {
+                const indicator = document.getElementById('ws-status-indicator');
+                const label = document.getElementById('ws-status-label');
+                if (indicator && label) {
+                    if (state.connected && state.hub_running) {
+                        indicator.className = 'status-indicator is-online';
+                        label.textContent = 'Online';
+                    } else if (state.connected) {
+                        indicator.className = 'status-indicator is-warning';
+                        label.textContent = 'Hub Stopped';
+                    } else {
+                        indicator.className = 'status-indicator is-offline';
+                        label.textContent = 'Offline';
+                    }
+                }
+            }
+
+            function connect() {
+                if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+                intentionallyClosed = false;
+
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws/hub`;
+
+                try {
+                    ws = new WebSocket(wsUrl);
+                } catch (e) {
+                    console.warn('WebSocket not available:', e);
+                    scheduleReconnect();
+                    return;
+                }
+
+                ws.onopen = function() {
+                    state.connected = true;
+                    reconnectDelay = 1000; // reset backoff
+                    updateNavbar();
+                    emit('ws_connected', state);
+                    startPing();
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        handleMessage(msg);
+                    } catch (e) {
+                        console.error('WS parse error:', e);
+                    }
+                };
+
+                ws.onclose = function() {
+                    state.connected = false;
+                    updateNavbar();
+                    stopPing();
+                    emit('ws_disconnected', state);
+                    if (!intentionallyClosed) scheduleReconnect();
+                };
+
+                ws.onerror = function(err) {
+                    console.warn('WebSocket error:', err);
+                };
+            }
+
+            function scheduleReconnect() {
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                reconnectTimer = setTimeout(() => {
+                    connect();
+                    reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY);
+                }, reconnectDelay);
+            }
+
+            function startPing() {
+                stopPing();
+                pingTimer = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                    }
+                }, 25000);
+            }
+
+            function stopPing() {
+                if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+            }
+
+            function handleMessage(msg) {
+                const type = msg.type;
+
+                if (type === 'pong') return; // keepalive response
+
+                if (type === 'connected' || type === 'stats') {
+                    // Full state update
+                    if (msg.hub_running !== undefined) state.hub_running = msg.hub_running;
+                    if (msg.user_count !== undefined) state.user_count = msg.user_count;
+                    if (msg.share_total !== undefined) state.share_total = msg.share_total;
+                    if (msg.uptime !== undefined) state.uptime = msg.uptime;
+                    if (msg.users !== undefined) state.users = msg.users;
+                    updateNavbar();
+                }
+
+                // Emit the specific event type so pages can react
+                emit(type, msg);
+                // Also emit a generic 'message' for pages that want everything
+                emit('message', msg);
+            }
+
+            function disconnect() {
+                intentionallyClosed = true;
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                stopPing();
+                if (ws) ws.close();
+            }
+
+            function getState() { return { ...state }; }
+
+            // Auto-connect on page load if user is logged in
+            {% if user %}
+            document.addEventListener('DOMContentLoaded', connect);
+            // Reconnect on visibility change (tab focused back)
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && !state.connected && !intentionallyClosed) connect();
+            });
+            {% endif %}
+
+            return { on, off, connect, disconnect, getState, state };
+        })();
     </script>
     
     {% block extra_scripts %}{% endblock %}

@@ -72,10 +72,6 @@
                 </button>
                 {% endif %}
                 
-                <button class="button" onclick="broadcastMessage()">
-                    <i class="fas fa-bullhorn mr-2"></i> Broadcast Message
-                </button>
-                
                 <button class="button" onclick="refreshStats()">
                     <i class="fas fa-refresh mr-2"></i> Refresh
                 </button>
@@ -165,34 +161,6 @@
     </div>
 </div>
 
-<!-- Broadcast modal -->
-<div class="modal" id="broadcast-modal">
-    <div class="modal-background" onclick="closeBroadcastModal()"></div>
-    <div class="modal-card">
-        <header class="modal-card-head">
-            <p class="modal-card-title">
-                <i class="fas fa-bullhorn mr-2"></i>
-                Broadcast Message
-            </p>
-            <button class="delete" aria-label="close" onclick="closeBroadcastModal()"></button>
-        </header>
-        <section class="modal-card-body">
-            <div class="field">
-                <label class="label">Message</label>
-                <div class="control">
-                    <textarea class="textarea" id="broadcast-message" rows="4" 
-                              placeholder="Enter message to broadcast to all users..."></textarea>
-                </div>
-            </div>
-        </section>
-        <footer class="modal-card-foot">
-            <button class="button is-primary" onclick="sendBroadcast()">
-                <i class="fas fa-paper-plane mr-2"></i> Send
-            </button>
-            <button class="button" onclick="closeBroadcastModal()">Cancel</button>
-        </footer>
-    </div>
-</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -306,33 +274,6 @@
                 }
             }
         );
-    }
-    
-    function broadcastMessage() {
-        document.getElementById('broadcast-modal').classList.add('is-active');
-        document.getElementById('broadcast-message').focus();
-    }
-    
-    function closeBroadcastModal() {
-        document.getElementById('broadcast-modal').classList.remove('is-active');
-        document.getElementById('broadcast-message').value = '';
-    }
-    
-    async function sendBroadcast() {
-        const message = document.getElementById('broadcast-message').value.trim();
-        if (!message) {
-            showNotification('Please enter a message', 'warning');
-            return;
-        }
-        
-        try {
-            await apiCall('POST', '/hub/message', { message });
-            showNotification('Message broadcast successfully', 'success');
-            closeBroadcastModal();
-            addActivity('Broadcast message sent', 'success');
-        } catch (error) {
-            showNotification(`Failed to send message: ${error.message}`, 'danger');
-        }
     }
     
     async function kickUser(nick) {

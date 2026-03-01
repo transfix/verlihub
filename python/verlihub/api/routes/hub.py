@@ -3,7 +3,6 @@ Hub status and control API endpoints.
 """
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -164,7 +163,9 @@ async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
         
         # Read MOTD file
         motd = ""
-        config_dir = os.getenv("VH_CONFIG_DIR", "/etc/verlihub")
+        from verlihub.config import get_config_optional
+        cfg = get_config_optional()
+        config_dir = cfg._config_dir if cfg else "/etc/verlihub"
         motd_file = Path(config_dir) / "motd"
         if motd_file.exists():
             try:
@@ -207,7 +208,7 @@ async def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
         total_share_gb=total_share / (1024 ** 3),
         hub_name=ctx.hub_name,
         hub_topic=ctx.hub_topic,
-        uptime_seconds=0,  # TODO: implement
+        uptime_seconds=ctx.uptime,
     )
 
 
@@ -239,6 +240,26 @@ async def set_hub_topic(
     return {"success": True, "topic": request.topic}
 
 
+class ChatMessageRequest(BaseModel):
+    """Request to send a chat message."""
+    message: str
+
+
+@router.post("/chat")
+async def send_chat_message(
+    request: ChatMessageRequest,
+    ctx=Depends(get_hub_context),
+    user: TokenData = Depends(require_permission(Permission.OPERATOR)),
+) -> dict:
+    """Send a chat message as the authenticated user. Requires OPERATOR (3)."""
+    try:
+        success = ctx.send_chat_as(user.nick, request.message)
+    except AttributeError:
+        # Fallback if send_chat_as not available
+        success = ctx.send_to_all(f"<{user.nick}> {request.message}")
+    return {"success": success}
+
+
 @router.post("/broadcast")
 async def broadcast_message(
     request: BroadcastRequest,
@@ -256,6 +277,46 @@ async def broadcast_message(
         success = ctx.send_to_all(request.message)
     
     return {"success": success}
+
+
+class HubStartRequest(BaseModel):
+    """Hub start request."""
+    port: int = 0        # 0 = use config / VH_PORT
+    listen_ip: str = ""  # empty = use config / VH_LISTEN_IP
+
+
+@router.post("/start")
+async def start_hub(
+    request: HubStartRequest = HubStartRequest(),
+    _user: RequireAdmin = None,
+) -> dict:
+    """
+    Start the hub if it is not already running.
+    
+    Requires ADMIN (5) permission.
+    
+    This endpoint is meaningful when VH_AUTO_START is not set and the
+    hub was only initialized (not started) during application startup.
+    """
+    from verlihub.api.deps import get_hub_context
+    ctx = get_hub_context()
+    if ctx is None:
+        raise HTTPException(status_code=503, detail="Hub context not initialized")
+    if ctx.is_running:
+        return {"success": True, "message": "Hub is already running"}
+    
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    port = request.port or (cfg.hub.port if cfg else 411)
+    listen_ip = request.listen_ip or (cfg.hub.listen_host if cfg else "0.0.0.0")
+    
+    if ctx.start(port, listen_ip):
+        return {"success": True, "message": f"Hub started on {listen_ip}:{port}"}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start hub on port {port} — is another instance already running on that port?",
+        )
 
 
 @router.post("/shutdown")

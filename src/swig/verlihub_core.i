@@ -133,6 +133,9 @@ Attributes:
 // Template for vector of PluginInfo
 %template(PluginInfoVector) std::vector<nVerliHub::PluginInfo>;
 
+// Template for vector of UserInfoSnapshot
+%template(UserInfoSnapshotVector) std::vector<nVerliHub::UserInfoSnapshot>;
+
 // ============================================================================
 // HubConfig - Python can read/write hub configuration
 // ============================================================================
@@ -260,6 +263,25 @@ Blocks until shutdown is complete.
 
 %feature("docstring") nVerliHub::HubContext::IsRunning "
 Check if hub is currently running.
+";
+
+%feature("docstring") nVerliHub::HubContext::GetUserInfoSnapshots "
+Get snapshots of all online users.
+Thread-safe: copies all user data under a single lock.
+
+Returns:
+    List of UserInfoSnapshot objects with nick, ip, user_class, share, etc.
+";
+
+%feature("docstring") nVerliHub::HubContext::GetUserInfo "
+Get snapshot of a single user by nick.
+
+Args:
+    nick: User's nickname
+    out: UserInfoSnapshot to fill
+
+Returns:
+    True if user was found and data was copied
 ";
 
 %feature("docstring") nVerliHub::HubContext::SetEventCallback "
@@ -506,12 +528,20 @@ Returns:
         Returns:
             dict with user info, or None if user not found
         """
-        # This will be implemented to call C++ and return a dict
-        # For now, just check if user exists
-        if self.FindUser(nick):
+        snap = UserInfoSnapshot()
+        if self.GetUserInfo(nick, snap):
             return {
-                'nick': nick,
-                # Additional info will be added when cUser is refactored
+                'nick': snap.nick,
+                'user_class': snap.user_class,
+                'share': snap.share,
+                'ip': snap.ip,
+                'country': snap.country,
+                'client': snap.client_name,
+                'description': snap.description,
+                'tag': snap.tag,
+                'speed': snap.speed,
+                'email': snap.email,
+                'status': '',
             }
         return None
     
@@ -523,5 +553,29 @@ Returns:
             list of nicknames
         """
         return list(self.GetUserNicks())
+    
+    def get_user_list_snapshots(self):
+        """
+        Get list of all online users with full info.
+        
+        Returns:
+            list of dicts with user info
+        """
+        result = []
+        for snap in self.GetUserInfoSnapshots():
+            result.append({
+                'nick': snap.nick,
+                'user_class': snap.user_class,
+                'share': snap.share,
+                'ip': snap.ip,
+                'country': snap.country,
+                'client': snap.client_name,
+                'description': snap.description,
+                'tag': snap.tag,
+                'speed': snap.speed,
+                'email': snap.email,
+                'status': '',
+            })
+        return result
     %}
 }

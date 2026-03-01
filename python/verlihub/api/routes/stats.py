@@ -252,6 +252,15 @@ def set_hub_start_time(ts: float):
     _hub_start_time = ts
 
 
+def _get_all_users(ctx) -> list[dict]:
+    """Get all online users as list of dicts from the hub context."""
+    if hasattr(ctx, 'get_user_list'):
+        return ctx.get_user_list()
+    # Fallback: nick-only
+    nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+    return [{"nick": n, "user_class": 0, "share": 0, "ip": "", "country": ""} for n in nicks]
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -261,24 +270,16 @@ def set_hub_start_time(ts: float):
 async def get_statistics(ctx=Depends(get_hub_context)) -> HubStatistics:
     """Get comprehensive hub statistics."""
     try:
-        nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+        all_users = _get_all_users(ctx)
         total_share = ctx.total_share if hasattr(ctx, 'total_share') else 0
         max_users = int(ctx.get_config("config", "max_users", "1000"))
         hub_name = ctx.hub_name if hasattr(ctx, 'hub_name') else "Verlihub"
         
         # Count operators (class >= 3)
-        op_count = 0
+        op_count = sum(1 for u in all_users if u.get("user_class", 0) >= 3)
         bot_nicks = ctx.get_bot_nicks() if hasattr(ctx, 'get_bot_nicks') else []
         
-        for nick in nicks:
-            try:
-                user_class = ctx.get_user_class(nick) if hasattr(ctx, 'get_user_class') else 0
-                if user_class >= 3:
-                    op_count += 1
-            except Exception:
-                pass
-        
-        user_count = len(nicks)
+        user_count = len(all_users)
         avg_share = total_share // user_count if user_count > 0 else 0
         
         uptime = int(time.time() - get_hub_start_time())
@@ -305,23 +306,20 @@ async def get_statistics(ctx=Depends(get_hub_context)) -> HubStatistics:
 async def get_geographic_stats(ctx=Depends(get_hub_context)) -> GeoStats:
     """Get geographic distribution of users."""
     try:
-        nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+        all_users = _get_all_users(ctx)
         
         # Aggregate by country
         country_data: dict[str, dict[str, Any]] = {}
         
-        for nick in nicks:
-            try:
-                cc = ctx.get_user_cc(nick) if hasattr(ctx, 'get_user_cc') else ""
-                share = ctx.get_user_share(nick) if hasattr(ctx, 'get_user_share') else 0
-                
-                if cc and cc != "--":
-                    if cc not in country_data:
-                        country_data[cc] = {"users": 0, "share": 0}
-                    country_data[cc]["users"] += 1
-                    country_data[cc]["share"] += share
-            except Exception:
-                pass
+        for u in all_users:
+            cc = u.get("country", "")
+            share = u.get("share", 0)
+            
+            if cc and cc != "--":
+                if cc not in country_data:
+                    country_data[cc] = {"users": 0, "share": 0}
+                country_data[cc]["users"] += 1
+                country_data[cc]["share"] += share
         
         # Sort by user count descending
         distribution = sorted(
@@ -351,15 +349,9 @@ async def get_geographic_stats(ctx=Depends(get_hub_context)) -> GeoStats:
 async def get_share_stats(ctx=Depends(get_hub_context)) -> ShareStats:
     """Get share size statistics."""
     try:
-        nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+        all_users = _get_all_users(ctx)
         
-        shares = []
-        for nick in nicks:
-            try:
-                share = ctx.get_user_share(nick) if hasattr(ctx, 'get_user_share') else 0
-                shares.append(share)
-            except Exception:
-                pass
+        shares = [u.get("share", 0) for u in all_users]
         
         if not shares:
             return ShareStats(
@@ -402,26 +394,20 @@ async def get_share_stats(ctx=Depends(get_hub_context)) -> ShareStats:
 async def get_operators(ctx=Depends(get_hub_context)) -> list[OperatorInfo]:
     """Get list of online operators (class >= 3)."""
     try:
-        nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+        all_users = _get_all_users(ctx)
         
         operators = []
-        for nick in nicks:
-            try:
-                user_class = ctx.get_user_class(nick) if hasattr(ctx, 'get_user_class') else 0
-                if user_class >= 3:
-                    ip = ctx.get_user_ip(nick) if hasattr(ctx, 'get_user_ip') else ""
-                    share = ctx.get_user_share(nick) if hasattr(ctx, 'get_user_share') else 0
-                    
-                    operators.append(OperatorInfo(
-                        nick=nick,
-                        user_class=user_class,
-                        class_name=get_class_name(user_class),
-                        ip=ip,
-                        share=share,
-                        share_formatted=format_bytes(share),
-                    ))
-            except Exception:
-                pass
+        for u in all_users:
+            user_class = u.get("user_class", 0)
+            if user_class >= 3:
+                operators.append(OperatorInfo(
+                    nick=u.get("nick", ""),
+                    user_class=user_class,
+                    class_name=get_class_name(user_class),
+                    ip=u.get("ip", ""),
+                    share=u.get("share", 0),
+                    share_formatted=format_bytes(u.get("share", 0)),
+                ))
         
         return operators
     except Exception as e:
@@ -483,7 +469,8 @@ async def get_detailed_users(
 ) -> list[OnlineUser]:
     """Get detailed list of online users with geo info and clone detection."""
     try:
-        nicks = ctx.get_user_nicks() if hasattr(ctx, 'get_user_nicks') else []
+        # Use get_user_list() which returns full user info dicts
+        raw_users = ctx.get_user_list() if hasattr(ctx, 'get_user_list') else []
         
         users = []
         ip_share_groups: dict[str, list[str]] = {}  # "ip:share" -> [nicks]
@@ -491,37 +478,25 @@ async def get_detailed_users(
         
         # First pass: gather all users
         user_data = []
-        for nick in nicks:
+        for u in raw_users:
             try:
-                user_class = ctx.get_user_class(nick) if hasattr(ctx, 'get_user_class') else 0
-                ip = ctx.get_user_ip(nick) if hasattr(ctx, 'get_user_ip') else ""
-                host = ctx.get_user_host(nick) if hasattr(ctx, 'get_user_host') else ""
-                cc = ctx.get_user_cc(nick) if hasattr(ctx, 'get_user_cc') else ""
-                share = ctx.get_user_share(nick) if hasattr(ctx, 'get_user_share') else 0
+                nick = u.get("nick", "")
+                user_class = u.get("user_class", 0)
+                ip = u.get("ip", "")
+                share = u.get("share", 0)
+                host = u.get("host", "")
+                cc = u.get("country", "")
                 
-                # Get additional geo info if available
+                # Additional geo info (not yet available from C++ core)
                 country = ""
                 city = ""
                 region = ""
                 asn = ""
-                if hasattr(ctx, 'get_user_geo'):
-                    geo = ctx.get_user_geo(nick)
-                    if geo:
-                        country = geo.get("country", "")
-                        city = geo.get("city", "")
-                        region = geo.get("region", "")
-                        asn = geo.get("asn", "")
                 
-                # Get user description/tag if available
-                desc = ""
-                tag = ""
-                email = ""
-                if hasattr(ctx, 'get_user_myinfo'):
-                    myinfo = ctx.get_user_myinfo(nick)
-                    if myinfo:
-                        desc = myinfo.get("description", "")
-                        tag = myinfo.get("tag", "")
-                        email = myinfo.get("email", "")
+                # User description/tag (not yet available from C++ core)
+                desc = u.get("description", "")
+                tag = u.get("tag", "")
+                email = u.get("email", "")
                 
                 # Track for clone detection
                 clone_key = f"{ip}:{share}"

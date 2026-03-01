@@ -221,19 +221,61 @@ async def run_hub(config: "VerlihubConfig", args: argparse.Namespace) -> None:
 
 
 async def run_both(config: "VerlihubConfig", args: argparse.Namespace) -> None:
-    """Run both API server and hub concurrently."""
+    """Run both API server and hub concurrently.
+
+    The hub is created and started *first* so that ``set_hub_context()``
+    is populated before uvicorn boots.  The API lifespan will detect the
+    existing context and skip creating a second hub.
+    """
     import threading
-    
-    # Run API in a thread
-    api_thread = threading.Thread(
-        target=run_api_server,
-        args=(config, args),
-        daemon=True,
-    )
-    api_thread.start()
-    
-    # Run hub in main asyncio loop
-    await run_hub(config, args)
+    from verlihub.core import HubContext, create_hub, setup_signal_handlers
+    from verlihub.api.deps import get_hub_context
+
+    config_dir = args.config_dir or os.getenv("VH_CONFIG_DIR", ".")
+    hub_port = args.hub_port or config.hub.port
+
+    async with create_hub(config_dir) as ctx:
+        # Feed YAML config through the director callback
+        hub_section: dict[str, str] = {}
+        if config.hub.name:
+            hub_section["hub_name"] = config.hub.name
+        if config.hub.topic:
+            hub_section["hub_topic"] = config.hub.topic
+        if config.hub.description:
+            hub_section["hub_desc"] = config.hub.description
+        if config.hub.owner:
+            hub_section["hub_owner"] = config.hub.owner
+        if config.hub.encoding:
+            hub_section["hub_encoding"] = config.hub.encoding
+        if hub_port:
+            hub_section["listen_port"] = str(hub_port)
+        if config.hub.listen_host:
+            hub_section["listen_ip"] = config.hub.listen_host
+        ctx.events.set_config({"hub": hub_section})
+
+        if not ctx.initialize():
+            raise RuntimeError("HubContext.initialize() failed")
+
+        setup_signal_handlers(ctx)
+
+        if not ctx.start(port=hub_port, listen_ip=config.hub.listen_host):
+            raise RuntimeError(
+                f"HubContext.start(port={hub_port}) failed"
+            )
+
+        logger.info("Hub running on %s:%d", config.hub.listen_host or "0.0.0.0", hub_port)
+
+        # Now start the API in a daemon thread — the lifespan will see
+        # the hub context that was just published.
+        api_thread = threading.Thread(
+            target=run_api_server,
+            args=(config, args),
+            daemon=True,
+        )
+        api_thread.start()
+
+        await ctx.wait_for_shutdown()
+        logger.info("Hub stopped")
 
 
 def main() -> None:
@@ -308,7 +350,12 @@ def main() -> None:
                 logger.error("  - %s", issue)
             sys.exit(1)
     
-    # Apply config to environment
+    # Publish config as the in-process singleton so all modules can
+    # access it directly instead of going through environment variables.
+    from verlihub.config import set_config
+    set_config(config)
+
+    # Apply config to environment (only needed for subprocesses / Docker)
     config.apply_to_env()
     
     # Synchronize config with database (DB values preferred unless --force)

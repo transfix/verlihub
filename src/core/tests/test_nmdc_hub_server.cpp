@@ -242,5 +242,5 @@ TEST_F(NMDCHubServerTest, OnClientDeleted_Null) {
 TEST(NMDCHubServerConnTest, OutputBufferSizeIsDefault) {
     nVerliHub::NMDCHubServer server(".");
     nVerliHub::nSocket::cAsyncConn conn(42, &server, nVerliHub::nEnums::eCT_CLIENT);
-    EXPECT_EQ(conn.mMaxBuffer, MAX_SEND_SIZE) << "Output buffer size should be 1MB for NMDCHubServer";
+    EXPECT_EQ(conn.GetMaxBuffer(), MAX_SEND_SIZE) << "Output buffer size should be 1MB for NMDCHubServer";
 }

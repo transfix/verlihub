@@ -6,13 +6,12 @@ user classes from the C++ hub.
 """
 from __future__ import annotations
 
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 import bcrypt
@@ -30,17 +29,42 @@ from verlihub.models import RegUser, UserClass
 import logging
 _logger = logging.getLogger(__name__)
 
-# JWT settings - should be overridden via environment in production
-_jwt_secret = os.getenv("VH_JWT_SECRET")
-if not _jwt_secret:
-    _logger.warning(
-        "VH_JWT_SECRET not set! Using random key - tokens will be invalidated on restart. "
-        "Set VH_JWT_SECRET environment variable in production."
-    )
-    _jwt_secret = secrets.token_hex(32)
-SECRET_KEY = _jwt_secret
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("VH_JWT_EXPIRE_MINUTES", "60"))
+
+# --- Lazy JWT config resolved from the config singleton ---
+# These are read on first use (not at import time) so the config
+# singleton has a chance to be initialised first.
+
+_jwt_secret_cached: Optional[str] = None
+
+
+def _get_jwt_secret() -> str:
+    """Return the JWT signing secret, resolving it lazily from config."""
+    global _jwt_secret_cached
+    if _jwt_secret_cached is not None:
+        return _jwt_secret_cached
+
+    from verlihub.config import get_config_optional
+
+    cfg = get_config_optional()
+    secret = cfg.api.secret if cfg else ""
+    if not secret:
+        _logger.warning(
+            "No api.secret configured — using random key. "
+            "Tokens will be invalidated on restart. "
+            "Set api.secret in your YAML config for production."
+        )
+        secret = secrets.token_hex(32)
+    _jwt_secret_cached = secret
+    return secret
+
+
+def _get_token_expire_minutes() -> int:
+    """Return token expiry from config, default 60."""
+    from verlihub.config import get_config_optional
+
+    cfg = get_config_optional()
+    return cfg.api.token_expire_minutes if cfg else 60
 
 # Password hashing — uses bcrypt directly (passlib is unmaintained and
 # incompatible with bcrypt ≥ 4.1).
@@ -152,7 +176,7 @@ def create_access_token(nick: str, user_class: int) -> Token:
     Returns:
         Token object with access_token, token_type, and expires_in
     """
-    expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expires_delta = timedelta(minutes=_get_token_expire_minutes())
     expire = datetime.now(timezone.utc) + expires_delta
     
     to_encode = {
@@ -162,7 +186,7 @@ def create_access_token(nick: str, user_class: int) -> Token:
         "iat": datetime.now(timezone.utc),
     }
     
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, _get_jwt_secret(), algorithm=ALGORITHM)
     
     return Token(
         access_token=encoded_jwt,
@@ -181,7 +205,7 @@ def decode_token(token: str) -> Optional[TokenData]:
         TokenData if valid, None otherwise
     """
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _get_jwt_secret(), algorithms=[ALGORITHM])
         nick = payload.get("sub")
         user_class = payload.get("class", UserClass.GUEST)
         exp = datetime.fromtimestamp(payload.get("exp", 0), tz=timezone.utc)
@@ -207,37 +231,65 @@ async def get_db_session():
         yield session
 
 
+def _extract_token(
+    credentials: Optional[HTTPAuthorizationCredentials],
+    request: Request,
+) -> Optional[str]:
+    """
+    Extract a JWT token string from either the Authorization header
+    (via HTTPBearer) or the ``access_token`` httponly cookie.
+
+    The cookie is set by the dashboard login route as
+    ``"Bearer <jwt>"`` — we strip the prefix before returning.
+    """
+    if credentials is not None:
+        return credentials.credentials
+
+    cookie_value = request.cookies.get("access_token")
+    if cookie_value:
+        # The cookie is stored as "Bearer <jwt>"
+        if cookie_value.startswith("Bearer "):
+            return cookie_value[7:]
+        return cookie_value
+
+    return None
+
+
 async def get_current_user_optional(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    request: Request,
 ) -> Optional[TokenData]:
     """
     Get current user if authenticated, None otherwise.
     
     Use this for endpoints that work with or without authentication.
     """
-    if credentials is None:
+    raw_token = _extract_token(credentials, request)
+    if raw_token is None:
         return None
     
-    token_data = decode_token(credentials.credentials)
+    token_data = decode_token(raw_token)
     return token_data
 
 
 async def get_current_user(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
+    request: Request,
 ) -> TokenData:
     """
     Get current authenticated user.
     
     Raises 401 if not authenticated.
     """
-    if credentials is None:
+    raw_token = _extract_token(credentials, request)
+    if raw_token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    token_data = decode_token(credentials.credentials)
+    token_data = decode_token(raw_token)
     if token_data is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

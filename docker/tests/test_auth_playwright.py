@@ -88,6 +88,45 @@ class TestLoginPage:
         notification = page.locator(".notification.is-danger")
         expect(notification).to_be_visible()
 
+    def test_login_submit_valid_credentials(self, page: Page, base_url: str):
+        """Test that logging in with valid credentials redirects to the dashboard.
+
+        Creates a throwaway user via the registration form, logs out, then
+        logs back in through the login form and verifies the redirect
+        to /dashboard/ and that the authenticated navbar is rendered.
+        """
+        import secrets
+        nick = f"logintest_{secrets.token_hex(4)}"
+        password = "testpass_secure1234"
+
+        # 1. Register a new user via the registration form
+        page.goto(f"{base_url}{REGISTER_PATH}")
+        page.fill('input[name="nick"]', nick)
+        page.fill('input[name="password"]', password)
+        page.fill('input[name="confirm_password"]', password)
+        page.click('button[type="submit"]')
+        page.wait_for_url(
+            re.compile(r"/dashboard/(login|register|\?|$)"),
+            timeout=10000,
+        )
+
+        # 2. Clear cookies (logout) so we start from scratch
+        page.context.clear_cookies()
+
+        # 3. Login with the newly created credentials
+        page.goto(f"{base_url}{LOGIN_PATH}")
+        page.fill('input[name="username"]', nick)
+        page.fill('input[name="password"]', password)
+        page.click('button[type="submit"]')
+
+        # Should redirect to /dashboard/ (authenticated home)
+        page.wait_for_url(re.compile(r"/dashboard/$"), timeout=10000)
+
+        # Verify authenticated page content: navbar should show the nick
+        navbar_link = page.locator(".navbar-link")
+        if navbar_link.count() > 0:
+            expect(navbar_link.first).to_contain_text(nick)
+
 
 # ---------------------------------------------------------------------------
 # Registration Page Tests

@@ -84,19 +84,32 @@ async def get_session():
 
 @router.get("/online", response_model=UserList)
 async def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
-    """Get list of currently online users."""
-    nicks = ctx.get_user_nicks()
-    users = [OnlineUser(nick=nick) for nick in nicks]
+    """Get list of currently online users with full info."""
+    user_dicts = ctx.get_user_list()
+    users = [
+        OnlineUser(
+            nick=u.get("nick", ""),
+            ip=u.get("ip", ""),
+            share=u.get("share", 0),
+            user_class=u.get("user_class", 0),
+        )
+        for u in user_dicts
+    ]
     return UserList(count=len(users), users=users)
 
 
 @router.get("/online/{nick}")
 async def get_online_user(nick: str, ctx=Depends(get_hub_context)) -> OnlineUser:
     """Get information about a specific online user."""
-    if not ctx.find_user(nick):
-        raise HTTPException(status_code=404, detail="User not online")
-    
-    return OnlineUser(nick=nick)
+    for u in ctx.get_user_list():
+        if u.get("nick") == nick:
+            return OnlineUser(
+                nick=u.get("nick", nick),
+                ip=u.get("ip", ""),
+                share=u.get("share", 0),
+                user_class=u.get("user_class", 0),
+            )
+    raise HTTPException(status_code=404, detail="User not online")
 
 
 @router.post("/kick")

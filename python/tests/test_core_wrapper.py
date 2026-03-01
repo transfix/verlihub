@@ -89,6 +89,9 @@ class FakeCppHubContext:
     def SendToClass(self, msg, lo, hi):
         return True
 
+    def SendToOpChat(self, msg, from_nick=""):
+        return True
+
     def KickUser(self, op, nick, reason):
         return True
 
@@ -326,6 +329,7 @@ class TestHubContext:
         assert ctx.send_to_user("Alice", "hello") is True
         assert ctx.send_to_all("broadcast") is True
         assert ctx.send_to_class("msg", 1, 5) is True
+        assert ctx.send_chat_as("Admin", "Hello from admin") is True
         assert ctx.kick_user("op", "Alice", "reason") is True
 
     def test_config(self, core_module):

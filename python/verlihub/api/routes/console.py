@@ -103,7 +103,7 @@ async def execute_command(
         
         # Execute command via hub context
         # The hub context provides execute_command which returns output
-        output = ctx.execute_command(command, user.username)
+        output = ctx.execute_command(command, user.nick)
         
         return CommandResponse(
             success=True,

@@ -225,7 +225,36 @@ class TestHubEndpoints:
             headers=operator_header,
         )
         assert response.status_code in [200, 503]
-        
+
+    def test_chat_requires_auth(self, client):
+        """Test that chat endpoint requires authentication."""
+        response = client.post(
+            "/api/v1/hub/chat",
+            json={"message": "Hello"},
+        )
+        assert response.status_code in [401, 503]
+
+    def test_chat_requires_operator(self, client, vip_header):
+        """Test that chat requires operator permission."""
+        response = client.post(
+            "/api/v1/hub/chat",
+            json={"message": "Hello"},
+            headers=vip_header,
+        )
+        assert response.status_code in [403, 500, 503]
+
+    def test_chat_with_operator(self, client, operator_header):
+        """Test chat with operator permission."""
+        response = client.post(
+            "/api/v1/hub/chat",
+            json={"message": "Hello from admin"},
+            headers=operator_header,
+        )
+        assert response.status_code in [200, 503]
+        if response.status_code == 200:
+            data = response.json()
+            assert "success" in data
+
     def test_shutdown_requires_master(self, client, admin_header):
         """Test that shutdown requires master permission."""
         response = client.post(
@@ -989,7 +1018,7 @@ class TestDashboardAccess:
         client.cookies.set("access_token", f"Bearer {token.access_token}")
         
         pages = ["/dashboard/users", "/dashboard/bans", "/dashboard/config",
-                 "/dashboard/logs", "/dashboard/console", "/dashboard/plugins",
+                 "/dashboard/logs", "/dashboard/chat", "/dashboard/plugins",
                  "/dashboard/invites"]
         
         for page in pages:
@@ -1000,7 +1029,7 @@ class TestDashboardAccess:
     def test_dashboard_pages_redirect_when_not_logged_in(self, client):
         """Test that pages redirect to login when not authenticated."""
         pages = ["/dashboard/", "/dashboard/users", "/dashboard/bans",
-                 "/dashboard/config", "/dashboard/logs", "/dashboard/console",
+                 "/dashboard/config", "/dashboard/logs", "/dashboard/chat",
                  "/dashboard/plugins", "/dashboard/invites"]
         
         for page in pages:

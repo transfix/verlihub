@@ -217,6 +217,20 @@ void HubContext::Stop() {
 // User Operations
 // =============================================================================
 
+std::size_t HubContext::GetUserCount() const noexcept {
+    if (m_nmdc_server) {
+        return m_nmdc_server->GetUserCount();
+    }
+    return m_user_count.Get();
+}
+
+std::uint64_t HubContext::GetTotalShare() const noexcept {
+    if (m_nmdc_server) {
+        return m_nmdc_server->GetTotalShare();
+    }
+    return m_total_share.Get();
+}
+
 std::vector<std::string> HubContext::GetUserNicks() const {
     if (m_nmdc_server) {
         return m_nmdc_server->GetNickList();
@@ -225,9 +239,23 @@ std::vector<std::string> HubContext::GetUserNicks() const {
 }
 
 cUser* HubContext::FindUser(std::string_view nick) const {
-    // NMDCHubServer doesn't use cUser objects - return nullptr
-    // Use IsNickOnline() or GetUserNicks() instead
+    // NMDCHubServer doesn't use cUser objects - return nullptr.
+    // Use GetUserInfo() or GetUserInfoSnapshots() instead.
     return nullptr;
+}
+
+bool HubContext::GetUserInfo(std::string_view nick, UserInfoSnapshot& out) const {
+    if (m_nmdc_server) {
+        return m_nmdc_server->GetUserInfo(std::string(nick), out);
+    }
+    return false;
+}
+
+std::vector<UserInfoSnapshot> HubContext::GetUserInfoSnapshots() const {
+    if (m_nmdc_server) {
+        return m_nmdc_server->GetUserInfoSnapshots();
+    }
+    return {};
 }
 
 // =============================================================================

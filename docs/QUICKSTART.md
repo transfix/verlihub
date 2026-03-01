@@ -250,9 +250,9 @@ Once running, access:
 
 ### Authentication
 
-The `api.username` / `api.password` admin is seeded into the database as an
-admin-class user at startup.  All users — including the config admin — share the
-same `RegUser` table and can log into the dashboard.
+Admin accounts are configured in the `users:` section of the config file.
+Users listed under `masters:`, `admins:`, `operators:`, etc. are seeded into the
+`RegUser` table at startup and can log into the dashboard.
 
 ```bash
 # Get auth token
@@ -299,7 +299,7 @@ Admins can generate invite codes from the dashboard Invites page.
 
 ### Authentication failures
 
-1. Verify username/password in config — the `api.username`/`api.password` admin is seeded into the database at first startup
+1. Verify username/password in config — admin accounts from the `users:` section are seeded into the database at first startup
 2. Check JWT secret is set (for production) — without it, tokens are invalidated on restart
 3. Ensure cookies are enabled in browser (for dashboard)
 4. Regular users can log in once registered (via `/dashboard/register` or the API)

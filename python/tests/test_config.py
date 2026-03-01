@@ -172,7 +172,7 @@ class TestApiConfig:
 
     def test_to_env_basic(self):
         api = ApiConfig(host="0.0.0.0", port=9090, secret="mysecret",
-                       username="admin", password="pw", token_expire_minutes=120,
+                       token_expire_minutes=120,
                        cors_origins=["http://a", "http://b"], secure_cookies=True)
         env = api.to_env()
         assert env["VH_API_HOST"] == "0.0.0.0"
@@ -505,7 +505,6 @@ class TestVerlihubConfigValidate:
         )
         issues = cfg.validate()
         assert any("No API secret" in i for i in issues)
-        assert any("No API password" in i for i in issues)
         assert any("Wildcard CORS" in i for i in issues)
         assert any("all interfaces" in i for i in issues)
 
@@ -522,7 +521,6 @@ class TestVerlihubConfigValidate:
             environment="production",
             api=ApiConfig(
                 secret="long-production-secret",
-                password="strong-pw",
                 cors_origins=["https://hub.example.com"],
                 secure_cookies=True,
                 host="127.0.0.1",
@@ -575,7 +573,6 @@ class TestVerlihubConfigToDict:
     def test_password_not_in_output(self):
         cfg = VerlihubConfig(
             database=DatabaseConfig(password="secret123"),
-            api=ApiConfig(password="apipass"),
         )
         d = cfg.to_dict()
         assert "password" not in d["database"]

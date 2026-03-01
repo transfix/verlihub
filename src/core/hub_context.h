@@ -103,6 +103,24 @@ struct HubConfig {
 };
 
 /**
+ * Snapshot of a single online user's information.
+ * Returned by GetUserInfoSnapshots() — safe to use after the call
+ * (all data is copied from NMDCHubServer under lock).
+ */
+struct UserInfoSnapshot {
+    std::string nick;
+    std::string ip;
+    int user_class{0};
+    std::uint64_t share{0};
+    std::string description;
+    std::string tag;
+    std::string speed;
+    std::string email;
+    std::string country;     ///< Two-letter ISO country code (GeoIP)
+    std::string client_name; ///< DC client software extracted from tag
+};
+
+/**
  * Logging configuration
  */
 struct LogConfig {
@@ -390,11 +408,10 @@ public:
     // =========================================================================
     
     /**
-     * Get current online user count (lock-free).
+     * Get current online user count.
+     * Delegates to NMDCHubServer when available, falls back to local counter.
      */
-    [[nodiscard]] std::size_t GetUserCount() const noexcept {
-        return m_user_count.Get();
-    }
+    [[nodiscard]] std::size_t GetUserCount() const noexcept;
     
     /**
      * Get snapshot of all online user nicknames.
@@ -404,14 +421,32 @@ public:
     [[nodiscard]] std::vector<std::string> GetUserNicks() const;
     
     /**
-     * Find a user by nickname.
+     * Find a user by nickname (legacy compatibility, returns opaque cUser*).
      * 
-     * WARNING: Returns borrowed pointer that may become invalid.
-     * For safe iteration, use ForEachUser().
+     * WARNING: In verlihub-py mode (NMDCHubServer), always returns nullptr.
+     * Use GetUserInfo() or GetUserInfoSnapshots() instead.
      * 
-     * @return Pointer to user, or nullptr if not found
+     * @return Pointer to user, or nullptr if not found / not supported
      */
     [[nodiscard]] cUser* FindUser(std::string_view nick) const;
+    
+    /**
+     * Get a snapshot of a single user's info by nick.
+     * Thread-safe, returns a copy.
+     *
+     * @param nick  User's nickname
+     * @param[out] out  Filled with user data on success
+     * @return true if user was found
+     */
+    [[nodiscard]] bool GetUserInfo(std::string_view nick, UserInfoSnapshot& out) const;
+    
+    /**
+     * Get snapshots of ALL online users.
+     * Thread-safe — copies data under a single lock acquisition.
+     *
+     * @return Vector of UserInfoSnapshot (empty if hub not running)
+     */
+    [[nodiscard]] std::vector<UserInfoSnapshot> GetUserInfoSnapshots() const;
     
     /**
      * Execute callback for each online user (thread-safe).
@@ -520,11 +555,10 @@ public:
     bool SetHubTopic(std::string_view topic);
     
     /**
-     * Get total share size (lock-free).
+     * Get total share size.
+     * Delegates to NMDCHubServer when available, falls back to local counter.
      */
-    [[nodiscard]] std::uint64_t GetTotalShare() const noexcept {
-        return m_total_share.Get();
-    }
+    [[nodiscard]] std::uint64_t GetTotalShare() const noexcept;
     
     /**
      * Get hub character encoding.

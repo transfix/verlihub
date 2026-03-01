@@ -130,7 +130,7 @@ std::string MakeLock(const std::string& lock) {
 }
 
 std::string MakeSupports() {
-    return "$Supports UserCommand NoGetINFO NoHello UserIP2 HubINFO ZPipe0 BotINFO";
+    return "$Supports UserCommand NoGetINFO NoHello HubINFO ZPipe0 BotINFO";
 }
 
 std::string MakeHubName(const std::string& name) {

@@ -90,7 +90,7 @@ async def execute_command(
     command = request.command.strip()
     
     # Log command execution
-    logger.info(f"Console command from {user.username}: {command}")
+    logger.info(f"Console command from {user.nick}: {command}")
     
     try:
         # Check if hub is running

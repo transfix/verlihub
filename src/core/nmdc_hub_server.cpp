@@ -350,9 +350,8 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
             }
         }
 
-        // Send UserIP to the client
-        SendToConn(client.conn,
-                   NMDCProtocol::MakeUserIP(client.nick, client.ip));
+        // Note: We intentionally do NOT send $UserIP to avoid leaking
+        // IP addresses in DC clients that display them in chat.
     } else {
         // Updated MyINFO - recalculate share and broadcast
         m_total_share.fetch_sub(client.myinfo.share_size, std::memory_order_relaxed);

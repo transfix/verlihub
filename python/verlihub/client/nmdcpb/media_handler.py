@@ -77,15 +77,27 @@ class MediaHandler:
         send_fn,       # (wire: str, nick: str) -> None
         status_fn,     # (nick, level, code, text) -> None
         hub_url: str = "",
+        p2p_enabled: bool = False,
+        p2p_default: bool = False,
+        p2p_max_size: int = 0,
     ):
         self.config = config
         self.storage: MediaStorage = create_storage(config)
         self._send = send_fn
         self._status = status_fn
         self._hub_url = hub_url.rstrip("/")
+        self._p2p_enabled = p2p_enabled
+        self._p2p_default = p2p_default
+        self._p2p_max_size = p2p_max_size
         self._last_expiry_check = 0.0
         # Pending inline uploads: nick → {upload_id → PbMediaUpload}
         self._pending_uploads: dict[str, dict[str, PbMediaUpload]] = {}
+        # Session tokens per nick (for HTTP upload URL construction)
+        self._session_tokens: dict[str, str] = {}
+
+    def set_session_token(self, nick: str, token: str) -> None:
+        """Store session token for a user (used in upload URL)."""
+        self._session_tokens[nick] = token
 
     # ------------------------------------------------------------------
     # Public dispatch
@@ -286,6 +298,17 @@ class MediaHandler:
         elif upload_id:
             # Inline upload: upload_url carries the pending upload ID
             caps.upload_url = f"inline:{upload_id}"
+        # P2P media capabilities
+        caps.p2p_enabled = self._p2p_enabled
+        caps.p2p_default = self._p2p_default
+        if self._p2p_max_size:
+            caps.p2p_max_size = self._p2p_max_size
+        # Include session token in upload_url as query param for HTTP auth
+        token = self._session_tokens.get(nick, "")
+        if token and not upload_id and not upload_url:
+            # Default upload URL with token
+            base = f"{self._hub_url}/api/media/upload" if self._hub_url else "/api/media/upload"
+            caps.upload_url = f"{base}?token={token}"
         env.timestamp = int(time.time() * 1000)
         wire = WireCodec.encode_text(env)
         self._send(wire, nick)

@@ -61,6 +61,7 @@ message PbEnvelope {
     PbMediaMeta media_meta = 41;
     PbMediaDelete media_delete = 42;
     PbMediaCapabilities media_capabilities = 43;
+    PbP2PMediaStatus p2p_media_status = 44;
     PbCallOffer call_offer = 50;
     PbCallAnswer call_answer = 51;
     PbCallCandidate call_candidate = 52;
@@ -74,6 +75,17 @@ message PbEnvelope {
     PbSegmentInfo segment_info = 72;
     PbUserQuery user_query = 73;
     PbUserQueryResult user_query_result = 74;
+
+    // Channel messages (Phase 4.5)
+    PbChannel channel = 80;
+    PbChannelList channel_list = 81;
+    PbChannelCreated channel_created = 82;
+    PbChannelMemberUpdate channel_member_update = 83;
+    PbChannelInvite channel_invite = 84;
+    PbChannelInviteResponse channel_invite_response = 85;
+    PbChannelHistory channel_history = 86;
+    PbChannelEncrypted channel_encrypted = 87;
+    PbSenderKeyRotation sender_key_rotation = 88;
   }
 }
 
@@ -87,7 +99,9 @@ message PbChat {
   bool is_action = 2;             // /me action (third-person)
   string target_nick = 3;        // PM target (empty = public chat)
   bool is_pm = 4;
-  repeated PbMediaRef attachments = 5;  // Media attachments (MediaShare)
+  repeated PbMediaRef attachments = 5;    // Hub-hosted media attachments
+  string channel_id = 6;                  // Channel ID (empty = #general / main chat)
+  repeated PbP2PMediaRef p2p_attachments = 7;  // P2P media attachments (served via relay)
 }
 
 // User information (replaces $MyINFO $ALL nick ...)
@@ -459,6 +473,173 @@ message PbMediaCapabilities {
   repeated string allowed_types = 6;
   bool thumbnails_available = 7;
   string upload_url = 8;
+  bool p2p_enabled = 9;                // P2P media mode available
+  bool p2p_default = 10;               // P2P is the default mode for public channels
+  uint64 p2p_max_size = 11;            // Max P2P media file size (bytes)
+}
+
+// P2P media reference — shared via TTH, downloaded via relay from poster's DC share
+message PbP2PMediaRef {
+  string tth = 1;                      // Tiger Tree Hash (base32) of the file
+  string filename = 2;                 // Original filename
+  string mime_type = 3;                // MIME type
+  uint64 size = 4;                     // File size in bytes
+  string source_nick = 5;             // Nick of the original poster (primary source)
+  repeated string alt_source_nicks = 6; // Other known sources (users who cached it)
+  uint32 width = 7;                    // Image/video width (0 if N/A)
+  uint32 height = 8;                   // Image/video height (0 if N/A)
+  uint32 duration_ms = 9;              // Audio/video duration (0 if N/A)
+  bool is_encrypted = 10;              // True if file is E2E encrypted (private channel)
+  bytes file_encryption_key = 11;      // 32-byte key (only inside E2EPM/channel ciphertext)
+  bytes file_nonce = 12;               // 12-byte nonce (only inside E2EPM/channel ciphertext)
+}
+
+// P2P media download status — progress/availability updates
+message PbP2PMediaStatus {
+  enum Status {
+    AVAILABLE = 0;         // Source(s) online — download can begin
+    DOWNLOADING = 1;       // Download in progress
+    COMPLETED = 2;         // Download finished, file cached locally
+    UNAVAILABLE = 3;       // No sources currently online
+    FAILED = 4;            // Download failed (error in reason field)
+    CACHED = 5;            // File already in local cache (no download needed)
+  }
+
+  string tth = 1;                      // Identifies which P2P media this status is for
+  Status status = 2;
+  uint64 bytes_downloaded = 3;         // Progress (bytes received so far)
+  uint64 total_size = 4;               // Total file size
+  uint32 active_sources = 5;           // Number of peers currently serving data
+  string reason = 6;                   // Error/status reason text
+  string channel_id = 7;               // Channel context (empty = main chat / PM)
+}
+
+// ============================================================================
+// Channel Messages (Phase 4.5)
+// ============================================================================
+
+// Channel role enum (shared by PbChannel and PbChannelMemberUpdate)
+enum ChannelRole {
+  CHANNEL_MEMBER = 0;
+  CHANNEL_ADMIN = 1;
+  CHANNEL_OWNER = 2;
+  CHANNEL_READONLY = 3;
+}
+
+// Channel management actions (client → hub)
+message PbChannel {
+  enum ChannelAction {
+    LIST_CHANNELS = 0;    // Request the channel list
+    CREATE = 1;           // Create a new channel
+    DELETE = 2;           // Delete a channel (owner/admin)
+    JOIN = 3;             // Join a channel
+    LEAVE = 4;            // Leave a channel
+    SET_TOPIC = 5;        // Set channel topic
+    KICK = 6;             // Kick a member
+    SET_ROLE = 7;         // Change a member's role
+  }
+
+  ChannelAction action = 1;
+  string channel_id = 2;       // Channel identifier (alphanumeric slug)
+  string name = 3;             // Display name (e.g., "#photos")
+  string topic = 4;            // Channel topic text
+  bool is_private = 5;         // True for E2E-encrypted private channels
+  string target_nick = 6;      // For KICK / SET_ROLE operations
+  ChannelRole target_role = 7; // For SET_ROLE
+}
+
+// Channel list (hub → client, response to LIST_CHANNELS or on login)
+message PbChannelList {
+  message ChannelInfo {
+    string channel_id = 1;
+    string name = 2;
+    string topic = 3;
+    uint32 member_count = 4;
+    bool is_private = 5;
+    string owner_nick = 6;
+    uint64 created_at = 7;     // Unix timestamp
+  }
+  repeated ChannelInfo channels = 1;
+}
+
+// Channel created confirmation (hub → creator)
+message PbChannelCreated {
+  string channel_id = 1;
+  string owner_nick = 2;
+  bool is_private = 3;
+}
+
+// Channel member update (hub → channel members)
+message PbChannelMemberUpdate {
+  enum UpdateType {
+    JOINED = 0;
+    LEFT = 1;
+    KICKED = 2;
+    ROLE_CHANGED = 3;
+  }
+
+  string channel_id = 1;
+  string nick = 2;
+  UpdateType update_type = 3;
+  ChannelRole new_role = 4;    // For ROLE_CHANGED
+  string reason = 5;           // For KICKED
+}
+
+// Channel invite (owner/admin → target user, forwarded by hub)
+message PbChannelInvite {
+  string channel_id = 1;
+  string target_nick = 2;
+  string inviter_nick = 3;     // Set by hub
+}
+
+// Channel invite response (target → hub)
+message PbChannelInviteResponse {
+  string channel_id = 1;
+  bool accepted = 2;
+}
+
+// Channel message history (hub → client, sent on channel join)
+message PbChannelHistory {
+  string channel_id = 1;
+  repeated PbChat messages = 2;                     // Recent public channel messages
+  repeated PbChannelEncrypted encrypted_messages = 3; // Private channel history (if enabled)
+}
+
+// Encrypted channel message (for private/E2E channels)
+message PbChannelEncrypted {
+  string channel_id = 1;
+  uint32 sender_key_id = 2;    // Identifies which sender key was used
+  uint64 nonce = 3;            // Message counter for this sender key
+  bytes ciphertext = 4;        // ChaCha20-Poly1305 encrypted PbChannelPlaintext
+  string from_nick = 5;        // Sender (validated by hub, used for key lookup)
+}
+
+// Channel plaintext (encrypted inside PbChannelEncrypted.ciphertext)
+// NEVER sent over the wire in cleartext.
+message PbChannelPlaintext {
+  string text = 1;
+  bool is_action = 2;          // /me action
+  uint64 timestamp = 3;
+  string reply_to_hash = 4;    // SHA-256 of message being replied to
+  map<string, string> extra = 5; // Extensible metadata
+  repeated PbP2PMediaRef p2p_attachments = 6; // P2P media (private channels always use P2P)
+  repeated PbMediaRef hub_attachments = 7;    // Hub-hosted media (only in public channels)
+}
+
+// Sender key distribution (sent via E2EPM to each channel member)
+message PbSenderKeyDistribution {
+  string channel_id = 1;
+  uint32 key_id = 2;           // Unique ID for this key generation
+  bytes sender_key = 3;        // 32-byte ChaCha20-Poly1305 key
+  string sender_nick = 4;      // Who this key belongs to
+  uint32 key_generation = 5;   // Monotonically increasing generation counter
+}
+
+// Sender key rotation request (hub → channel members)
+message PbSenderKeyRotation {
+  string channel_id = 1;
+  string reason = 2;           // "member_left", "member_joined", "periodic", "manual"
+  string trigger_nick = 3;     // Nick of the member who left/joined (if applicable)
 }
 
 // ============================================================================

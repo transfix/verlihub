@@ -34,9 +34,21 @@ from verlihub.client.nmdcpb.nmdcpb_pb2 import (
     PbPrivateSearch, PbPrivateSearchResult,
     PbUserQueryResult,
     PbMediaUpload, PbMediaMeta, PbMediaDelete, PbMediaCapabilities,
+    PbP2PMediaRef, PbP2PMediaStatus,
+    PbHubStream,
 )
 from verlihub.client.nmdcpb.media_storage import MediaConfig
 from verlihub.client.nmdcpb.media_handler import MediaHandler
+from verlihub.client.nmdcpb.media_api import (
+    generate_session_token, revoke_sessions_for_nick,
+    prune_expired_sessions, configure as configure_media_api,
+)
+from verlihub.client.nmdcpb.channel_manager import (
+    ChannelManager, ChannelConfig, GENERAL_CHANNEL_ID,
+)
+from verlihub.client.nmdcpb.call_manager import (
+    CallManager, CallConfig, StreamManager, StreamConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -80,6 +92,45 @@ MEDIA_MAX_TTL = 30 * 86400          # 30 days
 MEDIA_PER_USER_QUOTA = 500 * 1024 * 1024  # 500 MB
 MEDIA_HUB_URL = ""                  # Public base URL for media access
 
+# P2P MediaShare settings
+ENABLE_P2P_MEDIA = True             # Enable P2P media sharing
+P2P_MEDIA_DEFAULT = False           # When True, prefer P2P over hub-hosted
+P2P_MEDIA_MAX_SIZE = 200 * 1024 * 1024  # 200 MB max P2P file size
+P2P_STATUS_RATE_LIMIT = 20         # Max p2p_media_status per window per user
+
+# Channel settings (Section 9.8)
+ENABLE_CHANNELS = True              # Enable/disable channels feature
+CHANNEL_MAX_PER_HUB = 50           # Maximum total channels on the hub
+CHANNEL_MAX_PER_USER = 10          # Maximum channels a single user can join
+CHANNEL_MAX_MEMBERS = 200          # Maximum members per channel
+CHANNEL_CREATE_MIN_CLASS = 1       # Minimum user class to create public channels
+CHANNEL_PRIVATE_ENABLED = True     # Enable/disable private (E2E) channels
+CHANNEL_PRIVATE_CREATE_MIN_CLASS = 1  # Minimum class for private channels
+CHANNEL_PRIVATE_MAX_MEMBERS = 50   # Max members per private channel
+CHANNEL_HISTORY_DEPTH = 100        # Public channel scrollback depth (messages)
+CHANNEL_HISTORY_TTL = 86400        # Public channel history retention (seconds)
+CHANNEL_PRIVATE_HISTORY = False    # Enable encrypted history for private channels
+CHANNEL_NAME_MAX_LENGTH = 32       # Maximum channel name length
+CHANNEL_TOPIC_MAX_LENGTH = 200     # Maximum topic length
+
+# VoiceVideo call settings (Section 8.8)
+ENABLE_VOICEVIDEO = False           # Enable/disable voice/video calls (off by default)
+CALL_MAX_PARTICIPANTS = 8           # Max participants in a group call
+CALL_MIN_CLASS = 1                  # Minimum user class to make/receive calls
+CALL_MAX_CONCURRENT_PER_USER = 2    # Per-user concurrent call limit
+CALL_MAX_CONCURRENT_HUB = 20       # Hub-wide concurrent call limit
+CALL_MAX_DURATION = 7200            # Max call duration in seconds (2 hours)
+CALL_MAX_BITRATE = 512000           # Max call bitrate (512 kbps)
+CALL_OFFER_TIMEOUT = 30             # Auto-reject unanswered offers (seconds)
+
+# Hub stream settings
+ENABLE_HUB_STREAMS = False          # Enable/disable hub-wide streams (off by default)
+STREAM_MAX_CONCURRENT = 3           # Max simultaneous hub streams
+STREAM_MAX_VIEWERS = 100            # Max viewers per stream
+STREAM_MIN_CLASS_BROADCAST = 3      # Class to start a stream (operator)
+STREAM_MIN_CLASS_VIEW = 0           # Class to view (everyone)
+STREAM_MAX_BITRATE = 256000         # Max stream bitrate (256 kbps)
+
 logging.basicConfig(
     level=LOG_LEVEL,
     format="[NMDCpb] %(levelname)s %(message)s",
@@ -120,7 +171,68 @@ _stats = {
     "media_uploads": 0,
     "media_deletes": 0,
     "media_expired_purged": 0,
+    "p2p_media_chats_routed": 0,
+    "p2p_media_status_forwarded": 0,
+    "p2p_media_quota_fallbacks": 0,
+    "channel_messages_routed": 0,
+    "channel_actions_handled": 0,
+    "calls_offered": 0,
+    "calls_answered": 0,
+    "calls_ended": 0,
+    "calls_timed_out": 0,
+    "streams_started": 0,
+    "streams_stopped": 0,
+    "stream_joins": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Channel manager (lazy-init)
+# ---------------------------------------------------------------------------
+
+_channel_manager: ChannelManager | None = None
+
+
+def _get_user_class(nick: str) -> int:
+    """Get a user's class level from verlihub."""
+    if vh is None:
+        return 1  # Default class for testing
+    try:
+        return vh.GetUserClass(nick) or 0
+    except Exception:
+        return 0
+
+
+def _get_channel_manager() -> ChannelManager | None:
+    """Lazy-initialize the channel manager on first use."""
+    global _channel_manager
+    if _channel_manager is not None:
+        return _channel_manager
+    if not ENABLE_CHANNELS:
+        return None
+    cfg = ChannelConfig(
+        enabled=True,
+        max_per_hub=CHANNEL_MAX_PER_HUB,
+        max_per_user=CHANNEL_MAX_PER_USER,
+        max_members=CHANNEL_MAX_MEMBERS,
+        create_min_class=CHANNEL_CREATE_MIN_CLASS,
+        private_enabled=CHANNEL_PRIVATE_ENABLED,
+        private_create_min_class=CHANNEL_PRIVATE_CREATE_MIN_CLASS,
+        private_max_members=CHANNEL_PRIVATE_MAX_MEMBERS,
+        history_depth=CHANNEL_HISTORY_DEPTH,
+        history_ttl=CHANNEL_HISTORY_TTL,
+        private_history=CHANNEL_PRIVATE_HISTORY,
+        name_max_length=CHANNEL_NAME_MAX_LENGTH,
+        topic_max_length=CHANNEL_TOPIC_MAX_LENGTH,
+    )
+    _channel_manager = ChannelManager(
+        config=cfg,
+        send_fn=_send_to_user,
+        status_fn=_send_status,
+        get_user_class_fn=_get_user_class,
+    )
+    log.info("ChannelManager initialized")
+    return _channel_manager
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +263,82 @@ def _get_media_handler() -> MediaHandler | None:
         send_fn=_send_to_user,
         status_fn=_send_status,
         hub_url=MEDIA_HUB_URL,
+        p2p_enabled=ENABLE_P2P_MEDIA,
+        p2p_default=P2P_MEDIA_DEFAULT,
+        p2p_max_size=P2P_MEDIA_MAX_SIZE,
     )
     log.info(f"MediaHandler initialized: storage={cfg.storage_path}")
     return _media_handler
+
+
+# ---------------------------------------------------------------------------
+# Call manager (lazy-init)
+# ---------------------------------------------------------------------------
+
+_call_manager: CallManager | None = None
+
+
+def _get_call_manager() -> CallManager | None:
+    """Lazy-initialize the call manager on first use."""
+    global _call_manager
+    if _call_manager is not None:
+        return _call_manager
+    if not ENABLE_VOICEVIDEO:
+        return None
+    cfg = CallConfig(
+        enabled=True,
+        max_participants=CALL_MAX_PARTICIPANTS,
+        min_class=CALL_MIN_CLASS,
+        max_concurrent_per_user=CALL_MAX_CONCURRENT_PER_USER,
+        max_concurrent_hub=CALL_MAX_CONCURRENT_HUB,
+        max_duration_sec=CALL_MAX_DURATION,
+        max_bitrate=CALL_MAX_BITRATE,
+        offer_timeout_sec=CALL_OFFER_TIMEOUT,
+    )
+    _call_manager = CallManager(
+        config=cfg,
+        send_fn=_send_to_user,
+        status_fn=_send_status,
+        get_user_class_fn=_get_user_class,
+        is_pb_user_fn=_is_pb_user,
+        get_all_nicks_fn=_get_all_nicks,
+    )
+    log.info("CallManager initialized")
+    return _call_manager
+
+
+# ---------------------------------------------------------------------------
+# Stream manager (lazy-init)
+# ---------------------------------------------------------------------------
+
+_stream_manager: StreamManager | None = None
+
+
+def _get_stream_manager() -> StreamManager | None:
+    """Lazy-initialize the stream manager on first use."""
+    global _stream_manager
+    if _stream_manager is not None:
+        return _stream_manager
+    if not ENABLE_HUB_STREAMS:
+        return None
+    cfg = StreamConfig(
+        enabled=True,
+        max_concurrent=STREAM_MAX_CONCURRENT,
+        max_viewers=STREAM_MAX_VIEWERS,
+        min_class_broadcast=STREAM_MIN_CLASS_BROADCAST,
+        min_class_view=STREAM_MIN_CLASS_VIEW,
+        max_bitrate=STREAM_MAX_BITRATE,
+    )
+    _stream_manager = StreamManager(
+        config=cfg,
+        send_fn=_send_to_user,
+        status_fn=_send_status,
+        get_user_class_fn=_get_user_class,
+        is_pb_user_fn=_is_pb_user,
+        get_pb_nicks_fn=_get_pb_nicks,
+    )
+    log.info("StreamManager initialized")
+    return _stream_manager
 
 
 # ---------------------------------------------------------------------------
@@ -444,20 +629,42 @@ def OnUserLogin(nick: str) -> int:
             if ENABLE_MEDIASHARE:
                 handler = _get_media_handler()
                 if handler is not None:
+                    # Issue a session token for HTTP media API auth
+                    try:
+                        token = generate_session_token(nick, ip or "")
+                        handler.set_session_token(nick, token)
+                    except Exception as e:
+                        log.warning(f"Failed to issue media token for {nick}: {e}")
                     try:
                         loop = _get_event_loop()
                         loop.run_until_complete(
                             handler.handle_media_capabilities_request(nick))
                     except Exception as e:
                         log.warning(f"Failed to send media caps to {nick}: {e}")
+            # Channel auto-join + list
+            if ENABLE_CHANNELS:
+                cm = _get_channel_manager()
+                if cm is not None:
+                    cm.on_user_login(nick)
     return 1
 
 
 def OnUserLogout(nick: str) -> int:
     """Clean up NMDCpb state on user logout."""
     _close_user_relays(nick, reason=4)  # USER_DISCONNECT
+    # Remove from channels before clearing PB user state
+    if ENABLE_CHANNELS:
+        cm = _get_channel_manager()
+        if cm is not None:
+            cm.on_user_logout(nick)
+    # Clean up VoiceVideo calls/streams
+    if ENABLE_VOICEVIDEO and _call_manager is not None:
+        _call_manager.handle_user_disconnect(nick)
+    if ENABLE_HUB_STREAMS and _stream_manager is not None:
+        _stream_manager.handle_user_disconnect(nick)
     _pb_users.pop(nick, None)
     _rate_pb.pop(nick, None)
+    revoke_sessions_for_nick(nick)
     _rate_e2epm.pop(nick, None)
     return 1
 
@@ -465,6 +672,11 @@ def OnUserLogout(nick: str) -> int:
 def OnCloseConnEx(ip: str, reason: int, nick: str) -> int:
     """Clean up on connection close."""
     _close_user_relays(nick, reason=4)  # USER_DISCONNECT
+    # Clean up VoiceVideo calls/streams
+    if ENABLE_VOICEVIDEO and _call_manager is not None:
+        _call_manager.handle_user_disconnect(nick)
+    if ENABLE_HUB_STREAMS and _stream_manager is not None:
+        _stream_manager.handle_user_disconnect(nick)
     _pb_users.pop(nick, None)
     _ip_to_nick.pop(ip, None)
     _rate_pb.pop(nick, None)
@@ -549,7 +761,7 @@ def OnUnknownMsg(nick: str, msg_str: str) -> int:
 
 
 def OnParsedMsgChat(nick: str, message: str) -> int:
-    """Handle legacy chat — bridge to NMDCpb users."""
+    """Handle legacy chat — bridge to NMDCpb users as #general channel messages."""
     if not _pb_users:
         return 1
 
@@ -558,6 +770,7 @@ def OnParsedMsgChat(nick: str, message: str) -> int:
         from_nick=nick,
     )
     env.chat.text = message
+    env.chat.channel_id = GENERAL_CHANNEL_ID  # Tag as #general
     env.timestamp = int(time.time() * 1000)
     wire = WireCodec.encode_text(env)
 
@@ -624,7 +837,171 @@ def OnTimer(msec: float) -> int:
         except Exception as e:
             log.warning(f"Media expiry check failed: {e}")
 
+    # Prune expired session tokens
+    prune_expired_sessions()
+
+    # Channel history TTL pruning
+    if ENABLE_CHANNELS and _channel_manager is not None:
+        _channel_manager.prune_expired_history()
+
+        _channel_manager.prune_expired_history()
+
+    # VoiceVideo call timeout pruning
+    if ENABLE_VOICEVIDEO and _call_manager is not None:
+        pruned = _call_manager.prune_expired()
+        if pruned:
+            _stats["calls_timed_out"] += pruned
+
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Admin channel commands
+# ---------------------------------------------------------------------------
+
+def _handle_channel_admin(nick: str, sub_args: str, user_class: int) -> str:
+    """Handle +nmdcpb channel <subcommand> <args>.
+
+    Requires hub operator (class >= 3) for kick/topic,
+    hub admin (class >= 5) for create/delete/rotate-keys.
+    """
+    cm = _get_channel_manager()
+    if cm is None:
+        return "Channels are not enabled."
+
+    parts = sub_args.split(None, 2)
+    if not parts:
+        return (
+            "Channel admin commands:\n"
+            "  +nmdcpb channel create <id> [private]\n"
+            "  +nmdcpb channel delete <id>\n"
+            "  +nmdcpb channel kick <id> <nick>\n"
+            "  +nmdcpb channel topic <id> <new topic>\n"
+            "  +nmdcpb channel rotate-keys <id>\n"
+            "  +nmdcpb channel info <id>"
+        )
+
+    subcmd = parts[0].lower()
+    ch_id = parts[1] if len(parts) > 1 else ""
+    extra = parts[2] if len(parts) > 2 else ""
+
+    # Strip leading '#' from channel id for convenience
+    if ch_id.startswith("#"):
+        ch_id = ch_id[1:]
+
+    if subcmd == "create":
+        if user_class < 5:
+            return "Insufficient privileges (requires admin class >= 5)"
+        if not ch_id:
+            return "Usage: +nmdcpb channel create <id> [private]"
+        is_private = extra.lower() in ("private", "true", "1", "yes")
+        # Build a synthetic PbChannel action envelope
+        from verlihub.client.nmdcpb.proto.nmdcpb_pb2 import (
+            PbChannel,
+            PbEnvelope,
+        )
+        env = PbEnvelope()
+        env.route = PbEnvelope.HUB
+        env.channel.action = PbChannel.CREATE
+        env.channel.channel_id = ch_id
+        env.channel.name = ch_id
+        env.channel.is_private = is_private
+        cm.handle_channel_action(nick, env)
+        priv_str = " (private)" if is_private else ""
+        return f"Channel #{ch_id}{priv_str} creation requested"
+
+    elif subcmd == "delete":
+        if user_class < 5:
+            return "Insufficient privileges (requires admin class >= 5)"
+        if not ch_id:
+            return "Usage: +nmdcpb channel delete <id>"
+        ch = cm.get_channel(ch_id)
+        if not ch:
+            return f"Channel '{ch_id}' not found"
+        from verlihub.client.nmdcpb.proto.nmdcpb_pb2 import (
+            PbChannel,
+            PbEnvelope,
+        )
+        env = PbEnvelope()
+        env.route = PbEnvelope.HUB
+        env.channel.action = PbChannel.DELETE
+        env.channel.channel_id = ch_id
+        cm.handle_channel_action(nick, env)
+        return f"Channel #{ch_id} deletion requested"
+
+    elif subcmd == "kick":
+        if user_class < 3:
+            return "Insufficient privileges (requires operator class >= 3)"
+        if not ch_id or not extra:
+            return "Usage: +nmdcpb channel kick <id> <nick>"
+        target_nick = extra.split()[0]
+        ch = cm.get_channel(ch_id)
+        if not ch:
+            return f"Channel '{ch_id}' not found"
+        if not ch.has_member(target_nick):
+            return f"{target_nick} is not in #{ch_id}"
+        from verlihub.client.nmdcpb.proto.nmdcpb_pb2 import (
+            PbChannel,
+            PbEnvelope,
+        )
+        env = PbEnvelope()
+        env.route = PbEnvelope.HUB
+        env.channel.action = PbChannel.KICK
+        env.channel.channel_id = ch_id
+        env.channel.target_nick = target_nick
+        cm.handle_channel_action(nick, env)
+        return f"Kick of {target_nick} from #{ch_id} requested"
+
+    elif subcmd == "topic":
+        if user_class < 3:
+            return "Insufficient privileges (requires operator class >= 3)"
+        if not ch_id:
+            return "Usage: +nmdcpb channel topic <id> <new topic>"
+        ch = cm.get_channel(ch_id)
+        if not ch:
+            return f"Channel '{ch_id}' not found"
+        from verlihub.client.nmdcpb.proto.nmdcpb_pb2 import (
+            PbChannel,
+            PbEnvelope,
+        )
+        env = PbEnvelope()
+        env.route = PbEnvelope.HUB
+        env.channel.action = PbChannel.SET_TOPIC
+        env.channel.channel_id = ch_id
+        env.channel.topic = extra
+        cm.handle_channel_action(nick, env)
+        return f"Topic of #{ch_id} set to: {extra[:60]}"
+
+    elif subcmd == "rotate-keys":
+        if user_class < 5:
+            return "Insufficient privileges (requires admin class >= 5)"
+        if not ch_id:
+            return "Usage: +nmdcpb channel rotate-keys <id>"
+        return cm.force_rotate_keys(ch_id, nick)
+
+    elif subcmd == "info":
+        if not ch_id:
+            return "Usage: +nmdcpb channel info <id>"
+        ch = cm.get_channel(ch_id)
+        if not ch:
+            return f"Channel '{ch_id}' not found"
+        members = ", ".join(sorted(ch.members.keys()))
+        return (
+            f"Channel #{ch.channel_id}:\n"
+            f"  Name:    {ch.name}\n"
+            f"  Private: {ch.is_private}\n"
+            f"  Owner:   {ch.owner_nick}\n"
+            f"  Topic:   {ch.topic or '(none)'}\n"
+            f"  Members ({ch.member_count}): {members}\n"
+            f"  History: {len(ch.history)} entries\n"
+            f"  Created: {ch.created_at}"
+        )
+
+    else:
+        return (
+            f"Unknown channel subcommand: {subcmd}\n"
+            "  Valid: create, delete, kick, topic, rotate-keys, info"
+        )
 
 
 def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: str) -> int:
@@ -647,6 +1024,18 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Media uploads:      {_stats.get('media_uploads', 0)}\n"
                 f"  Media deletes:      {_stats.get('media_deletes', 0)}\n"
                 f"  Media expired:      {_stats.get('media_expired_purged', 0)}\n"
+                f"  P2P media chats:    {_stats.get('p2p_media_chats_routed', 0)}\n"
+                f"  P2P status fwd:     {_stats.get('p2p_media_status_forwarded', 0)}\n"
+                f"  P2P quota fallback: {_stats.get('p2p_media_quota_fallbacks', 0)}\n"
+                f"  Channel messages:   {_stats.get('channel_messages_routed', 0)}\n"
+                f"  Channel actions:    {_stats.get('channel_actions_handled', 0)}\n"
+                f"  Calls offered:      {_stats.get('calls_offered', 0)}\n"
+                f"  Calls answered:     {_stats.get('calls_answered', 0)}\n"
+                f"  Calls ended:        {_stats.get('calls_ended', 0)}\n"
+                f"  Calls timed out:    {_stats.get('calls_timed_out', 0)}\n"
+                f"  Streams started:    {_stats.get('streams_started', 0)}\n"
+                f"  Streams stopped:    {_stats.get('streams_stopped', 0)}\n"
+                f"  Stream joins:       {_stats.get('stream_joins', 0)}\n"
             )
         elif args == "users":
             if _pb_users:
@@ -702,7 +1091,105 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 loop.run_until_complete(
                     handler.handle_operator_delete(nick, media_id, reason))
                 msg = f"Delete request submitted for {media_id}"
+        elif args == "channels":
+            cm = _get_channel_manager()
+            if cm is None:
+                msg = "Channels are not enabled."
+            else:
+                msg = f"Channel Status:\n{cm.get_stats_summary()}\n\nChannels:\n"
+                for ch in cm.get_all_channels():
+                    priv = " [private]" if ch.is_private else ""
+                    msg += (f"  #{ch.channel_id}{priv}: "
+                            f"{ch.member_count} members")
+                    if ch.topic:
+                        msg += f" — {ch.topic[:40]}"
+                    msg += "\n"
+        elif args.startswith("channel "):
+            # Admin channel management: +nmdcpb channel <subcommand> <args>
+            msg = _handle_channel_admin(nick, args[8:].strip(), user_class)
+        elif args == "calls":
+            cm = _get_call_manager()
+            if cm is None:
+                msg = "Voice/video calls are not enabled."
+            else:
+                msg = f"VoiceVideo Status:\n{cm.get_stats_summary()}\n\nActive calls:\n"
+                for call in cm.get_active_calls():
+                    participants = ', '.join(call.all_nicks)
+                    dur = call.duration_sec
+                    answered = 'active' if call.answered_at else 'ringing'
+                    msg += (f"  {call.call_id[:8]}...: {participants} "
+                            f"({answered}, {dur}s)\n")
+                if not cm.get_active_calls():
+                    msg += "  (none)\n"
+        elif args == "streams":
+            sm = _get_stream_manager()
+            if sm is None:
+                msg = "Hub streams are not enabled."
+            else:
+                msg = f"Stream Status:\n{sm.get_stats_summary()}\n\nActive streams:\n"
+                for stream in sm.get_active_streams():
+                    msg += (f"  {stream.stream_id[:8]}...: '{stream.title}' "
+                            f"by {stream.broadcaster} "
+                            f"({stream.viewer_count} viewers)\n")
+                if not sm.get_active_streams():
+                    msg += "  (none)\n"
+        elif args.startswith("call end "):
+            # Admin force-end a call: +nmdcpb call end <call_id_prefix>
+            if user_class < 5:
+                msg = "Insufficient privileges (requires admin class >= 5)"
+            else:
+                cm = _get_call_manager()
+                if cm is None:
+                    msg = "Voice/video calls are not enabled."
+                else:
+                    prefix_arg = args[9:].strip()
+                    found = None
+                    for call in cm.get_active_calls():
+                        if call.call_id.startswith(prefix_arg):
+                            found = call
+                            break
+                    if found is None:
+                        msg = f"No call found matching '{prefix_arg}'"
+                    else:
+                        # Build an end envelope and process it
+                        end_env = WireCodec.make_envelope(
+                            route=PbEnvelope.DIRECT,
+                            from_nick="",
+                            to_nick="",
+                        )
+                        end_env.call_end.call_id = found.call_id
+                        end_env.call_end.reason = PbCallEnd.ERROR
+                        cm.handle_call_end(found.initiator, end_env)
+                        msg = f"Call {found.call_id[:8]}... force-ended"
+        elif args.startswith("stream stop "):
+            # Admin force-stop a stream: +nmdcpb stream stop <stream_id_prefix>
+            if user_class < 5:
+                msg = "Insufficient privileges (requires admin class >= 5)"
+            else:
+                sm = _get_stream_manager()
+                if sm is None:
+                    msg = "Hub streams are not enabled."
+                else:
+                    prefix_arg = args[12:].strip()
+                    found = None
+                    for stream in sm.get_active_streams():
+                        if stream.stream_id.startswith(prefix_arg):
+                            found = stream
+                            break
+                    if found is None:
+                        msg = f"No stream found matching '{prefix_arg}'"
+                    else:
+                        stop_env = WireCodec.make_envelope(
+                            route=PbEnvelope.HUB,
+                            from_nick=found.broadcaster,
+                        )
+                        stop_env.hub_stream.action = PbHubStream.STOP_STREAM
+                        stop_env.hub_stream.stream_id = found.stream_id
+                        sm.handle_hub_stream(found.broadcaster, stop_env)
+                        msg = f"Stream {found.stream_id[:8]}... force-stopped"
         else:
+            cm = _get_channel_manager()
+            ch_count = cm.get_channel_count() if cm else 0
             msg = (
                 f"NMDCpb Hub Plugin v{VERSION}\n"
                 f"  NMDCpb users: {len(_pb_users)}\n"
@@ -712,9 +1199,20 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
                 f"  Active relays: {len(_relay_sessions)}\n"
                 f"  E2EPM forward: {'on' if ENABLE_E2EPM_FORWARD else 'off'}\n"
                 f"  MediaShare:  {'on' if ENABLE_MEDIASHARE else 'off'}\n"
+                f"  P2P Media:   {'on' if ENABLE_P2P_MEDIA else 'off'}"
+                f"{'  (default)' if P2P_MEDIA_DEFAULT else ''}\n"
+                f"  Channels:    {'on' if ENABLE_CHANNELS else 'off'}"
+                f" ({ch_count} active)\n"
+                f"  VoiceVideo:  {'on' if ENABLE_VOICEVIDEO else 'off'}"
+                f" ({_call_manager.get_call_count() if _call_manager else 0} calls)\n"
+                f"  Hub Streams: {'on' if ENABLE_HUB_STREAMS else 'off'}"
+                f" ({_stream_manager.get_stream_count() if _stream_manager else 0} streams)\n"
                 f"  Rate limit: {RATE_MAX_MESSAGES}/{RATE_WINDOW_SEC}s (PB), "
                 f"{RATE_MAX_E2EPM}/{RATE_WINDOW_SEC}s (E2EPM)\n"
-                f"\nCommands: +nmdcpb stats | users | relay | media"
+                f"\nCommands: +nmdcpb stats | users | relay | media | channels"
+                f"\n         +nmdcpb calls | streams"
+                f"\n         +nmdcpb channel <create|delete|kick|topic|rotate-keys>"
+                f"\n         +nmdcpb call end <id> | stream stop <id>"
             )
 
         if vh and in_pm:
@@ -729,6 +1227,7 @@ def OnHubCommand(nick: str, command: str, user_class: int, in_pm: int, prefix: s
 
 def OnUnLoad(code: int) -> int:
     """Script unload — clean up."""
+    global _channel_manager, _call_manager, _stream_manager
     log.info(f"NMDCpb hub plugin unloading (code={code})")
     _pb_users.clear()
     _ip_to_nick.clear()
@@ -736,7 +1235,73 @@ def OnUnLoad(code: int) -> int:
     _rate_e2epm.clear()
     _relay_sessions.clear()
     _pending_relay.clear()
+    _channel_manager = None
+    _call_manager = None
+    _stream_manager = None
     return 1
+
+
+# ---------------------------------------------------------------------------
+# VoiceVideo call/stream routing helpers
+# ---------------------------------------------------------------------------
+
+def _route_call_signaling(sender: str, env: PbEnvelope, payload: str) -> None:
+    """Route voice/video call signaling messages through CallManager."""
+    if not ENABLE_VOICEVIDEO:
+        _send_status(sender, PbStatus.ERROR, 100,
+                     "Voice/video calls are not enabled on this hub")
+        return
+
+    cm = _get_call_manager()
+    if cm is None:
+        _send_status(sender, PbStatus.ERROR, 100,
+                     "Voice/video calls are not enabled on this hub")
+        return
+
+    handled = False
+    if payload == "call_offer":
+        handled = cm.handle_call_offer(sender, env)
+        _stats["calls_offered"] += 1
+    elif payload == "call_answer":
+        handled = cm.handle_call_answer(sender, env)
+        if env.call_answer.accepted:
+            _stats["calls_answered"] += 1
+    elif payload == "call_candidate":
+        handled = cm.handle_call_candidate(sender, env)
+    elif payload == "call_end":
+        handled = cm.handle_call_end(sender, env)
+        _stats["calls_ended"] += 1
+    elif payload == "call_media_control":
+        handled = cm.handle_call_media_control(sender, env)
+
+    if not handled:
+        log.warning(f"Unhandled call signaling {payload} from {sender}")
+
+
+def _route_hub_stream(sender: str, env: PbEnvelope) -> None:
+    """Route hub stream management messages through StreamManager."""
+    if not ENABLE_HUB_STREAMS:
+        _send_status(sender, PbStatus.ERROR, 120,
+                     "Hub streams are not enabled on this hub")
+        return
+
+    sm = _get_stream_manager()
+    if sm is None:
+        _send_status(sender, PbStatus.ERROR, 120,
+                     "Hub streams are not enabled on this hub")
+        return
+
+    hs = env.hub_stream
+    sm.handle_hub_stream(sender, env)
+
+    # Update hub-level stats
+    action = hs.action
+    if action == PbHubStream.START_STREAM:
+        _stats["streams_started"] += 1
+    elif action == PbHubStream.STOP_STREAM:
+        _stats["streams_stopped"] += 1
+    elif action == PbHubStream.JOIN_STREAM:
+        _stats["stream_joins"] += 1
 
 
 # ---------------------------------------------------------------------------
@@ -745,10 +1310,37 @@ def OnUnLoad(code: int) -> int:
 
 def _route_broadcast(sender: str, env: PbEnvelope, raw_wire: str) -> None:
     """Route a BROADCAST message to all users."""
+    # Channel message intercept: PbChat with channel_id → channel routing
+    if ENABLE_CHANNELS:
+        cm = _get_channel_manager()
+        if cm is not None:
+            if cm.route_channel_chat(sender, env):
+                _stats["channel_messages_routed"] += 1
+                # Also translate #general messages to legacy
+                if (ENABLE_LEGACY_TRANSLATION
+                        and env.HasField("chat")
+                        and env.chat.channel_id == GENERAL_CHANNEL_ID):
+                    _broadcast_legacy_chat(sender, env)
+                return
+            if cm.route_channel_encrypted(sender, env):
+                _stats["channel_messages_routed"] += 1
+                return
+            if cm.route_sender_key_rotation(sender, env):
+                return
+
+    # Validate P2P attachments if present
+    if not _validate_p2p_chat_attachments(sender, env):
+        return
+
     wire = WireCodec.encode_text(env)
     for pb_nick in _get_pb_nicks():
         if pb_nick != sender:
             _send_to_user(wire, pb_nick)
+
+    # Track P2P media chats
+    if env.HasField("chat") and env.chat.p2p_attachments.__len__() > 0:
+        _stats["p2p_media_chats_routed"] += 1
+
     if ENABLE_LEGACY_TRANSLATION:
         payload = env.WhichOneof("payload")
         if payload == "chat":
@@ -782,6 +1374,17 @@ def _route_direct(sender: str, env: PbEnvelope) -> None:
         return
     if payload in ("segment_request", "segment_info"):
         _forward_segment_msg(sender, env)
+        return
+
+    # P2P media status messages — forward peer-to-peer
+    if payload == "p2p_media_status":
+        _forward_p2p_media_status(sender, target, env)
+        return
+
+    # VoiceVideo call signaling — routed through CallManager
+    if payload in ("call_offer", "call_answer", "call_candidate",
+                    "call_end", "call_media_control"):
+        _route_call_signaling(sender, env, payload)
         return
 
     if payload in ("pm_key_exchange", "encrypted_pm", "pm_session_end",
@@ -819,8 +1422,36 @@ def _route_hub(sender: str, env: PbEnvelope) -> None:
     if payload == "user_query":
         _route_user_query(sender, env)
         return
-    if payload in ("media_upload", "media_delete", "media_capabilities"):
+    if payload in ("media_upload", "media_delete", "media_capabilities",
+                    "media_meta"):
         _route_media(sender, env, payload)
+        return
+    # Channel management actions
+    if payload == "channel":
+        if ENABLE_CHANNELS:
+            cm = _get_channel_manager()
+            if cm is not None:
+                cm.handle_channel_action(sender, env)
+                _stats["channel_actions_handled"] += 1
+        else:
+            _send_status(sender, PbStatus.ERROR, 60,
+                         "Channels are not enabled on this hub")
+        return
+    if payload == "channel_invite":
+        if ENABLE_CHANNELS:
+            cm = _get_channel_manager()
+            if cm is not None:
+                cm.handle_channel_invite(sender, env)
+        return
+    if payload == "channel_invite_response":
+        if ENABLE_CHANNELS:
+            cm = _get_channel_manager()
+            if cm is not None:
+                cm.handle_channel_invite_response(sender, env)
+        return
+    # Hub stream management
+    if payload == "hub_stream":
+        _route_hub_stream(sender, env)
         return
     if payload == "extension":
         log.info(f"Extension negotiation from {sender}: {env.extension}")
@@ -1277,6 +1908,10 @@ def _route_media(sender: str, env: PbEnvelope, payload: str) -> None:
 
     loop = _get_event_loop()
     if payload == "media_upload":
+        # Check for P2P fallback when quota exhausted
+        if ENABLE_P2P_MEDIA and _handle_media_upload_quota_fallback(
+                sender, env.media_upload):
+            return
         loop.run_until_complete(
             handler.handle_media_upload(sender, env.media_upload))
         _stats["media_uploads"] += 1
@@ -1287,6 +1922,117 @@ def _route_media(sender: str, env: PbEnvelope, payload: str) -> None:
     elif payload == "media_capabilities":
         loop.run_until_complete(
             handler.handle_media_capabilities_request(sender))
+    elif payload == "media_meta":
+        media_id = env.media_meta.media_id if env.HasField("media_meta") else ""
+        if media_id:
+            loop.run_until_complete(
+                handler.handle_media_meta_request(sender, media_id))
+        else:
+            _send_status(sender, PbStatus.ERROR, 44,
+                         "Missing media_id in media_meta request")
+
+
+# ---------------------------------------------------------------------------
+# P2P Media routing
+# ---------------------------------------------------------------------------
+
+def _forward_p2p_media_status(sender: str, target: str, env: PbEnvelope) -> None:
+    """Forward PbP2PMediaStatus between peers.
+
+    Validates that the target is a PB user and rate-limits status updates.
+    """
+    if not ENABLE_P2P_MEDIA:
+        _send_status(sender, PbStatus.ERROR, 50,
+                     "P2P media sharing is not enabled on this hub")
+        return
+
+    if not _is_pb_user(target):
+        _send_status(sender, PbStatus.ERROR, 51,
+                     f"User {target} does not support NMDCpb")
+        return
+
+    # Rate limit P2P status messages
+    if not _check_rate(sender, "pb"):
+        return
+
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, target)
+    _stats["p2p_media_status_forwarded"] += 1
+
+
+def _validate_p2p_chat_attachments(sender: str, env: PbEnvelope) -> bool:
+    """Validate P2P attachments in a PbChat before broadcast.
+
+    Checks: P2P enabled, file sizes within limits, required fields present.
+    Returns True if valid (or no attachments), False if rejected.
+    """
+    if not env.HasField("chat"):
+        return True
+    chat = env.chat
+    if chat.p2p_attachments.__len__() == 0:
+        return True
+
+    if not ENABLE_P2P_MEDIA:
+        _send_status(sender, PbStatus.ERROR, 50,
+                     "P2P media sharing is not enabled on this hub")
+        return False
+
+    for ref in chat.p2p_attachments:
+        if not ref.tth:
+            _send_status(sender, PbStatus.ERROR, 52,
+                         "P2P media ref missing TTH")
+            return False
+        if not ref.filename:
+            _send_status(sender, PbStatus.ERROR, 52,
+                         "P2P media ref missing filename")
+            return False
+        if ref.size > P2P_MEDIA_MAX_SIZE:
+            _send_status(sender, PbStatus.ERROR, 53,
+                         f"P2P media file too large: {ref.size} > {P2P_MEDIA_MAX_SIZE}")
+            return False
+
+    return True
+
+
+def _handle_media_upload_quota_fallback(
+    sender: str, upload: PbMediaUpload
+) -> bool:
+    """When hub-hosted upload fails due to quota, suggest P2P as fallback.
+
+    Returns True if a fallback P2P capabilities response was sent.
+    """
+    if not ENABLE_P2P_MEDIA:
+        return False
+
+    handler = _get_media_handler()
+    if handler is None:
+        return False
+
+    # Check if quota would be exceeded
+    quota = handler.storage.get_quota(sender)
+    if quota.remaining_bytes >= upload.size:
+        return False  # Quota OK, no fallback needed
+
+    # Quota exceeded — suggest P2P
+    env = WireCodec.make_envelope(
+        route=PbEnvelope.DIRECT,
+        from_nick="",
+        to_nick=sender,
+    )
+    caps = env.media_capabilities
+    caps.enabled = True
+    caps.max_file_size = P2P_MEDIA_MAX_SIZE
+    caps.user_quota_remaining = 0
+    caps.p2p_enabled = True
+    caps.p2p_default = True  # Signal that P2P is the recommended path
+    caps.p2p_max_size = P2P_MEDIA_MAX_SIZE
+    import time as _time
+    env.timestamp = int(_time.time() * 1000)
+    wire = WireCodec.encode_text(env)
+    _send_to_user(wire, sender)
+    _stats["p2p_media_quota_fallbacks"] += 1
+    log.info(f"P2P fallback for {sender}: quota exhausted, file={upload.size}")
+    return True
 
 
 def _get_event_loop() -> asyncio.AbstractEventLoop:

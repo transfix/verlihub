@@ -20,6 +20,7 @@
 
 #include "hub_context.h"
 #include "nmdc_hub_server.h"
+#include "geo_ip_lookup.h"
 #include <iostream>
 #include <chrono>
 #include <sstream>
@@ -515,6 +516,16 @@ bool HubContext::InitializeComponents() {
             Log(0, "Failed to create NMDCHubServer");
             return false;
         }
+
+        // Create GeoIP lookup engine (searches standard system paths)
+        Log(0, "Initializing GeoIP lookup");
+        m_geo_lookup = new GeoIPLookup();
+        if (m_geo_lookup->IsAvailable()) {
+            Log(0, "GeoIP databases loaded — country codes will be resolved on user login");
+        } else {
+            Log(0, "No MaxMind .mmdb databases found — country codes will be empty (install GeoLite2 databases to /usr/share/GeoIP/)");
+        }
+        m_nmdc_server->SetGeoIP(m_geo_lookup);
         
         Log(0, "NMDCHubServer created successfully");
         return true;
@@ -537,6 +548,12 @@ void HubContext::CleanupComponents() {
     if (m_nmdc_server) {
         delete m_nmdc_server;
         m_nmdc_server = nullptr;
+    }
+
+    // Delete the GeoIP lookup engine
+    if (m_geo_lookup) {
+        delete m_geo_lookup;
+        m_geo_lookup = nullptr;
     }
     
     // Clear user collections

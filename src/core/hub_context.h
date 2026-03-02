@@ -43,6 +43,7 @@ namespace nVerliHub {
 
 // Forward declarations
 class NMDCHubServer;
+class GeoIPLookup;
 
 // Legacy forward declarations (kept for plugin API compatibility)
 namespace nSocket {
@@ -773,7 +774,10 @@ private:
     
     /// Database-free NMDC hub server (verlihub-py)
     NMDCHubServer* m_nmdc_server{nullptr};
-    
+
+    /// GeoIP lookup engine (new core, no cServerDC dependency)
+    GeoIPLookup* m_geo_lookup{nullptr};
+
     /// Plugin manager (optional, nullptr if no plugins)
     nPlugin::cVHPluginMgr* m_plugin_mgr{nullptr};
     nUtils::cICUConvert* m_icu_convert{nullptr};

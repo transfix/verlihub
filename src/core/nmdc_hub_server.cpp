@@ -341,6 +341,12 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
         // First MyINFO - complete login
         client.state = NMDCConnState::LoggedIn;
 
+        // GeoIP lookup (like old core's GetCCC on login)
+        if (m_geoip && !client.ip.empty()) {
+            auto geo = m_geoip->Lookup(client.ip);
+            client.country_code = geo.country_code;
+        }
+
         // Add to nick map
         m_nick_to_conn[client.nick] = client.conn;
         m_user_count.fetch_add(1, std::memory_order_relaxed);
@@ -662,6 +668,7 @@ bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) 
     out.tag         = c.myinfo.tag;
     out.speed       = c.myinfo.speed;
     out.email       = c.myinfo.email;
+    out.country     = c.country_code;
     out.client_name = ExtractClientName(c.myinfo.tag);
     out.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - c.connect_time).count();
@@ -683,6 +690,7 @@ std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
         s.tag         = c.myinfo.tag;
         s.speed       = c.myinfo.speed;
         s.email       = c.myinfo.email;
+        s.country     = c.country_code;
         s.client_name = ExtractClientName(c.myinfo.tag);
         s.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - c.connect_time).count();

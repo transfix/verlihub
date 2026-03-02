@@ -39,6 +39,7 @@
 #include "casyncsocketserver.h"
 #include "casyncconn.h"
 #include "nmdc_protocol.h"
+#include "geo_ip_lookup.h"
 
 #include <string>
 #include <unordered_map>
@@ -107,6 +108,7 @@ struct NMDCClient {
     std::string myinfo_raw;  ///< Raw $MyINFO string to broadcast
     NMDCProtocol::MyINFOData myinfo;
     int user_class{0};       ///< 0=guest, 1=reg, 3=vip, 5=op, 10=admin
+    std::string country_code; ///< Two-letter ISO country code (GeoIP lookup on login)
     std::string lock;        ///< Lock string sent to this client
     int login_attempts{0};   ///< Password attempt counter
     std::chrono::steady_clock::time_point connect_time; ///< When the client connected
@@ -168,6 +170,12 @@ public:
      * Pass nullptr to remove.
      */
     void SetCallback(IHubEventCallback* cb) { m_callback = cb; }
+
+    /**
+     * Set the GeoIP lookup engine.  Owned externally (by HubContext).
+     * When set, country codes are resolved on user login.
+     */
+    void SetGeoIP(GeoIPLookup* geo) { m_geoip = geo; }
 
     // =========================================================================
     // Messaging (thread-safe, can be called from Python threads)
@@ -299,6 +307,9 @@ private:
 
     /// Event callback (Python bridge, not owned)
     IHubEventCallback* m_callback{nullptr};
+
+    /// GeoIP lookup engine (not owned, set by HubContext)
+    GeoIPLookup* m_geoip{nullptr};
 
     // =========================================================================
     // Hub Configuration (in-memory, no DB)

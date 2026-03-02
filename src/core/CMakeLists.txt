@@ -33,6 +33,7 @@ set(CORE_SOURCES
     thread_safe_collections.cpp
     nmdc_protocol.cpp
     nmdc_hub_server.cpp
+    geo_ip_lookup.cpp
 )
 
 set(CORE_HEADERS
@@ -40,6 +41,7 @@ set(CORE_HEADERS
     thread_safe_collections.h
     nmdc_protocol.h
     nmdc_hub_server.h
+    geo_ip_lookup.h
     compat_format.h
 )
 

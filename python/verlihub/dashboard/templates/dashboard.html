@@ -161,6 +161,35 @@
     </div>
 </div>
 
+<!-- Geo distribution & share stats -->
+<div class="columns">
+    <!-- Geographic Distribution -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-globe mr-2"></i>
+                Geographic Distribution
+            </h2>
+            <div id="geo-distribution" style="max-height: 320px; overflow-y: auto;">
+                <p class="has-text-grey has-text-centered">Loading&hellip;</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Statistics -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-chart-pie mr-2"></i>
+                Share Statistics
+            </h2>
+            <div id="share-stats-panel">
+                <p class="has-text-grey has-text-centered">Loading&hellip;</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}
@@ -172,6 +201,8 @@
     document.addEventListener('DOMContentLoaded', () => {
         loadOnlineUsers();
         loadStats();
+        loadGeoStats();
+        loadShareStats();
         startAutoRefresh();
     });
     
@@ -361,6 +392,81 @@
         if (classNum >= 3) return 'is-info';
         if (classNum >= 1) return 'is-success';
         return 'is-light';
+    }
+
+    // ----- Geographic Distribution -----
+    async function loadGeoStats() {
+        const el = document.getElementById('geo-distribution');
+        try {
+            const data = await apiCall('GET', '/hub/geo-stats');
+            const dist = data.distribution || [];
+            if (dist.length === 0) {
+                el.innerHTML = '<p class="has-text-grey has-text-centered">No geographic data available</p>';
+                return;
+            }
+            let html = '<table class="table is-fullwidth is-narrow is-striped"><thead><tr><th>Country</th><th class="has-text-right">Users</th><th style="width:50%"></th></tr></thead><tbody>';
+            const maxCount = dist[0].count;
+            for (const entry of dist) {
+                const pct = maxCount > 0 ? Math.round(entry.count / data.total_users * 100) : 0;
+                const barWidth = maxCount > 0 ? Math.round(entry.count / maxCount * 100) : 0;
+                const cc = (entry.country_code || '??').toLowerCase();
+                const flag = cc !== '??' ? `<span class="fi fi-${cc}" title="${escapeHtml(entry.country || cc)}"></span> ` : '';
+                html += `<tr>
+                    <td>${flag}${escapeHtml(entry.country || entry.country_code || 'Unknown')}</td>
+                    <td class="has-text-right"><strong>${entry.count}</strong> <small class="has-text-grey">(${pct}%)</small></td>
+                    <td><progress class="progress is-primary is-small" value="${barWidth}" max="100">${barWidth}%</progress></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        } catch (err) {
+            console.error('Failed to load geo stats:', err);
+            el.innerHTML = '<p class="has-text-grey has-text-centered">Failed to load</p>';
+        }
+    }
+
+    // ----- Share Statistics -----
+    async function loadShareStats() {
+        const el = document.getElementById('share-stats-panel');
+        try {
+            const s = await apiCall('GET', '/hub/share-stats');
+            el.innerHTML = `
+                <div class="columns is-multiline">
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Total Share</p>
+                            <p class="title is-5">${escapeHtml(s.total_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Average Share</p>
+                            <p class="title is-5">${escapeHtml(s.average_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Median Share</p>
+                            <p class="title is-5">${escapeHtml(s.median_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Largest Share</p>
+                            <p class="title is-5">${escapeHtml(s.max_formatted)}</p>
+                            ${s.max_nick ? `<p class="has-text-grey is-size-7">${escapeHtml(s.max_nick)}</p>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="has-text-centered mt-2">
+                    <span class="tag is-light">${s.user_count} users</span>
+                    <span class="tag is-warning is-light ml-2">${s.zero_share_count} with 0 share</span>
+                </div>
+            `;
+        } catch (err) {
+            console.error('Failed to load share stats:', err);
+            el.innerHTML = '<p class="has-text-grey has-text-centered">Failed to load</p>';
+        }
     }
 </script>
 {% endblock %}

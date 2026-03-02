@@ -67,6 +67,7 @@
             <thead>
                 <tr>
                     <th>Nickname</th>
+                    <th>Country</th>
                     <th>IP Address</th>
                     <th>Class</th>
                     <th>Share</th>
@@ -78,7 +79,15 @@
             <tbody id="online-users-body">
                 {% for u in online_users %}
                 <tr>
-                    <td><strong>{{ u.nick }}</strong></td>
+                    <td>
+                        <strong>{{ u.nick }}</strong>
+                        {% if u.get('is_clone') %}<span class="tag is-danger is-light ml-1" title="Possible clone">clone</span>{% endif %}
+                        {% if u.get('same_ip_nicks') %}<span class="tag is-warning is-light ml-1" title="NAT group">NAT</span>{% endif %}
+                    </td>
+                    <td>
+                        {% set cc = (u.get('country_code') or u.get('country') or '').lower() %}
+                        {% if cc and cc != '??' %}<span class="fi fi-{{ cc }}" title="{{ u.get('country_name', cc) }}"></span>{% else %}-{% endif %}
+                    </td>
                     <td><code>{{ u.ip or '' }}</code></td>
                     <td><span class="tag">{{ u.user_class }}</span></td>
                     <td>{{ u.share or 0 }}</td>
@@ -86,7 +95,7 @@
                     <td>{% set lt = u.get('login_time', 0) or 0 %}{% if lt >= 3600 %}{{ (lt // 3600) }}h {{ ((lt % 3600) // 60) }}m{% elif lt >= 60 %}{{ (lt // 60) }}m{% elif lt > 0 %}{{ lt }}s{% else %}-{% endif %}</td>
                     <td>
                         <div class="buttons are-small">
-                            <button class="button is-info is-light" title="Info">
+                            <button class="button is-info is-light" title="Info" onclick="showUserDetail('{{ u.nick }}')">
                                 <i class="fas fa-info-circle"></i>
                             </button>
                             <button class="button is-success is-light" title="Message">
@@ -103,7 +112,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="has-text-centered has-text-grey">
+                    <td colspan="8" class="has-text-centered has-text-grey">
                         <i class="fas fa-user-slash fa-2x mb-3"></i>
                         <p>No users online</p>
                     </td>
@@ -416,7 +425,7 @@
         if (!users || users.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="has-text-centered has-text-grey">
+                    <td colspan="8" class="has-text-centered has-text-grey">
                         <i class="fas fa-user-slash fa-2x mb-3"></i>
                         <p>No users online</p>
                     </td>
@@ -424,9 +433,14 @@
             return;
         }
 
-        tbody.innerHTML = users.map(u => `
-            <tr>
-                <td><strong>${escapeHtml(u.nick)}</strong></td>
+        tbody.innerHTML = users.map(u => {
+            const cc = (u.country_code || u.country || '').toLowerCase();
+            const flag = cc && cc !== '??' ? `<span class="fi fi-${cc}" title="${escapeHtml(u.country_name || cc)}"></span>` : '-';
+            const cloneTag = u.is_clone ? ' <span class="tag is-danger is-light">clone</span>' : '';
+            const natTag = u.same_ip_nicks && u.same_ip_nicks.length > 0 ? ' <span class="tag is-warning is-light">NAT</span>' : '';
+            return `<tr>
+                <td><strong>${escapeHtml(u.nick)}</strong>${cloneTag}${natTag}</td>
+                <td>${flag}</td>
                 <td><code>${escapeHtml(u.ip || '')}</code></td>
                 <td><span class="tag">${u.user_class || 0}</span></td>
                 <td>${formatBytes(u.share || 0)}</td>
@@ -434,13 +448,14 @@
                 <td>${formatOnlineTime(u.login_time || 0)}</td>
                 <td>
                     <div class="buttons are-small">
-                        <button class="button is-info is-light" title="Info"><i class="fas fa-info-circle"></i></button>
+                        <button class="button is-info is-light" title="Info" onclick="showUserDetail('${escapeHtml(u.nick)}')"><i class="fas fa-info-circle"></i></button>
                         <button class="button is-success is-light" title="Message"><i class="fas fa-envelope"></i></button>
                         <button class="button is-warning is-light" title="Kick"><i class="fas fa-shoe-prints"></i></button>
                         <button class="button is-danger is-light" title="Ban"><i class="fas fa-ban"></i></button>
                     </div>
                 </td>
-            </tr>`).join('');
+            </tr>`;
+        }).join('');
     }
 
     function escapeHtml(text) {
@@ -482,5 +497,81 @@
             if (VHWebSocket.state.users.length) renderOnlineUsers(VHWebSocket.state.users);
         });
     });
+
+    // =====================================================================
+    // User detail modal
+    // =====================================================================
+    async function showUserDetail(nick) {
+        const content = document.getElementById('user-info-content');
+        const modal = document.getElementById('user-info-modal');
+        content.innerHTML = '<p class="has-text-centered">Loading&hellip;</p>';
+        modal.classList.add('is-active');
+
+        try {
+            const u = await apiCall('GET', `/users/online/${encodeURIComponent(nick)}`);
+            const cc = (u.country_code || '').toLowerCase();
+            const flag = cc && cc !== '??' ? `<span class="fi fi-${cc}"></span> ` : '';
+            const className = getClassName(u.user_class);
+
+            let cloneHtml = '';
+            if (u.is_clone && u.clone_nicks && u.clone_nicks.length) {
+                cloneHtml = `<div class="notification is-danger is-light mt-3">
+                    <strong><i class="fas fa-exclamation-triangle mr-1"></i> Possible Clone</strong>
+                    <br>Same IP &amp; share as: ${u.clone_nicks.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+                </div>`;
+            }
+
+            let natHtml = '';
+            if (u.same_ip_nicks && u.same_ip_nicks.length) {
+                natHtml = `<div class="notification is-warning is-light mt-3">
+                    <strong><i class="fas fa-network-wired mr-1"></i> NAT Group</strong>
+                    <br>Same IP as: ${u.same_ip_nicks.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+                </div>`;
+            }
+
+            content.innerHTML = `
+                <div class="columns is-multiline">
+                    <div class="column is-half">
+                        <h5 class="title is-6 mb-2"><i class="fas fa-user mr-1"></i> Identity</h5>
+                        <table class="table is-narrow is-fullwidth">
+                            <tr><td class="has-text-weight-bold" style="width:40%">Nickname</td><td>${escapeHtml(u.nick)}</td></tr>
+                            <tr><td class="has-text-weight-bold">Class</td><td><span class="tag ${getClassColor(u.user_class)}">${className}</span></td></tr>
+                            <tr><td class="has-text-weight-bold">Client</td><td>${escapeHtml(u.client || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Share</td><td>${formatBytes(u.share || 0)}</td></tr>
+                            <tr><td class="has-text-weight-bold">Online For</td><td>${formatOnlineTime(u.login_time || 0)}</td></tr>
+                        </table>
+                    </div>
+                    <div class="column is-half">
+                        <h5 class="title is-6 mb-2"><i class="fas fa-globe mr-1"></i> Network &amp; Geo</h5>
+                        <table class="table is-narrow is-fullwidth">
+                            <tr><td class="has-text-weight-bold" style="width:40%">IP</td><td><code>${escapeHtml(u.ip || '-')}</code></td></tr>
+                            <tr><td class="has-text-weight-bold">Hostname</td><td>${escapeHtml(u.hostname || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Country</td><td>${flag}${escapeHtml(u.country_name || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">City / Region</td><td>${escapeHtml(u.city || '-')}${u.region ? ', ' + escapeHtml(u.region) : ''}</td></tr>
+                            <tr><td class="has-text-weight-bold">Timezone</td><td>${escapeHtml(u.timezone || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">ISP</td><td>${escapeHtml(u.isp || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">ASN</td><td>${escapeHtml(u.as_number || '-')} ${escapeHtml(u.as_name || '')}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                ${cloneHtml}
+                ${natHtml}
+            `;
+        } catch (err) {
+            content.innerHTML = `<p class="has-text-danger">Failed to load user detail: ${escapeHtml(err.message || String(err))}</p>`;
+        }
+    }
+
+    function getClassName(classNum) {
+        const classes = {0:'User',1:'Registered',2:'VIP',3:'Operator',4:'Cheef',5:'Admin',10:'Master'};
+        return classes[classNum] ?? 'User';
+    }
+    function getClassColor(classNum) {
+        if (classNum >= 10) return 'is-danger';
+        if (classNum >= 5) return 'is-warning';
+        if (classNum >= 3) return 'is-info';
+        if (classNum >= 1) return 'is-success';
+        return 'is-light';
+    }
 </script>
 {% endblock %}

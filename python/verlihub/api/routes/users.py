@@ -36,6 +36,19 @@ class OnlineUser(BaseModel):
     user_class: int = UserClass.GUEST
     login_time: int = 0
     client: str = ""
+    # Enriched fields (geo / network / clone)
+    country_code: str = ""
+    country_name: str = ""
+    city: str = ""
+    region: str = ""
+    timezone: str = ""
+    isp: str = ""
+    as_number: str = ""
+    as_name: str = ""
+    hostname: str = ""
+    is_clone: bool = False
+    clone_nicks: list[str] = []
+    same_ip_nicks: list[str] = []
 
 
 class UserList(BaseModel):
@@ -86,35 +99,49 @@ async def get_session():
 @router.get("/online", response_model=UserList)
 async def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
     """Get list of currently online users with full info."""
+    from verlihub.enrichment import enrich_user_list
+
     user_dicts = ctx.get_user_list()
-    users = [
-        OnlineUser(
-            nick=u.get("nick", ""),
-            ip=u.get("ip", ""),
-            share=u.get("share", 0),
-            user_class=u.get("user_class", 0),
-            login_time=u.get("login_time", 0),
-            client=u.get("client", ""),
-        )
-        for u in user_dicts
-    ]
+    enrich_user_list(user_dicts, fetch_geo=True, fetch_hostnames=True)
+    users = [_user_dict_to_model(u) for u in user_dicts]
     return UserList(count=len(users), users=users)
 
 
 @router.get("/online/{nick}")
 async def get_online_user(nick: str, ctx=Depends(get_hub_context)) -> OnlineUser:
     """Get information about a specific online user."""
-    for u in ctx.get_user_list():
+    from verlihub.enrichment import enrich_user_list
+
+    user_dicts = ctx.get_user_list()
+    for u in user_dicts:
         if u.get("nick") == nick:
-            return OnlineUser(
-                nick=u.get("nick", nick),
-                ip=u.get("ip", ""),
-                share=u.get("share", 0),
-                user_class=u.get("user_class", 0),
-                login_time=u.get("login_time", 0),
-                client=u.get("client", ""),
-            )
+            enrich_user_list([u], fetch_geo=True, fetch_hostnames=True)
+            return _user_dict_to_model(u)
     raise HTTPException(status_code=404, detail="User not online")
+
+
+def _user_dict_to_model(u: dict) -> OnlineUser:
+    """Convert an enriched user dict to an OnlineUser model."""
+    return OnlineUser(
+        nick=u.get("nick", ""),
+        ip=u.get("ip", ""),
+        share=u.get("share", 0),
+        user_class=u.get("user_class", 0),
+        login_time=u.get("login_time", 0),
+        client=u.get("client", ""),
+        country_code=u.get("country_code", ""),
+        country_name=u.get("country_name", ""),
+        city=u.get("city", ""),
+        region=u.get("region", ""),
+        timezone=u.get("timezone", ""),
+        isp=u.get("isp", ""),
+        as_number=u.get("as_number", ""),
+        as_name=u.get("as_name", ""),
+        hostname=u.get("hostname", ""),
+        is_clone=u.get("is_clone", False),
+        clone_nicks=u.get("clone_nicks", []),
+        same_ip_nicks=u.get("same_ip_nicks", []),
+    )
 
 
 @router.post("/kick")

@@ -399,3 +399,45 @@ async def reload_config(
     """Request configuration reload. Requires ADMIN (5) permission."""
     ctx.cpp.RequestReload()
     return {"success": True, "message": "Reload requested"}
+
+
+# =============================================================================
+# Enriched statistics endpoints (geo distribution, share stats)
+# =============================================================================
+
+
+@router.get("/geo-stats")
+async def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
+    """Get geographic distribution of online users."""
+    from verlihub.enrichment import enrich_user_list, compute_geo_distribution
+
+    users = ctx.get_user_list()
+    enriched = enrich_user_list(users, fetch_geo=True, fetch_hostnames=False)
+    distribution = compute_geo_distribution(enriched)
+    return {
+        "total_countries": len(distribution),
+        "total_users": len(users),
+        "distribution": distribution,
+    }
+
+
+@router.get("/share-stats")
+async def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
+    """Get share size statistics for online users."""
+    from verlihub.enrichment import compute_share_stats
+
+    users = ctx.get_user_list()
+    stats = compute_share_stats(users)
+    return {
+        "total_bytes": stats.total_bytes,
+        "total_formatted": stats.total_formatted,
+        "user_count": stats.user_count,
+        "average_bytes": stats.average_bytes,
+        "average_formatted": stats.average_formatted,
+        "median_bytes": stats.median_bytes,
+        "median_formatted": stats.median_formatted,
+        "max_bytes": stats.max_bytes,
+        "max_formatted": stats.max_formatted,
+        "max_nick": stats.max_nick,
+        "zero_share_count": stats.zero_share_count,
+    }

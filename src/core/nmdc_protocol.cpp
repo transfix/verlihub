@@ -130,11 +130,18 @@ std::string MakeLock(const std::string& lock) {
 }
 
 std::string MakeSupports() {
-    return "$Supports UserCommand NoGetINFO NoHello HubINFO ZPipe0 BotINFO";
+    // Note: ZPipe0 removed — we don't implement compression
+    return "$Supports UserCommand NoGetINFO NoHello UserIP2 HubINFO BotINFO BotList";
 }
 
 std::string MakeHubName(const std::string& name) {
     return "$HubName " + name;
+}
+
+/// "$HubName <name> - <topic>|" when topic is non-empty
+std::string MakeHubNameWithTopic(const std::string& name, const std::string& topic) {
+    if (topic.empty()) return "$HubName " + name;
+    return "$HubName " + name + " - " + topic;
 }
 
 std::string MakeHello(const std::string& nick) {
@@ -245,9 +252,14 @@ MyINFOData ParseMyINFO(const std::string& msg) {
 
     // Parse speed$email$share$
     // speed ends at first $
+    // The last byte of speed is a status flag byte (away/TLS/firewall/etc.)
     size_t pos = rest.find('$');
     if (pos == std::string::npos) return data;
-    data.speed = rest.substr(0, pos);
+    std::string speed_raw = rest.substr(0, pos);
+    if (!speed_raw.empty()) {
+        data.status_flag = static_cast<unsigned char>(speed_raw.back());
+        data.speed = speed_raw.substr(0, speed_raw.size() - 1);
+    }
     rest = rest.substr(pos + 1);
 
     // email ends at next $
@@ -323,6 +335,131 @@ std::string GetCommandParam(const std::string& msg, const std::string& cmd) {
     if (!IsCommand(msg, cmd)) return "";
     if (msg.size() <= cmd.size() + 1) return "";
     return msg.substr(cmd.size() + 1);
+}
+
+// ============================================================================
+// Tag Parsing
+// ============================================================================
+
+TagData ParseTag(const std::string& tag) {
+    TagData data;
+    if (tag.size() < 3 || tag.front() != '<' || tag.back() != '>') return data;
+
+    // Strip < and >
+    std::string inner = tag.substr(1, tag.size() - 2);
+
+    // Client name is everything before " V:" (or the whole string if no V:)
+    auto vpos = inner.find(" V:");
+    if (vpos != std::string::npos) {
+        data.client_name = inner.substr(0, vpos);
+        // Version is from V: to the next comma or end
+        size_t vstart = vpos + 3;
+        size_t vend = inner.find(',', vstart);
+        data.client_version = (vend != std::string::npos)
+            ? inner.substr(vstart, vend - vstart)
+            : inner.substr(vstart);
+    } else {
+        data.client_name = inner;
+    }
+
+    // Parse comma-separated key:value pairs after version
+    // M:A|P|5  H:normal/registered/op  S:slots  L:limit
+    size_t pos = inner.find(',');
+    while (pos != std::string::npos) {
+        size_t next = inner.find(',', pos + 1);
+        std::string field = (next != std::string::npos)
+            ? inner.substr(pos + 1, next - pos - 1)
+            : inner.substr(pos + 1);
+
+        if (field.size() >= 2 && field[1] == ':') {
+            char key = field[0];
+            std::string val = field.substr(2);
+
+            switch (key) {
+                case 'M':
+                    if (!val.empty()) data.mode = val[0];
+                    break;
+                case 'S':
+                    try { data.slots = std::stoi(val); } catch (...) {}
+                    break;
+                case 'L':
+                    try { data.upload_limit = std::stoi(val); } catch (...) {}
+                    break;
+                case 'H': {
+                    // H:normal/registered/op
+                    size_t s1 = val.find('/');
+                    if (s1 != std::string::npos) {
+                        try { data.hubs_normal = std::stoi(val.substr(0, s1)); } catch (...) {}
+                        size_t s2 = val.find('/', s1 + 1);
+                        if (s2 != std::string::npos) {
+                            try { data.hubs_registered = std::stoi(val.substr(s1 + 1, s2 - s1 - 1)); } catch (...) {}
+                            try { data.hubs_operator = std::stoi(val.substr(s2 + 1)); } catch (...) {}
+                        } else {
+                            try { data.hubs_registered = std::stoi(val.substr(s1 + 1)); } catch (...) {}
+                        }
+                    } else {
+                        try { data.hubs_normal = std::stoi(val); } catch (...) {}
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        pos = next;
+    }
+
+    data.valid = !data.client_name.empty();
+    return data;
+}
+
+// ============================================================================
+// Search Result Parsing
+// ============================================================================
+
+SearchResultData ParseSR(const std::string& msg) {
+    SearchResultData data;
+
+    // "$SR <nick> <result_payload>\x05<to_nick>"
+    const std::string prefix = "$SR ";
+    if (msg.find(prefix) != 0) return data;
+
+    std::string rest = msg.substr(prefix.size());
+
+    // Nick is up to first space
+    size_t nick_end = rest.find(' ');
+    if (nick_end == std::string::npos) return data;
+    data.from_nick = rest.substr(0, nick_end);
+
+    // Find the \x05 separator for target nick
+    size_t sep = rest.rfind('\x05');
+    if (sep != std::string::npos && sep > nick_end) {
+        data.payload = rest.substr(nick_end + 1, sep - nick_end - 1);
+        data.to_nick = rest.substr(sep + 1);
+    } else {
+        // No target nick — active search result broadcast
+        data.payload = rest.substr(nick_end + 1);
+    }
+
+    data.valid = !data.from_nick.empty();
+    return data;
+}
+
+// ============================================================================
+// Additional Message Construction
+// ============================================================================
+
+std::string MakeForceMove(const std::string& address) {
+    return "$ForceMove " + address;
+}
+
+std::string MakeBotList(const std::vector<std::string>& nicks) {
+    std::string result = "$BotList ";
+    for (const auto& nick : nicks) {
+        result += nick;
+        result += "$$";
+    }
+    return result;
 }
 
 }  // namespace NMDCProtocol

@@ -174,6 +174,8 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
         HandleConnectToMe(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$RevConnectToMe")) {
         HandleRevConnectToMe(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$SR")) {
+        HandleSR(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Quit")) {
         HandleQuit(client);
     } else if (NMDCProtocol::IsCommand(message, "$Version")) {
@@ -198,7 +200,32 @@ void NMDCHubServer::OnClientDeleted(cAsyncConn* conn) {
 }
 
 int NMDCHubServer::OnTimer(const cTime& now) {
-    // Periodic tasks - could add ping/timeout checks here
+    // Login timeout: disconnect clients stuck in handshake
+    if (m_login_timeout_sec > 0) {
+        auto tp_now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(m_clients_mutex);
+
+        std::vector<cAsyncConn*> to_disconnect;
+        for (auto& [conn, client] : m_clients) {
+            if (client.state != NMDCConnState::LoggedIn &&
+                client.state != NMDCConnState::Closing) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    tp_now - client.connect_time).count();
+                if (elapsed > m_login_timeout_sec) {
+                    to_disconnect.push_back(conn);
+                }
+            }
+        }
+
+        for (auto* conn : to_disconnect) {
+            auto it = m_clients.find(conn);
+            if (it != m_clients.end()) {
+                it->second.state = NMDCConnState::Closing;
+                conn->CloseNice(100);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -207,7 +234,10 @@ int NMDCHubServer::OnTimer(const cTime& now) {
 // =============================================================================
 
 void NMDCHubServer::HandleSupports(NMDCClient& client, const std::string& msg) {
-    // Store client features if needed - for now just acknowledge
+    // Store the client's supported features
+    std::string features = NMDCProtocol::GetCommandParam(msg, "$Supports");
+    client.supports_text = features;
+
     // Send our supports back
     SendToConn(client.conn, NMDCProtocol::MakeSupports());
 }
@@ -261,8 +291,8 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
         return;
     }
 
-    // Send hub name
-    SendToConn(client.conn, NMDCProtocol::MakeHubName(m_hub_name));
+    // Send hub name (with topic if set, like old core)
+    SendToConn(client.conn, NMDCProtocol::MakeHubNameWithTopic(m_hub_name, m_hub_topic));
 
     if (auth_result > 0) {
         // Registered user - needs password
@@ -341,10 +371,28 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
         // First MyINFO - complete login
         client.state = NMDCConnState::LoggedIn;
 
+        // Parse tag fields (mode, slots, hubs, version)
+        if (!info.tag.empty()) {
+            auto tag_data = NMDCProtocol::ParseTag(info.tag);
+            if (tag_data.valid) {
+                client.client_version = tag_data.client_version;
+                client.mode = tag_data.mode;
+                client.slots = tag_data.slots;
+                client.hubs_normal = tag_data.hubs_normal;
+                client.hubs_registered = tag_data.hubs_registered;
+                client.hubs_operator = tag_data.hubs_operator;
+            }
+        }
+
+        // Store status flag from speed field
+        client.status_flag = info.status_flag;
+
         // GeoIP lookup (like old core's GetCCC on login)
         if (m_geoip && !client.ip.empty()) {
             auto geo = m_geoip->Lookup(client.ip);
             client.country_code = geo.country_code;
+            client.country_name = geo.country_name;
+            client.city = geo.city;
         }
 
         // Add to nick map
@@ -480,6 +528,29 @@ void NMDCHubServer::HandleRevConnectToMe(NMDCClient& client, const std::string& 
     }
 }
 
+void NMDCHubServer::HandleSR(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    // Parse the search result
+    auto sr = NMDCProtocol::ParseSR(msg);
+    if (!sr.valid) return;
+
+    // Verify sender nick
+    if (sr.from_nick != client.nick) return;
+
+    if (!sr.to_nick.empty()) {
+        // Directed search result — deliver to specific user
+        // Strip the target nick (\x05nick) before sending
+        auto it = m_nick_to_conn.find(sr.to_nick);
+        if (it != m_nick_to_conn.end()) {
+            // Rebuild without the \x05<to_nick> suffix — recipient doesn't need it
+            std::string stripped = "$SR " + sr.from_nick + " " + sr.payload;
+            SendToConn(it->second, stripped);
+        }
+    }
+    // Active search results are sent directly via UDP, not relayed through hub
+}
+
 void NMDCHubServer::HandleQuit(NMDCClient& client) {
     client.state = NMDCConnState::Closing;
     // Connection will be cleaned up by the normal close path
@@ -538,6 +609,7 @@ void NMDCHubServer::RemoveClient(cAsyncConn* conn) {
 void NMDCHubServer::SendUserLists(NMDCClient& client) {
     std::vector<std::string> all_nicks;
     std::vector<std::string> op_nicks;
+    std::vector<std::string> bot_nicks;
 
     for (auto& [c, other] : m_clients) {
         if (other.state == NMDCConnState::LoggedIn) {
@@ -551,9 +623,15 @@ void NMDCHubServer::SendUserLists(NMDCClient& client) {
     // Always include hub security bot in lists
     all_nicks.push_back(m_hub_security);
     op_nicks.push_back(m_hub_security);
+    bot_nicks.push_back(m_hub_security);
 
     SendToConn(client.conn, NMDCProtocol::MakeNickList(all_nicks));
     SendToConn(client.conn, NMDCProtocol::MakeOpList(op_nicks));
+
+    // Send BotList if client supports it
+    if (client.supports_text.find("BotList") != std::string::npos) {
+        SendToConn(client.conn, NMDCProtocol::MakeBotList(bot_nicks));
+    }
 }
 
 void NMDCHubServer::AnnounceNewUser(const NMDCClient& client) {
@@ -669,7 +747,17 @@ bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) 
     out.speed       = c.myinfo.speed;
     out.email       = c.myinfo.email;
     out.country     = c.country_code;
+    out.country_name= c.country_name;
+    out.city        = c.city;
     out.client_name = ExtractClientName(c.myinfo.tag);
+    out.client_version = c.client_version;
+    out.mode        = c.mode;
+    out.slots       = c.slots;
+    out.hubs_normal = c.hubs_normal;
+    out.hubs_registered = c.hubs_registered;
+    out.hubs_operator = c.hubs_operator;
+    out.status_flag = c.status_flag;
+    out.supports    = c.supports_text;
     out.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - c.connect_time).count();
     return true;
@@ -691,7 +779,17 @@ std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
         s.speed       = c.myinfo.speed;
         s.email       = c.myinfo.email;
         s.country     = c.country_code;
+        s.country_name= c.country_name;
+        s.city        = c.city;
         s.client_name = ExtractClientName(c.myinfo.tag);
+        s.client_version = c.client_version;
+        s.mode        = c.mode;
+        s.slots       = c.slots;
+        s.hubs_normal = c.hubs_normal;
+        s.hubs_registered = c.hubs_registered;
+        s.hubs_operator = c.hubs_operator;
+        s.status_flag = c.status_flag;
+        s.supports    = c.supports_text;
         s.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - c.connect_time).count();
         result.push_back(std::move(s));

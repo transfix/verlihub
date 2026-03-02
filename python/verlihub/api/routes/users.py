@@ -36,6 +36,18 @@ class OnlineUser(BaseModel):
     user_class: int = UserClass.GUEST
     login_time: int = 0
     client: str = ""
+    client_version: str = ""
+    description: str = ""
+    tag: str = ""
+    speed: str = ""
+    email: str = ""
+    mode: str = ""              # 'A' = active, 'P' = passive, '5' = SOCKS5
+    slots: int = 0
+    hubs_normal: int = 0
+    hubs_registered: int = 0
+    hubs_operator: int = 0
+    status_flag: int = 0        # Bitmask: 1=normal, 2=away, 4=server, 8=fireball, 16=TLS, 32=NAT
+    supports: str = ""
     # Enriched fields (geo / network / clone)
     country_code: str = ""
     country_name: str = ""

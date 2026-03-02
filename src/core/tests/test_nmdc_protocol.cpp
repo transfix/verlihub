@@ -549,6 +549,166 @@ TEST(NMDCProtocolTest, PrivateMessageRoundtrip) {
     EXPECT_EQ(parsed.message, msg_text);
 }
 
+// =============================================================================
+// ParseTag Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseTag_FullTag) {
+    TagData tag = ParseTag("<DC++ V:0.868,M:A,H:1/0/0,S:5,L:100>");
+    EXPECT_EQ(tag.client_name, "DC++");
+    EXPECT_EQ(tag.client_version, "0.868");
+    EXPECT_EQ(tag.mode, 'A');
+    EXPECT_EQ(tag.slots, 5);
+    EXPECT_EQ(tag.hubs_normal, 1);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+    EXPECT_EQ(tag.upload_limit, 100);
+}
+
+TEST(NMDCProtocolTest, ParseTag_PassiveMode) {
+    TagData tag = ParseTag("<FlylinkDC++ V:5.08,M:P,H:3/2/1,S:10>");
+    EXPECT_EQ(tag.client_name, "FlylinkDC++");
+    EXPECT_EQ(tag.client_version, "5.08");
+    EXPECT_EQ(tag.mode, 'P');
+    EXPECT_EQ(tag.slots, 10);
+    EXPECT_EQ(tag.hubs_normal, 3);
+    EXPECT_EQ(tag.hubs_registered, 2);
+    EXPECT_EQ(tag.hubs_operator, 1);
+}
+
+TEST(NMDCProtocolTest, ParseTag_EmptyTag) {
+    TagData tag = ParseTag("");
+    EXPECT_EQ(tag.client_name, "");
+    EXPECT_EQ(tag.mode, '\0');
+}
+
+TEST(NMDCProtocolTest, ParseTag_NoBrackets) {
+    TagData tag = ParseTag("not a tag");
+    EXPECT_EQ(tag.client_name, "");
+}
+
+TEST(NMDCProtocolTest, ParseTag_OnlyClientName) {
+    TagData tag = ParseTag("<EiskaltDC++ V:2.4.0>");
+    EXPECT_EQ(tag.client_name, "EiskaltDC++");
+    EXPECT_EQ(tag.client_version, "2.4.0");
+}
+
+TEST(NMDCProtocolTest, ParseTag_Socks5Mode) {
+    TagData tag = ParseTag("<NMDC V:1.0,M:5,H:1/0/0,S:3>");
+    EXPECT_EQ(tag.mode, '5');
+}
+
+// =============================================================================
+// ParseSR Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseSR_DirectedResult) {
+    std::string msg = "$SR sender some\\file.txt\x05\x0035/50\x05TTH:ABCDEFG (192.168.1.1:411)\x05target_nick";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_EQ(sr.to_nick, "target_nick");
+    EXPECT_FALSE(sr.payload.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_NoTarget) {
+    // Active SR results (UDP) have no \x05 target suffix
+    std::string msg = "$SR sender somefile.txt 35/50 TTH:ABCDEFG (192.168.1.1:411)";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_TRUE(sr.to_nick.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_Invalid) {
+    SearchResultData sr = ParseSR("not a search result");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_EmptyString) {
+    SearchResultData sr = ParseSR("");
+    EXPECT_FALSE(sr.valid);
+}
+
+// =============================================================================
+// MakeHubNameWithTopic Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_BothPresent) {
+    std::string result = MakeHubNameWithTopic("My Hub", "Welcome!");
+    EXPECT_EQ(result, "$HubName My Hub - Welcome!");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_EmptyTopic) {
+    std::string result = MakeHubNameWithTopic("My Hub", "");
+    EXPECT_EQ(result, "$HubName My Hub");
+}
+
+// =============================================================================
+// MakeForceMove Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeForceMove_Format) {
+    EXPECT_EQ(MakeForceMove("other-hub.com:411"), "$ForceMove other-hub.com:411");
+}
+
+// =============================================================================
+// MakeBotList Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeBotList_MultipleNicks) {
+    std::vector<std::string> bots = {"Hub-Security", "OpChat"};
+    EXPECT_EQ(MakeBotList(bots), "$BotList Hub-Security$$OpChat$$");
+}
+
+TEST(NMDCProtocolTest, MakeBotList_Empty) {
+    std::vector<std::string> bots;
+    EXPECT_EQ(MakeBotList(bots), "$BotList ");
+}
+
+// =============================================================================
+// MakeSupports New Features Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsBotList) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("BotList"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_NoZPipe0) {
+    std::string result = MakeSupports();
+    EXPECT_EQ(result.find("ZPipe0"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsBotINFO) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("BotINFO"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsHubINFO) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("HubINFO"), std::string::npos);
+}
+
+// =============================================================================
+// ParseMyINFO Status Flag Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagNormal) {
+    // Status byte is the last char of speed field: \x01 = STATUS_NORMAL
+    std::string msg = "$MyINFO $ALL TestUser Desc<DC++ V:1.0,M:A,H:1/0/0,S:3>$ $LAN(T3)\x01$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x01);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagAway) {
+    std::string msg = "$MyINFO $ALL TestUser Desc<DC++ V:1.0,M:A,H:1/0/0,S:3>$ $LAN(T3)\x02$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x02);
+}
+
 // ============================================================
 // vh::fmt() compatibility shim tests
 // ============================================================

@@ -40,6 +40,17 @@ namespace nVerliHub {
 namespace NMDCProtocol {
 
 // ============================================================================
+// Status flag byte constants (last byte of speed field in $MyINFO)
+// ============================================================================
+
+constexpr unsigned char STATUS_NORMAL   = 0x01;  ///< Normal user
+constexpr unsigned char STATUS_AWAY     = 0x02;  ///< Away
+constexpr unsigned char STATUS_SERVER   = 0x04;  ///< Server/fileserver
+constexpr unsigned char STATUS_FIREBALL = 0x08;  ///< Fireball (fast uploader)
+constexpr unsigned char STATUS_TLS      = 0x10;  ///< TLS connection
+constexpr unsigned char STATUS_NAT      = 0x20;  ///< NAT traversal / passive
+
+// ============================================================================
 // Lock / Key Exchange
 // ============================================================================
 
@@ -75,6 +86,9 @@ std::string MakeSupports();
 
 /// "$HubName <name>|"
 std::string MakeHubName(const std::string& name);
+
+/// "$HubName <name> - <topic>|" when topic is non-empty
+std::string MakeHubNameWithTopic(const std::string& name, const std::string& topic);
 
 /// "$Hello <nick>|"
 std::string MakeHello(const std::string& nick);
@@ -124,6 +138,22 @@ std::string MakeUserIP(const std::string& nick, const std::string& ip);
 // Message Parsing
 // ============================================================================
 
+/// Parsed DC tag fields (from within a $MyINFO tag like <ClientName V:x.y,M:A,H:1/0/0,S:3>)
+struct TagData {
+    std::string client_name;      ///< Client software (e.g. "EiskaltDC++")
+    std::string client_version;   ///< Version string (e.g. "2.4.2")
+    char mode{'\0'};              ///< 'A' = active, 'P' = passive, '5' = SOCKS5, '\0' = unknown
+    int slots{0};                 ///< Upload slots
+    int hubs_normal{0};           ///< Hubs as normal user
+    int hubs_registered{0};       ///< Hubs as registered user
+    int hubs_operator{0};         ///< Hubs as operator
+    int upload_limit{0};          ///< Optional upload limit (kB/s)
+    bool valid{false};
+};
+
+/// Parse an NMDC tag string like "<ClientName V:x.y,M:A,H:1/0/0,S:3>"
+TagData ParseTag(const std::string& tag);
+
 /// Parsed $MyINFO data
 struct MyINFOData {
     std::string nick;
@@ -132,6 +162,7 @@ struct MyINFOData {
     std::string speed;
     std::string email;
     uint64_t share_size{0};
+    unsigned char status_flag{0}; ///< Status byte from end of speed field
     bool valid{false};
 };
 
@@ -159,11 +190,28 @@ struct ChatMessageData {
 /// Parse "<nick> message"
 ChatMessageData ParseChat(const std::string& msg);
 
+/// Parsed $SR (search result) data
+struct SearchResultData {
+    std::string from_nick;   ///< Nick of the user sending the result
+    std::string payload;     ///< File info + hub address
+    std::string to_nick;     ///< Target nick (after \x05)
+    bool valid{false};
+};
+
+/// Parse "$SR <nick> <result payload>\x05<to_nick>"
+SearchResultData ParseSR(const std::string& msg);
+
 /// Check if a message starts with a specific NMDC command
 bool IsCommand(const std::string& msg, const std::string& cmd);
 
 /// Get the parameter after a command, e.g. "$ValidateNick test" → "test"
 std::string GetCommandParam(const std::string& msg, const std::string& cmd);
+
+/// "$ForceMove <address>|" — redirect a user
+std::string MakeForceMove(const std::string& address);
+
+/// "$BotList nick1$$nick2$$|" — list of bots
+std::string MakeBotList(const std::vector<std::string>& nicks);
 
 }  // namespace NMDCProtocol
 }  // namespace nVerliHub

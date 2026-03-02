@@ -83,6 +83,16 @@ class OnlineUser(BaseModel):
     email: str
     share: int
     share_formatted: str
+    speed: str = ""
+    client: str = ""
+    client_version: str = ""
+    mode: str = ""
+    slots: int = 0
+    hubs_normal: int = 0
+    hubs_registered: int = 0
+    hubs_operator: int = 0
+    status_flag: int = 0
+    supports: str = ""
     login_time: Optional[str] = None
     # Clone detection
     is_clone: bool = False
@@ -487,16 +497,26 @@ async def get_detailed_users(
                 host = u.get("host", "")
                 cc = u.get("country", "")
                 
-                # Additional geo info (not yet available from C++ core)
-                country = ""
-                city = ""
-                region = ""
-                asn = ""
+                # Geo info from C++ core GeoIP
+                country_name = u.get("country_name", "")
+                city = u.get("city", "")
+                region = u.get("region", "")
+                asn = u.get("asn", "")
                 
-                # User description/tag (not yet available from C++ core)
+                # User description/tag/speed/email from C++ core
                 desc = u.get("description", "")
                 tag = u.get("tag", "")
                 email = u.get("email", "")
+                speed = u.get("speed", "")
+                client = u.get("client", "")
+                client_version = u.get("client_version", "")
+                mode = u.get("mode", "")
+                slots = u.get("slots", 0)
+                hubs_normal = u.get("hubs_normal", 0)
+                hubs_registered = u.get("hubs_registered", 0)
+                hubs_operator = u.get("hubs_operator", 0)
+                status_flag = u.get("status_flag", 0)
+                supports = u.get("supports", "")
                 
                 # Track for clone detection
                 clone_key = f"{ip}:{share}"
@@ -515,13 +535,23 @@ async def get_detailed_users(
                     "ip": ip,
                     "host": host,
                     "country_code": cc,
-                    "country": country or get_country_name(cc) if cc else "",
+                    "country": country_name or get_country_name(cc) if cc else "",
                     "city": city,
                     "region": region,
                     "asn": asn,
                     "description": desc,
                     "tag": tag,
                     "email": email,
+                    "speed": speed,
+                    "client": client,
+                    "client_version": client_version,
+                    "mode": mode,
+                    "slots": slots,
+                    "hubs_normal": hubs_normal,
+                    "hubs_registered": hubs_registered,
+                    "hubs_operator": hubs_operator,
+                    "status_flag": status_flag,
+                    "supports": supports,
                     "share": share,
                     "share_formatted": format_bytes(share),
                     "clone_key": clone_key,
@@ -552,6 +582,16 @@ async def get_detailed_users(
                 description=data["description"],
                 tag=data["tag"],
                 email=data["email"],
+                speed=data.get("speed", ""),
+                client=data.get("client", ""),
+                client_version=data.get("client_version", ""),
+                mode=data.get("mode", ""),
+                slots=data.get("slots", 0),
+                hubs_normal=data.get("hubs_normal", 0),
+                hubs_registered=data.get("hubs_registered", 0),
+                hubs_operator=data.get("hubs_operator", 0),
+                status_flag=data.get("status_flag", 0),
+                supports=data.get("supports", ""),
                 share=data["share"],
                 share_formatted=data["share_formatted"],
                 is_clone=len(clone_group) > 0,

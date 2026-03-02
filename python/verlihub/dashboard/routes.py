@@ -97,6 +97,7 @@ async def dashboard_home(
         "share_size": _format_bytes(ctx.total_share if ctx else 0),
         "uptime": _format_uptime(ctx.uptime if ctx else 0),
         "hub_port": ctx.port if ctx else 411,
+        "hub_motd": (ctx.get_config() or {}).get("hub_motd", "") if ctx else "",
     })
     
     return templates.TemplateResponse(request, "dashboard.html", context)

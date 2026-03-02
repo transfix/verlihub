@@ -109,9 +109,23 @@ struct NMDCClient {
     NMDCProtocol::MyINFOData myinfo;
     int user_class{0};       ///< 0=guest, 1=reg, 3=vip, 5=op, 10=admin
     std::string country_code; ///< Two-letter ISO country code (GeoIP lookup on login)
+    std::string country_name; ///< Full country name (GeoIP)
+    std::string city;         ///< City name (GeoIP)
     std::string lock;        ///< Lock string sent to this client
     int login_attempts{0};   ///< Password attempt counter
     std::chrono::steady_clock::time_point connect_time; ///< When the client connected
+
+    // ----- Parsed from tag -----
+    std::string client_version; ///< Client version (e.g. "2.4.2")
+    char mode{'\0'};            ///< 'A' = active, 'P' = passive, '5' = SOCKS5
+    int slots{0};               ///< Upload slots
+    int hubs_normal{0};         ///< Hubs as normal user
+    int hubs_registered{0};     ///< Hubs as registered user
+    int hubs_operator{0};       ///< Hubs as operator
+
+    // ----- Parsed from $Supports / $MyINFO -----
+    unsigned char status_flag{0}; ///< Status byte from MyINFO speed field
+    std::string supports_text;    ///< Raw $Supports features string
 };
 
 // ============================================================================
@@ -152,7 +166,16 @@ public:
     // =========================================================================
 
     void SetHubName(const std::string& name) { m_hub_name = name; }
-    void SetHubTopic(const std::string& topic) { m_hub_topic = topic; }
+    void SetHubTopic(const std::string& topic) {
+        m_hub_topic = topic;
+        // Broadcast topic change to all connected users
+        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        if (!topic.empty()) {
+            SendToAllConns(NMDCProtocol::MakeHubTopic(topic));
+        }
+        // Update $HubName to include new topic
+        SendToAllConns(NMDCProtocol::MakeHubNameWithTopic(m_hub_name, topic));
+    }
     void SetHubSecurity(const std::string& name) { m_hub_security = name; }
     void SetMaxUsers(int max) { m_max_users = max; }
 
@@ -268,6 +291,7 @@ private:
     void HandleSearch(NMDCClient& client, const std::string& msg);
     void HandleConnectToMe(NMDCClient& client, const std::string& msg);
     void HandleRevConnectToMe(NMDCClient& client, const std::string& msg);
+    void HandleSR(NMDCClient& client, const std::string& msg);
     void HandleQuit(NMDCClient& client);
 
     // =========================================================================
@@ -320,6 +344,7 @@ private:
     std::string m_hub_security{"Hub-Security"};
     int m_max_users{1000};
     int m_max_login_attempts{3};
+    int m_login_timeout_sec{60};  ///< Seconds to complete login before disconnect
 
     // =========================================================================
     // Counters

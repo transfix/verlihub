@@ -117,9 +117,19 @@ struct UserInfoSnapshot {
     std::string tag;
     std::string speed;
     std::string email;
-    std::string country;     ///< Two-letter ISO country code (GeoIP)
-    std::string client_name; ///< DC client software extracted from tag
-    long login_time{0};      ///< Seconds since connection
+    std::string country;       ///< Two-letter ISO country code (GeoIP)
+    std::string country_name;  ///< Full country name (GeoIP)
+    std::string city;          ///< City name (GeoIP)
+    std::string client_name;   ///< DC client software extracted from tag
+    std::string client_version;///< Client version string (e.g. "2.4.2")
+    char mode{'\0'};           ///< 'A' = active, 'P' = passive, '5' = SOCKS5
+    int slots{0};              ///< Upload slots
+    int hubs_normal{0};        ///< Hubs as normal user
+    int hubs_registered{0};    ///< Hubs as registered user
+    int hubs_operator{0};      ///< Hubs as operator
+    unsigned char status_flag{0}; ///< Status byte (away/TLS/firewall/etc.)
+    std::string supports;      ///< Raw $Supports features
+    long login_time{0};        ///< Seconds since connection
 };
 
 /**

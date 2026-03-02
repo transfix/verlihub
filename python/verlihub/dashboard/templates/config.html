@@ -54,6 +54,12 @@
                 <span>Messages</span>
             </a>
         </li>
+        <li id="tab-embed">
+            <a onclick="switchConfigTab('embed')">
+                <span class="icon"><i class="fas fa-code"></i></span>
+                <span>Embed</span>
+            </a>
+        </li>
     </ul>
 </div>
 
@@ -350,6 +356,73 @@
     </div>
 </div>
 
+<!-- Embed / Status Widget -->
+<div id="panel-embed" class="box" style="display: none;">
+    <h2 class="subtitle"><i class="fas fa-code mr-2"></i> Embeddable Hub Status Widget</h2>
+
+    <div class="content">
+        <p>
+            Embed a slimmed-down, read-only hub status widget on your website or forum.
+            The widget requires <strong>no login</strong> and auto-refreshes every 60 seconds.
+        </p>
+    </div>
+
+    <div class="columns">
+        <div class="column is-half">
+            <h5 class="title is-6">Compact Widget (recommended)</h5>
+            <p class="mb-2">Shows user count, total share, operator count, health status, and top countries.</p>
+            <div class="field">
+                <label class="label">Iframe Code</label>
+                <div class="control">
+                    <textarea class="textarea is-family-code" id="embed-code-compact" rows="3" readonly
+                              onclick="this.select()">&lt;iframe src="{{ request.url_for('embed_dashboard') }}" width="400" height="450" frameborder="0" style="border:1px solid #ddd;border-radius:8px;"&gt;&lt;/iframe&gt;</textarea>
+                </div>
+                <p class="help">
+                    <button class="button is-small is-link is-light" onclick="copyEmbedCode('embed-code-compact')">
+                        <i class="fas fa-copy mr-1"></i> Copy
+                    </button>
+                </p>
+            </div>
+
+            <h5 class="title is-6 mt-5">Full Dashboard (public SPA)</h5>
+            <p class="mb-2">Full-featured read-only dashboard with tabs for Users, Countries, Cities, ASNs, IPs.</p>
+            <div class="field">
+                <label class="label">Iframe Code</label>
+                <div class="control">
+                    <textarea class="textarea is-family-code" id="embed-code-full" rows="3" readonly
+                              onclick="this.select()">&lt;iframe src="{{ request.url_for('spa_dashboard') }}" width="100%" height="800" frameborder="0" style="border:1px solid #ddd;border-radius:8px;"&gt;&lt;/iframe&gt;</textarea>
+                </div>
+                <p class="help">
+                    <button class="button is-small is-link is-light" onclick="copyEmbedCode('embed-code-full')">
+                        <i class="fas fa-copy mr-1"></i> Copy
+                    </button>
+                </p>
+            </div>
+
+            <h5 class="title is-6 mt-5">Direct Links</h5>
+            <div class="buttons">
+                <a class="button is-primary is-light" href="/dashboard/embed" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i> Open Compact Widget
+                </a>
+                <a class="button is-info is-light" href="/dashboard/spa" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i> Open Full SPA
+                </a>
+            </div>
+        </div>
+
+        <div class="column is-half">
+            <h5 class="title is-6">Live Preview</h5>
+            <div style="border:1px solid #ddd; border-radius:8px; overflow:hidden;">
+                <iframe id="embed-preview" src="/dashboard/embed" width="100%" height="450" frameborder="0" style="display:block;"></iframe>
+            </div>
+            <p class="help has-text-grey mt-2">
+                <i class="fas fa-info-circle mr-1"></i>
+                This is exactly what visitors will see — no authentication required.
+            </p>
+        </div>
+    </div>
+</div>
+
 <!-- Unsaved changes notification -->
 <div class="notification is-warning is-light" id="unsaved-notification" style="display: none; position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
     <button class="delete" onclick="this.parentElement.style.display='none'"></button>
@@ -364,10 +437,21 @@
     
     function switchConfigTab(tab) {
         // Update tab active state
-        const tabs = ['general', 'network', 'security', 'limits', 'messages'];
+        const tabs = ['general', 'network', 'security', 'limits', 'messages', 'embed'];
         tabs.forEach(t => {
             document.getElementById(`tab-${t}`).classList.toggle('is-active', t === tab);
             document.getElementById(`panel-${t}`).style.display = t === tab ? 'block' : 'none';
+        });
+    }
+
+    function copyEmbedCode(textareaId) {
+        const textarea = document.getElementById(textareaId);
+        textarea.select();
+        navigator.clipboard.writeText(textarea.value).then(() => {
+            showNotification('Embed code copied to clipboard!', 'success');
+        }).catch(() => {
+            document.execCommand('copy');
+            showNotification('Embed code copied!', 'success');
         });
     }
     

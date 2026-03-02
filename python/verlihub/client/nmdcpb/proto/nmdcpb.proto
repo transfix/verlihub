@@ -86,6 +86,10 @@ message PbEnvelope {
     PbChannelHistory channel_history = 86;
     PbChannelEncrypted channel_encrypted = 87;
     PbSenderKeyRotation sender_key_rotation = 88;
+
+    // Media pipeline (Phase 7)
+    PbMediaPacket media_packet = 90;
+    PbMediaCapabilityExchange media_cap_exchange = 91;
   }
 }
 
@@ -781,4 +785,73 @@ message PbPrivateSearchResult {
 
   bool is_partial = 3;            // true if results were truncated by max_results
   string error = 4;               // Non-empty if search failed (e.g., "search disabled")
+}
+
+// ============================================================================
+// Phase 7: Media Pipeline Messages
+// ============================================================================
+
+// Encoded media packet — sent over relay for voice/video calls and hub streams.
+// Each packet contains a single encoded frame (audio or video).
+message PbMediaPacket {
+  enum MediaType {
+    AUDIO = 0;
+    VIDEO = 1;
+  }
+
+  string call_id = 1;            // Call or stream ID this packet belongs to
+  MediaType media_type = 2;
+  uint32 sequence = 3;           // Monotonically increasing sequence number
+  uint64 timestamp_us = 4;      // Capture timestamp in microseconds (from stream start)
+  uint32 ssrc = 5;              // Synchronization source identifier (per-sender)
+  string codec = 6;             // Codec name: "opus", "vp8", "vp9"
+  uint32 sample_rate = 7;       // Audio: sample rate (48000). Video: 0
+  uint32 channels = 8;          // Audio: channel count (1 or 2). Video: 0
+  uint32 width = 9;             // Video: frame width. Audio: 0
+  uint32 height = 10;           // Video: frame height. Audio: 0
+  bool is_keyframe = 11;        // Video: true if this is a keyframe
+  uint32 duration_us = 12;      // Frame duration in microseconds (audio: 20000 for 20ms)
+  bytes payload = 15;           // Encoded frame data (Opus packet or VP8/VP9 frame)
+}
+
+// Codec capability exchange — sent during call setup to negotiate codecs.
+message PbMediaCapabilityExchange {
+  string call_id = 1;
+
+  message AudioCodecCap {
+    string name = 1;            // "opus"
+    uint32 min_bitrate = 2;
+    uint32 max_bitrate = 3;
+    uint32 preferred_bitrate = 4;
+    repeated uint32 sample_rates = 5;
+    repeated uint32 channel_counts = 6;
+    bool dtx = 7;
+    bool fec = 8;
+    bool cbr = 9;
+  }
+
+  message VideoCodecCap {
+    string name = 1;            // "vp8", "vp9"
+    uint32 min_bitrate = 2;
+    uint32 max_bitrate = 3;
+    uint32 preferred_bitrate = 4;
+    uint32 max_width = 5;
+    uint32 max_height = 6;
+    uint32 max_fps = 7;
+    bool hardware_accel = 8;
+  }
+
+  repeated AudioCodecCap audio_codecs = 2;
+  repeated VideoCodecCap video_codecs = 3;
+
+  // Selected codecs (populated in answer/ack after negotiation)
+  string selected_audio_codec = 10;
+  uint32 selected_audio_bitrate = 11;
+  uint32 selected_audio_sample_rate = 12;
+  uint32 selected_audio_channels = 13;
+  string selected_video_codec = 14;
+  uint32 selected_video_bitrate = 15;
+  uint32 selected_video_width = 16;
+  uint32 selected_video_height = 17;
+  uint32 selected_video_fps = 18;
 }

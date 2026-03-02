@@ -160,6 +160,21 @@ if(BUILD_CORE_TESTS)
         )
         target_compile_features(test_nmdc_hub_server PRIVATE cxx_std_20)
 
+        # GeoIPLookup tests
+        add_executable(test_geo_ip_lookup
+            tests/test_geo_ip_lookup.cpp
+        )
+        target_link_libraries(test_geo_ip_lookup
+            GTest::gtest
+            GTest::gtest_main
+            verlihub_core_lib
+            pthread
+        )
+        target_compile_definitions(test_geo_ip_lookup PRIVATE
+            BUILD_DIR="${CMAKE_BINARY_DIR}"
+        )
+        target_compile_features(test_geo_ip_lookup PRIVATE cxx_std_20)
+
         # Register tests with CTest
         add_test(NAME ThreadSafeCollectionsTests 
             COMMAND test_thread_safe_collections
@@ -192,8 +207,16 @@ if(BUILD_CORE_TESTS)
             LABELS "core;unit"
             TIMEOUT 60
         )
+
+        add_test(NAME GeoIPLookupTests
+            COMMAND test_geo_ip_lookup
+        )
+        set_tests_properties(GeoIPLookupTests PROPERTIES
+            LABELS "core;unit"
+            TIMEOUT 60
+        )
         
-        message(STATUS "[ OK ] Core tests configured: ThreadSafeCollections, HubContext, NMDCProtocol, NMDCHubServer")
+        message(STATUS "[ OK ] Core tests configured: ThreadSafeCollections, HubContext, NMDCProtocol, NMDCHubServer, GeoIPLookup")
     else()
         message(STATUS "[ !! ] GTest not found; skipping core library tests")
     endif()

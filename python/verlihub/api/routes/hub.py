@@ -229,6 +229,56 @@ async def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
     )
 
 
+class HubConfigUpdate(BaseModel):
+    """Request to update hub configuration."""
+    hub_name: Optional[str] = None
+    hub_desc: Optional[str] = None
+    hub_topic: Optional[str] = None
+    hub_host: Optional[str] = None
+    hub_owner: Optional[str] = None
+    hub_encoding: Optional[str] = None
+    listen_port: Optional[int] = None
+    max_users: Optional[int] = None
+    min_share: Optional[int] = None
+    tls_enabled: Optional[bool] = None
+
+
+@router.put("/config")
+async def update_hub_config(
+    request: HubConfigUpdate,
+    ctx=Depends(get_hub_context),
+    _user: TokenData = Depends(require_permission(Permission.ADMIN)),
+) -> dict:
+    """Update hub configuration. Requires ADMIN (5) permission."""
+    updated = {}
+    field_map = {
+        "hub_name": ("config", "hub_name"),
+        "hub_desc": ("config", "hub_desc"),
+        "hub_host": ("config", "hub_host"),
+        "hub_owner": ("config", "hub_owner"),
+        "hub_encoding": ("config", "hub_encoding"),
+        "listen_port": ("config", "listen_port"),
+        "max_users": ("config", "max_users"),
+        "min_share": ("config", "min_share"),
+    }
+
+    for field, (section, key) in field_map.items():
+        value = getattr(request, field, None)
+        if value is not None:
+            ctx.set_config(section, key, str(value))
+            updated[field] = value
+
+    if request.hub_topic is not None:
+        ctx.hub_topic = request.hub_topic
+        updated["hub_topic"] = request.hub_topic
+
+    if request.tls_enabled is not None:
+        ctx.set_config("config", "tls_enabled", "1" if request.tls_enabled else "0")
+        updated["tls_enabled"] = request.tls_enabled
+
+    return {"success": True, "updated": updated}
+
+
 @router.put("/topic")
 async def set_hub_topic(
     request: HubTopicUpdate,

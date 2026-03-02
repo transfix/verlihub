@@ -430,8 +430,8 @@
                 <td><code>${escapeHtml(u.ip || '')}</code></td>
                 <td><span class="tag">${u.user_class || 0}</span></td>
                 <td>${formatBytes(u.share || 0)}</td>
-                <td>${escapeHtml(u.client || '')}</td>
-                <td>${escapeHtml(u.status || '')}</td>
+                <td>${escapeHtml(u.client || u.tag || '')}</td>
+                <td>${formatOnlineTime(u.login_time || 0)}</td>
                 <td>
                     <div class="buttons are-small">
                         <button class="button is-info is-light" title="Info"><i class="fas fa-info-circle"></i></button>
@@ -455,6 +455,16 @@
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatOnlineTime(seconds) {
+        if (!seconds || seconds <= 0) return '-';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h > 0) return h + 'h ' + m + 'm';
+        if (m > 0) return m + 'm';
+        return s + 's';
     }
 
     // Listen for WS updates

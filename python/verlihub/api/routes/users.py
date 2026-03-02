@@ -34,7 +34,8 @@ class OnlineUser(BaseModel):
     ip: str = ""
     share: int = 0
     user_class: int = UserClass.GUEST
-    login_time: Optional[str] = None
+    login_time: int = 0
+    client: str = ""
 
 
 class UserList(BaseModel):
@@ -92,6 +93,8 @@ async def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
             ip=u.get("ip", ""),
             share=u.get("share", 0),
             user_class=u.get("user_class", 0),
+            login_time=u.get("login_time", 0),
+            client=u.get("client", ""),
         )
         for u in user_dicts
     ]
@@ -108,6 +111,8 @@ async def get_online_user(nick: str, ctx=Depends(get_hub_context)) -> OnlineUser
                 ip=u.get("ip", ""),
                 share=u.get("share", 0),
                 user_class=u.get("user_class", 0),
+                login_time=u.get("login_time", 0),
+                client=u.get("client", ""),
             )
     raise HTTPException(status_code=404, detail="User not online")
 

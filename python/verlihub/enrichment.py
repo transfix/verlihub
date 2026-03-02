@@ -5,6 +5,13 @@ Provides geographic (GeoIP), hostname, clone detection, and share
 statistics for online users.  Designed as a lightweight cache layer
 that sits between the C++ core snapshots and the API / dashboard.
 
+GeoIP strategy
+--------------
+1. Prefer MaxMind GeoLite2/GeoIP2 .mmdb databases when available
+   (standard Verlihub installs ship these via ``vh --geoip``).
+2. Fall back to ip-api.com free batch endpoint (45 req/min) when
+   no local database is found.
+
 Thread safety
 -------------
 All caches are guarded by threading locks and the module is safe
@@ -14,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import socket
 import threading
 import time
@@ -23,7 +31,68 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# GeoIP lookup (ip-api.com free batch endpoint, 45 req/min)
+# MaxMind .mmdb support (optional dependency)
+# ---------------------------------------------------------------------------
+
+try:
+    import maxminddb  # type: ignore[import-untyped]
+    _HAS_MAXMIND = True
+except ImportError:
+    _HAS_MAXMIND = False
+
+_mmdb_reader: Any | None = None
+_mmdb_lock = threading.Lock()
+
+# Paths where Verlihub / system packages commonly install .mmdb files
+_MMDB_SEARCH_PATHS = [
+    "/usr/share/GeoIP",
+    "/usr/local/share/GeoIP",
+    "/var/lib/GeoIP",
+    "/usr/share/GeoIP2",
+    os.path.expanduser("~/.local/share/GeoIP"),
+]
+
+# Preferred database names (GeoLite2-City gives city+country; Country is fallback)
+_MMDB_NAMES = ["GeoLite2-City.mmdb", "GeoIP2-City.mmdb", "GeoLite2-Country.mmdb", "GeoIP2-Country.mmdb"]
+
+
+def _find_mmdb() -> str | None:
+    """Search for a MaxMind .mmdb file on disk."""
+    for directory in _MMDB_SEARCH_PATHS:
+        for name in _MMDB_NAMES:
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                return path
+    # Also check GEOIP_DB_PATH env var
+    env_path = os.environ.get("GEOIP_DB_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    return None
+
+
+def _get_mmdb_reader() -> Any | None:
+    """Return a maxminddb reader, opening the database on first call."""
+    global _mmdb_reader
+    if not _HAS_MAXMIND:
+        return None
+    with _mmdb_lock:
+        if _mmdb_reader is not None:
+            return _mmdb_reader
+        path = _find_mmdb()
+        if not path:
+            logger.debug("No MaxMind .mmdb database found; will fall back to ip-api.com")
+            return None
+        try:
+            _mmdb_reader = maxminddb.open_database(path)
+            logger.info("Opened MaxMind database: %s", path)
+            return _mmdb_reader
+        except Exception as exc:
+            logger.warning("Failed to open MaxMind database %s: %s", path, exc)
+            return None
+
+
+# ---------------------------------------------------------------------------
+# GeoIP caches
 # ---------------------------------------------------------------------------
 
 _geo_cache: dict[str, dict[str, Any]] = {}
@@ -53,12 +122,59 @@ def _is_private_ip(ip: str) -> bool:
 # GeoIP
 # ---------------------------------------------------------------------------
 
+def _lookup_maxmind(ip: str) -> dict[str, Any] | None:
+    """Try to look up *ip* via MaxMind .mmdb.  Returns None on miss."""
+    reader = _get_mmdb_reader()
+    if reader is None:
+        return None
+    try:
+        rec = reader.get(ip)
+        if not rec:
+            return None
+        # Normalize to our standard dict
+        country = rec.get("country", {})
+        city_rec = rec.get("city", {})
+        subdivisions = rec.get("subdivisions", [{}])
+        subdiv = subdivisions[0] if subdivisions else {}
+        continent = rec.get("continent", {})
+        loc = rec.get("location", {})
+        traits = rec.get("traits", {})
+        return {
+            "country": _mmdb_localized(country, "name"),
+            "country_code": country.get("iso_code", ""),
+            "city": _mmdb_localized(city_rec, "name"),
+            "region": _mmdb_localized(subdiv, "name"),
+            "region_code": subdiv.get("iso_code", ""),
+            "timezone": loc.get("time_zone", ""),
+            "continent": _mmdb_localized(continent, "name"),
+            "continent_code": continent.get("code", ""),
+            "lat": loc.get("latitude"),
+            "lon": loc.get("longitude"),
+            "isp": traits.get("isp", ""),
+            "org": traits.get("organization", ""),
+            "as_number": str(traits.get("autonomous_system_number", "")),
+            "as_name": traits.get("autonomous_system_organization", ""),
+            "_ts": time.time(),
+            "_source": "maxmind",
+        }
+    except Exception as exc:
+        logger.debug("MaxMind lookup failed for %s: %s", ip, exc)
+        return None
+
+
+def _mmdb_localized(obj: dict, key: str) -> str:
+    """Get a localized name from a MaxMind record, preferring English."""
+    names = obj.get("names", {})
+    return names.get("en", "") or obj.get(key, "")
+
+
 def lookup_geo(ip: str) -> dict[str, Any]:
     """Return cached GeoIP dict for *ip*.
 
     Keys: country, country_code, city, region, region_code, timezone,
           continent, lat, lon, isp, org, as_number, as_name.
 
+    Strategy: MaxMind first, then ip-api.com fallback.
     Returns empty-ish dict for private / unresolvable IPs.
     """
     if not ip or _is_private_ip(ip):
@@ -69,15 +185,20 @@ def lookup_geo(ip: str) -> dict[str, Any]:
         if entry and time.time() - entry.get("_ts", 0) < _GEO_TTL:
             return entry
 
-    # Try ip-api.com (free, 45 req/min per IP, no key required)
-    result = _fetch_geo_ipapi(ip)
+    # Try MaxMind first (local, fast, no rate limits)
+    result = _lookup_maxmind(ip)
+
+    # Fall back to ip-api.com
+    if result is None:
+        result = _fetch_geo_ipapi(ip)
+
     with _geo_cache_lock:
         _geo_cache[ip] = result
     return result
 
 
 def lookup_geo_batch(ips: list[str]) -> dict[str, dict[str, Any]]:
-    """Batch GeoIP lookup – uses ip-api.com batch endpoint (max 100)."""
+    """Batch GeoIP lookup – MaxMind first, ip-api.com fallback for misses."""
     fresh: dict[str, dict[str, Any]] = {}
     to_fetch: list[str] = []
 
@@ -93,8 +214,25 @@ def lookup_geo_batch(ips: list[str]) -> dict[str, dict[str, Any]]:
             else:
                 to_fetch.append(ip)
 
-    if to_fetch:
-        fetched = _fetch_geo_batch_ipapi(to_fetch)
+    # Try MaxMind for all uncached IPs
+    still_need: list[str] = []
+    for ip in to_fetch:
+        result = _lookup_maxmind(ip)
+        if result is not None:
+            fresh[ip] = result
+        else:
+            still_need.append(ip)
+
+    # Update cache with MaxMind hits
+    if fresh:
+        with _geo_cache_lock:
+            for ip in to_fetch:
+                if ip in fresh and ip not in _geo_cache:
+                    _geo_cache[ip] = fresh[ip]
+
+    # Fall back to ip-api.com for any remaining IPs
+    if still_need:
+        fetched = _fetch_geo_batch_ipapi(still_need)
         with _geo_cache_lock:
             _geo_cache.update(fetched)
         fresh.update(fetched)

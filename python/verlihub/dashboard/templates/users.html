@@ -43,9 +43,11 @@
 <!-- Search bar -->
 <div class="box">
     <div class="field has-addons">
-        <div class="control is-expanded">
+        <div class="control is-expanded" style="position: relative;">
             <input class="input" type="text" id="search-input" 
-                   placeholder="Search users by nickname..." value="{{ search or '' }}">
+                   placeholder="Search users by nickname..." value="{{ search or '' }}"
+                   autocomplete="off">
+            <div id="search-autocomplete" class="box" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; max-height:200px; overflow-y:auto; padding:0; margin-top:2px;"></div>
         </div>
         <div class="control">
             <button class="button is-info" onclick="searchUsers()">
@@ -98,13 +100,13 @@
                             <button class="button is-info is-light" title="Info" onclick="showUserDetail('{{ u.nick }}')">
                                 <i class="fas fa-info-circle"></i>
                             </button>
-                            <button class="button is-success is-light" title="Message">
+                            <button class="button is-success is-light" title="Message" onclick="sendMessagePrompt('{{ u.nick }}')">
                                 <i class="fas fa-envelope"></i>
                             </button>
-                            <button class="button is-warning is-light" title="Kick">
+                            <button class="button is-warning is-light" title="Kick" onclick="kickUserPrompt('{{ u.nick }}')">
                                 <i class="fas fa-shoe-prints"></i>
                             </button>
-                            <button class="button is-danger is-light" title="Ban">
+                            <button class="button is-danger is-light" title="Ban" onclick="banUserPrompt('{{ u.nick }}')">
                                 <i class="fas fa-ban"></i>
                             </button>
                         </div>
@@ -329,7 +331,7 @@
         
         try {
             const user = await apiCall('GET', `/users/${nick}`);
-            document.getElementById('user-class').value = user.class;
+            document.getElementById('user-class').value = user.user_class;
             document.getElementById('user-notes').value = user.notes || '';
         } catch (error) {
             showNotification('Failed to load user details', 'danger');
@@ -363,7 +365,7 @@
         try {
             const data = {
                 nick: nick,
-                class: userClass,
+                user_class: userClass,
                 notes: notes,
             };
             
@@ -402,6 +404,50 @@
         );
     }
     
+    // =====================================================================
+    // Action button handlers (Message, Kick, Ban)
+    // =====================================================================
+
+    function sendMessagePrompt(nick) {
+        const message = prompt(`Send a private message to "${nick}":`);
+        if (message === null || message.trim() === '') return;
+        apiCall('POST', '/users/message', { nick: nick, message: message.trim() })
+            .then(() => showNotification(`Message sent to ${nick}`, 'success'))
+            .catch(err => showNotification(`Failed to send message: ${err.message}`, 'danger'));
+    }
+
+    function kickUserPrompt(nick) {
+        confirmAction(
+            'Kick User',
+            `Are you sure you want to kick "${nick}" from the hub?`,
+            async () => {
+                const reason = prompt('Kick reason (optional):') || '';
+                try {
+                    await apiCall('POST', '/users/kick', { nick: nick, reason: reason });
+                    showNotification(`Kicked ${nick}`, 'success');
+                } catch (err) {
+                    showNotification(`Failed to kick: ${err.message}`, 'danger');
+                }
+            }
+        );
+    }
+
+    function banUserPrompt(nick) {
+        confirmAction(
+            'Ban User',
+            `Are you sure you want to ban "${nick}"? This will kick and prevent reconnection.`,
+            async () => {
+                const reason = prompt('Ban reason (optional):') || '';
+                try {
+                    await apiCall('POST', '/users/kick', { nick: nick, reason: 'Banned: ' + reason });
+                    showNotification(`Banned ${nick}`, 'warning');
+                } catch (err) {
+                    showNotification(`Failed to ban: ${err.message}`, 'danger');
+                }
+            }
+        );
+    }
+
     // User info modal
     function closeUserInfoModal() {
         document.getElementById('user-info-modal').classList.remove('is-active');
@@ -413,6 +459,42 @@
             searchUsers();
         }
     });
+
+    // =====================================================================
+    // Search autocomplete from live WebSocket user list
+    // =====================================================================
+    (function() {
+        const input = document.getElementById('search-input');
+        const dropdown = document.getElementById('search-autocomplete');
+        let hideTimeout = null;
+
+        function getAllNicks() {
+            return (VHWebSocket.state.users || []).map(u => u.nick).filter(Boolean);
+        }
+
+        input.addEventListener('input', function() {
+            const q = this.value.toLowerCase().trim();
+            if (!q) { dropdown.style.display = 'none'; return; }
+            const nicks = getAllNicks().filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+            if (!nicks.length) { dropdown.style.display = 'none'; return; }
+            dropdown.innerHTML = nicks.map(n => {
+                const idx = n.toLowerCase().indexOf(q);
+                const before = escapeHtml(n.slice(0, idx));
+                const match = escapeHtml(n.slice(idx, idx + q.length));
+                const after = escapeHtml(n.slice(idx + q.length));
+                return `<a class="dropdown-item" style="display:block;padding:0.4rem 0.75rem;cursor:pointer;" onmousedown="document.getElementById('search-input').value='${escapeHtml(n)}';document.getElementById('search-autocomplete').style.display='none';searchUsers();">${before}<strong>${match}</strong>${after}</a>`;
+            }).join('');
+            dropdown.style.display = 'block';
+        });
+
+        input.addEventListener('blur', function() {
+            hideTimeout = setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        });
+        input.addEventListener('focus', function() {
+            clearTimeout(hideTimeout);
+            if (this.value.trim()) this.dispatchEvent(new Event('input'));
+        });
+    })();
 
     // =====================================================================
     // WebSocket real-time updates for online user list
@@ -449,9 +531,9 @@
                 <td>
                     <div class="buttons are-small">
                         <button class="button is-info is-light" title="Info" onclick="showUserDetail('${escapeHtml(u.nick)}')"><i class="fas fa-info-circle"></i></button>
-                        <button class="button is-success is-light" title="Message"><i class="fas fa-envelope"></i></button>
-                        <button class="button is-warning is-light" title="Kick"><i class="fas fa-shoe-prints"></i></button>
-                        <button class="button is-danger is-light" title="Ban"><i class="fas fa-ban"></i></button>
+                        <button class="button is-success is-light" title="Message" onclick="sendMessagePrompt('${escapeHtml(u.nick)}')"><i class="fas fa-envelope"></i></button>
+                        <button class="button is-warning is-light" title="Kick" onclick="kickUserPrompt('${escapeHtml(u.nick)}')"><i class="fas fa-shoe-prints"></i></button>
+                        <button class="button is-danger is-light" title="Ban" onclick="banUserPrompt('${escapeHtml(u.nick)}')"><i class="fas fa-ban"></i></button>
                     </div>
                 </td>
             </tr>`;

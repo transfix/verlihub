@@ -478,3 +478,73 @@ TEST_F(HubContextMessagingTest, KickNonexistentUser) {
     // Should return false when user doesn't exist
     EXPECT_FALSE(ctx->KickUser("Admin", "NonExistent", "Test kick"));
 }
+
+// ============================================================================
+// UserInfoSnapshot default value tests
+// ============================================================================
+
+TEST(UserInfoSnapshotTest, DefaultValues) {
+    UserInfoSnapshot snap;
+    // String fields should be empty
+    EXPECT_TRUE(snap.nick.empty());
+    EXPECT_TRUE(snap.ip.empty());
+    EXPECT_TRUE(snap.description.empty());
+    EXPECT_TRUE(snap.tag.empty());
+    EXPECT_TRUE(snap.speed.empty());
+    EXPECT_TRUE(snap.email.empty());
+    EXPECT_TRUE(snap.country.empty());
+    EXPECT_TRUE(snap.country_name.empty());
+    EXPECT_TRUE(snap.city.empty());
+    EXPECT_TRUE(snap.client_name.empty());
+    EXPECT_TRUE(snap.client_version.empty());
+    EXPECT_TRUE(snap.supports.empty());
+    // Numeric fields should be zero
+    EXPECT_EQ(0, snap.user_class);
+    EXPECT_EQ(0ULL, snap.share);
+    EXPECT_EQ('\0', snap.mode);
+    EXPECT_EQ(0, snap.slots);
+    EXPECT_EQ(0, snap.hubs_normal);
+    EXPECT_EQ(0, snap.hubs_registered);
+    EXPECT_EQ(0, snap.hubs_operator);
+    EXPECT_EQ(0, snap.status_flag);
+    EXPECT_EQ(0L, snap.login_time);
+}
+
+TEST(UserInfoSnapshotTest, AssignAndRead) {
+    UserInfoSnapshot snap;
+    snap.nick = "TestUser";
+    snap.ip = "192.168.1.10";
+    snap.user_class = 3;
+    snap.share = 1024ULL * 1024 * 1024 * 50; // 50 GiB
+    snap.country = "US";
+    snap.country_name = "United States";
+    snap.city = "Denver";
+    snap.client_name = "DC++";
+    snap.client_version = "0.868";
+    snap.mode = 'A';
+    snap.slots = 5;
+    snap.hubs_normal = 3;
+    snap.hubs_registered = 2;
+    snap.hubs_operator = 1;
+    snap.status_flag = 0x10; // TLS
+    snap.supports = "UserCommand NoGetINFO NoHello UserIP2 TTHSearch";
+    snap.login_time = 3600;
+
+    EXPECT_EQ("TestUser", snap.nick);
+    EXPECT_EQ("192.168.1.10", snap.ip);
+    EXPECT_EQ(3, snap.user_class);
+    EXPECT_EQ(1024ULL * 1024 * 1024 * 50, snap.share);
+    EXPECT_EQ("US", snap.country);
+    EXPECT_EQ("United States", snap.country_name);
+    EXPECT_EQ("Denver", snap.city);
+    EXPECT_EQ("DC++", snap.client_name);
+    EXPECT_EQ("0.868", snap.client_version);
+    EXPECT_EQ('A', snap.mode);
+    EXPECT_EQ(5, snap.slots);
+    EXPECT_EQ(3, snap.hubs_normal);
+    EXPECT_EQ(2, snap.hubs_registered);
+    EXPECT_EQ(1, snap.hubs_operator);
+    EXPECT_EQ(0x10, snap.status_flag);
+    EXPECT_EQ("UserCommand NoGetINFO NoHello UserIP2 TTHSearch", snap.supports);
+    EXPECT_EQ(3600L, snap.login_time);
+}

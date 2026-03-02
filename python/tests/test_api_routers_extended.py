@@ -79,19 +79,43 @@ def make_mock_hub_ctx(**overrides):
     ctx.get_bot_description = lambda nick: f"{nick} bot"
 
     # get_user_list — returns full user info dicts (used by stats & users endpoints)
+    user_extra = {
+        "Alice": {
+            "client": "DC++", "client_version": "0.868", "mode": "A",
+            "slots": 3, "hubs_normal": 5, "hubs_registered": 2, "hubs_operator": 1,
+            "status_flag": 17, "supports": "UserCommand NoGetINFO UserIP2 TTHSearch",
+            "login_time": 3600, "description": "Alice's share", "tag": "<DC++ V:0.868,M:A,H:5/2/1,S:3>",
+            "speed": "DSL", "email": "alice@example.com",
+        },
+        "Bob": {
+            "client": "FlylinkDC++", "client_version": "5.0", "mode": "P",
+            "slots": 1, "hubs_normal": 2, "hubs_registered": 0, "hubs_operator": 0,
+            "status_flag": 2, "supports": "UserCommand NoGetINFO TTHSearch",
+            "login_time": 600, "description": "Bob here", "tag": "<FlylinkDC++ V:5.0,M:P,H:2/0/0,S:1>",
+            "speed": "Cable", "email": "bob@example.com",
+        },
+        "OpUser": {
+            "client": "EiskaltDC++", "client_version": "2.4.2", "mode": "A",
+            "slots": 10, "hubs_normal": 1, "hubs_registered": 1, "hubs_operator": 3,
+            "status_flag": 0, "supports": "UserCommand NoGetINFO NoHello UserIP2",
+            "login_time": 86400, "description": "Op on duty", "tag": "<EiskaltDC++ V:2.4.2,M:A,H:1/1/3,S:10>",
+            "speed": "LAN(T3)", "email": "op@example.com",
+        },
+    }
     def _get_user_list():
         result = []
         for nick in ctx.get_user_nicks():
-            result.append({
+            entry = {
                 "nick": nick,
                 "user_class": user_classes.get(nick, 0),
                 "share": user_shares.get(nick, 0),
                 "ip": user_ips.get(nick, ""),
                 "country": user_ccs.get(nick, ""),
                 "host": user_hosts.get(nick, ""),
-                "client": "",
                 "status": "",
-            })
+            }
+            entry.update(user_extra.get(nick, {"client": "", "status": ""}))
+            result.append(entry)
         return result
     ctx.get_user_list = _get_user_list
 
@@ -653,6 +677,146 @@ class TestDepsModule:
             assert get_hub_context() is None
         finally:
             set_hub_context(original)
+
+
+# =============================================================================
+# PUT /config endpoint tests
+# =============================================================================
+
+
+class TestPutConfig:
+    """Test the PUT /api/v1/hub/config endpoint."""
+
+    def test_put_config_requires_admin(self, client, op_header):
+        """Operator (class 3) should not be able to update config."""
+        resp = client.put("/api/v1/hub/config", json={"hub_name": "New"}, headers=op_header)
+        assert resp.status_code == 403
+
+    def test_put_config_no_auth(self, client):
+        """Unauthenticated request should fail."""
+        resp = client.put("/api/v1/hub/config", json={"hub_name": "New"})
+        assert resp.status_code in (401, 403)
+
+    def test_put_config_updates_hub_name(self, client, admin_header, mock_ctx):
+        """Admin can update hub_name via set_config."""
+        resp = client.put("/api/v1/hub/config", json={"hub_name": "NewHub"}, headers=admin_header)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["updated"]["hub_name"] == "NewHub"
+        mock_ctx.set_config.assert_any_call("config", "hub_name", "NewHub")
+
+    def test_put_config_updates_multiple_fields(self, client, admin_header, mock_ctx):
+        """Multiple fields can be updated at once."""
+        payload = {"hub_name": "Multi", "max_users": 1000, "hub_desc": "Updated desc"}
+        resp = client.put("/api/v1/hub/config", json=payload, headers=admin_header)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["updated"]["hub_name"] == "Multi"
+        assert data["updated"]["max_users"] == 1000
+        assert data["updated"]["hub_desc"] == "Updated desc"
+
+    def test_put_config_updates_topic(self, client, admin_header, mock_ctx):
+        """hub_topic updates via direct attribute assignment."""
+        resp = client.put("/api/v1/hub/config", json={"hub_topic": "New topic"}, headers=admin_header)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["updated"]["hub_topic"] == "New topic"
+
+    def test_put_config_tls_enabled_bool(self, client, admin_header, mock_ctx):
+        """tls_enabled converts bool to '0'/'1' string."""
+        resp = client.put("/api/v1/hub/config", json={"tls_enabled": True}, headers=admin_header)
+        assert resp.status_code == 200
+        mock_ctx.set_config.assert_any_call("config", "tls_enabled", "1")
+
+    def test_put_config_ignores_null_fields(self, client, admin_header, mock_ctx):
+        """Fields not sent should not trigger set_config calls."""
+        mock_ctx.set_config.reset_mock()
+        resp = client.put("/api/v1/hub/config", json={"hub_name": "OnlyThis"}, headers=admin_header)
+        assert resp.status_code == 200
+        # Only one set_config call for hub_name
+        calls = [c for c in mock_ctx.set_config.call_args_list if c[0][1] != "hub_name"]
+        assert len(calls) == 0
+
+    def test_put_config_master_can_update(self, client, master_header, mock_ctx):
+        """Master (class 10) should also be able to update config."""
+        resp = client.put("/api/v1/hub/config", json={"hub_name": "MasterHub"}, headers=master_header)
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
+# =============================================================================
+# Online users — extended field tests
+# =============================================================================
+
+
+class TestOnlineUsersExtendedFields:
+    """Test that new UserInfoSnapshot fields flow through the API."""
+
+    def test_online_users_have_client_version(self, client):
+        resp = client.get("/api/v1/users/online")
+        assert resp.status_code == 200
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["client_version"] == "0.868"
+        assert alice["client"] == "DC++"
+
+    def test_online_users_have_mode_and_slots(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["mode"] == "A"
+        assert alice["slots"] == 3
+        bob = next(u for u in users if u["nick"] == "Bob")
+        assert bob["mode"] == "P"
+        assert bob["slots"] == 1
+
+    def test_online_users_have_hub_counts(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["hubs_normal"] == 5
+        assert alice["hubs_registered"] == 2
+        assert alice["hubs_operator"] == 1
+
+    def test_online_users_have_status_flag(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["status_flag"] == 17  # Normal + TLS
+        bob = next(u for u in users if u["nick"] == "Bob")
+        assert bob["status_flag"] == 2  # Away
+
+    def test_online_users_have_supports(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert "UserCommand" in alice["supports"]
+        assert "TTHSearch" in alice["supports"]
+
+    def test_online_users_have_login_time(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["login_time"] == 3600
+
+    def test_online_users_have_description(self, client):
+        resp = client.get("/api/v1/users/online")
+        users = resp.json()["users"]
+        alice = next(u for u in users if u["nick"] == "Alice")
+        assert alice["description"] == "Alice's share"
+        assert alice["tag"] == "<DC++ V:0.868,M:A,H:5/2/1,S:3>"
+        assert alice["email"] == "alice@example.com"
+
+    def test_single_user_has_extended_fields(self, client):
+        resp = client.get("/api/v1/users/online/Alice")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["client_version"] == "0.868"
+        assert data["mode"] == "A"
+        assert data["slots"] == 3
+        assert data["status_flag"] == 17
+        assert data["login_time"] == 3600
 
 
 if __name__ == "__main__":

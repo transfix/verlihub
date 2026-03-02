@@ -69,6 +69,25 @@ These tests:
 
 ## Running Tests
 
+### C++ Unit Tests (GTest)
+
+C++ tests are compiled automatically during `pip install -e .` and placed
+in the build directory.
+
+```bash
+# Build everything (C++ library, SWIG bindings, and tests)
+pip install -e .
+
+# Run all C++ tests
+for t in build/cp*-linux_*/src/core/test_*; do "$t" --gtest_brief=1; done
+
+# Run a specific test suite
+build/cp*-linux_*/src/core/test_nmdc_protocol --gtest_brief=1
+
+# Run a single test by name
+build/cp*-linux_*/src/core/test_nmdc_protocol --gtest_filter="NMDCProtocolTest.ParseTag_*"
+```
+
 ### Quick Test (Unit Tests Only)
 
 ```bash
@@ -144,23 +163,49 @@ The smoke tests verify:
 ## Test File Structure
 
 ```
-python/tests/
-├── conftest.py              # Pytest fixtures and configuration
-├── test_verlihub_core.py    # SWIG binding tests
-├── test_plugins.py          # Generic plugin management tests
-├── test_lua_plugin.py       # Lua plugin specific tests
-├── test_python_plugin.py    # Python plugin specific tests  
-├── test_client.py           # NMDC client tests
-├── test_auth.py             # Authentication tests
-├── test_auth_registration.py # Registration, admin seeding, dashboard auth
-├── test_database.py         # Database model tests
-├── test_integration.py      # Protocol integration tests
-├── test_api_endpoints.py    # REST API tests
-└── test_benchmarks.py       # Performance benchmarks
+src/core/tests/                          # C++ GTest unit tests (259 tests)
+├── test_nmdc_protocol.cpp               # NMDC protocol parsing & construction (142 tests)
+│                                        #   ParseTag, ParseSR, ParseMyINFO, status flags,
+│                                        #   MakeForceMove, MakeBotList, MakeSupports,
+│                                        #   MakeHubNameWithTopic, edge cases
+├── test_nmdc_hub_server.cpp             # Hub server config, client defaults (29 tests)
+│                                        #   NMDCHubServer config, NMDCClient struct,
+│                                        #   new field defaults (country, mode, slots, etc.)
+├── test_hub_context.cpp                 # HubContext lifecycle, config, events, users (32 tests)
+│                                        #   Factory, start/stop, signals, config r/w,
+│                                        #   event callbacks, messaging, UserInfoSnapshot
+├── test_geo_ip_lookup.cpp               # GeoIP MaxMind .mmdb lookup (25 tests)
+└── test_thread_safe_collections.cpp     # Thread-safe data structures (31 tests)
+                                         #   ThreadSafeMap, LockFreeCounter, EventFlag,
+                                         #   ThreadSafeUserCollection
+
+python/tests/                            # Python pytest suite (1025+ tests)
+├── conftest.py                          # Pytest fixtures and configuration
+├── test_verlihub_core.py                # SWIG binding tests
+├── test_plugins.py                      # Generic plugin management tests
+├── test_lua_plugin.py                   # Lua plugin specific tests
+├── test_python_plugin.py                # Python plugin specific tests
+├── test_client.py                       # NMDC client tests
+├── test_auth.py                         # Authentication tests
+├── test_auth_registration.py            # Registration, admin seeding, dashboard auth
+├── test_database.py                     # Database model tests
+├── test_integration.py                  # Protocol integration tests
+├── test_api_endpoints.py                # REST API & dashboard endpoint tests
+├── test_api_routers_extended.py         # API router tests with mock context
+│                                        #   PUT /config, extended user fields,
+│                                        #   status flags, login_time, mode/slots
+├── test_enrichment.py                   # GeoIP, hostname, clone detection, share stats
+├── test_stats_utils.py                  # format_uptime, get_country_name utilities
+├── test_websocket.py                    # WebSocket hub event broadcaster tests
+├── test_websocket_e2e.py                # End-to-end WebSocket tests
+├── test_dashboard_extended.py           # Dashboard HTML rendering tests
+├── test_config.py                       # Configuration system tests
+└── test_benchmarks.py                   # Performance benchmarks
 
 docker/
-├── docker-compose.test.yml      # Database backend test configurations
-├── docker-compose.dual-test.yml # Original + verlihub-py testing
+├── docker-compose.test.yml              # Database backend test configurations
+├── docker-compose.dual-test.yml         # Original + verlihub-py testing
+├── docker-compose.smoke-tests.yml       # Startup smoke tests
 └── tests/
     ├── run_integration_tests.sh
     ├── integration_test.py

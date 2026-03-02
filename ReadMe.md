@@ -15,6 +15,10 @@ Verlihub is an advanced NMDC protocol server for Linux operating systems that pr
   * Import users from PtokaX, Aquila or YnHub
   * Web dashboard with real-time hub monitoring
   * REST API for programmatic hub management
+  * GeoIP enrichment (MaxMind + ip-api.com fallback)
+  * Full NMDC tag parsing (client, version, mode, slots, hubs, status flags)
+  * Search result ($SR) routing and clone detection
+  * Embeddable dashboard widget for external sites
   * Plus much more
 
 This repository contains **two ways to run a Verlihub hub**:
@@ -138,9 +142,12 @@ Once connected as admin via a DC client:
 The `python/` directory contains a complete Python-based management stack:
 
   * **NMDC Hub Server** — database-free NMDC server with SQLite or MySQL backend
-  * **REST API** — FastAPI-based API for hub management (users, bots, plugins, console)
-  * **Web Dashboard** — Jinja2 + SPA dashboard with real-time monitoring
+  * **REST API** — FastAPI-based API for hub management (users, bots, plugins, console, config)
+  * **Web Dashboard** — Jinja2 + SPA dashboard with real-time monitoring via WebSockets
   * **YAML Configuration** — single config file for hub, API, plugins, Lua, and more
+  * **GeoIP Enrichment** — MaxMind .mmdb + ip-api.com fallback for country, city, ISP
+  * **User Insights** — clone detection, share stats, geo distribution, status flags
+  * **Embeddable Widget** — standalone dashboard embed for external sites (`/dashboard/embed`)
 
 ## Quick Start
 
@@ -289,6 +296,31 @@ scripts alongside Python scripts:
     - Feature cards for Chat, Content, Security, Users, and Hub management
     - Free-form command input with output display
 
+## REST API Endpoints
+
+The API is served at `/api/v1/` and documented interactively at `/docs` (Swagger UI).
+Authentication uses JWT tokens issued via `/api/v1/auth/login`.
+
+| Endpoint | Method | Permission | Description |
+|----------|--------|------------|-------------|
+| `/api/v1/hub/status` | GET | Public | Hub status (running, users, share) |
+| `/api/v1/hub/info` | GET | Public | Hub name, topic, MOTD, address |
+| `/api/v1/hub/config` | GET | Admin (5) | Full hub configuration |
+| `/api/v1/hub/config` | PUT | Admin (5) | Update hub config fields |
+| `/api/v1/users/online` | GET | VIP (3) | Online users with enrichment |
+| `/api/v1/users/online/{nick}` | GET | VIP (3) | Single user detail |
+| `/api/v1/stats/users/detailed` | GET | VIP (3) | Users with GeoIP, clones, share |
+| `/api/v1/stats/geo` | GET | VIP (3) | Geographic distribution |
+| `/api/v1/stats/share` | GET | VIP (3) | Share statistics |
+| `/dashboard/` | GET | Cookie | SPA dashboard |
+| `/dashboard/embed` | GET | Public | Embeddable widget |
+
+The online-user responses include extended fields: `client_version`, `mode`,
+`slots`, `hubs_normal`/`hubs_registered`/`hubs_operator`, `status_flag`
+(bitmask: 1=Normal, 2=Away, 4=Server, 8=Fireball, 16=TLS, 32=NAT),
+`supports`, `login_time`, and GeoIP enrichment (`country_name`, `city`,
+`hostname`, `is_clone`, etc.).
+
 # Docker Production Deployment
 
 The `run_production.sh` script and `docker-compose` setup provide a complete
@@ -405,6 +437,11 @@ libverlihub.so          ← all src/*.cpp (legacy + shared code)
 verlihub_core_lib.a     ← src/core/*.cpp (new C++20 library, links libverlihub.so)
 _verlihub_core.so       ← SWIG wrapper (links both above)
 verlihub                ← legacy binary (links libverlihub.so), not built for pip
+test_nmdc_protocol      ← 142 C++ tests: protocol parsing, tags, search results, status flags
+test_nmdc_hub_server    ← 29 C++ tests: hub server config, client struct defaults
+test_hub_context        ← 32 C++ tests: lifecycle, config, events, signals, snapshots
+test_geo_ip_lookup      ← 25 C++ tests: MaxMind .mmdb lookups
+test_thread_safe_collections ← 31 C++ tests: thread-safe maps, counters, user collections
 ```
 
 # Links

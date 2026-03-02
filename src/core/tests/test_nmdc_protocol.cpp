@@ -598,6 +598,88 @@ TEST(NMDCProtocolTest, ParseTag_Socks5Mode) {
     EXPECT_EQ(tag.mode, '5');
 }
 
+TEST(NMDCProtocolTest, ParseTag_EmptyBrackets) {
+    TagData tag = ParseTag("<>");
+    EXPECT_TRUE(tag.client_name.empty());
+}
+
+TEST(NMDCProtocolTest, ParseTag_NoVersionButHasFields) {
+    // No V: field — entire inner string becomes client_name.
+    // Comma-delimited fields still parse from first comma, but
+    // the M:A portion lives before the first comma and is skipped.
+    TagData tag = ParseTag("<StrongDC M:A,H:2/1/0,S:4>");
+    EXPECT_EQ(tag.client_name, "StrongDC M:A,H:2/1/0,S:4");
+    EXPECT_EQ(tag.mode, '\0');   // M: is before first comma
+    EXPECT_EQ(tag.slots, 4);
+    EXPECT_EQ(tag.hubs_normal, 2);
+    EXPECT_EQ(tag.hubs_registered, 1);
+    EXPECT_EQ(tag.hubs_operator, 0);
+    EXPECT_TRUE(tag.client_version.empty());
+}
+
+TEST(NMDCProtocolTest, ParseTag_MalformedHubField) {
+    // Non-numeric H values — stoi catch blocks
+    TagData tag = ParseTag("<DC V:1.0,H:abc/def/ghi>");
+    EXPECT_EQ(tag.client_name, "DC");
+    EXPECT_EQ(tag.hubs_normal, 0);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_PartialHubField) {
+    // Only one hub count (no slashes)
+    TagData tag = ParseTag("<DC V:1.0,H:5>");
+    EXPECT_EQ(tag.hubs_normal, 5);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_TwoPartHubField) {
+    // Two-part hubs (no operator count)
+    TagData tag = ParseTag("<DC V:1.0,H:5/3>");
+    EXPECT_EQ(tag.hubs_normal, 5);
+    EXPECT_EQ(tag.hubs_registered, 3);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_EmptyModeValue) {
+    // Empty mode value
+    TagData tag = ParseTag("<DC V:1.0,M:,S:3>");
+    EXPECT_EQ(tag.mode, '\0');
+    EXPECT_EQ(tag.slots, 3);
+}
+
+TEST(NMDCProtocolTest, ParseTag_NegativeSlots) {
+    TagData tag = ParseTag("<DC V:1.0,S:-1>");
+    // Implementation may store -1 or 0 depending on stoi
+    EXPECT_LE(tag.slots, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_UnknownFields) {
+    // Unknown key letters should be silently skipped
+    TagData tag = ParseTag("<DC V:1.0,X:foo,Z:bar,S:3>");
+    EXPECT_EQ(tag.client_name, "DC");
+    EXPECT_EQ(tag.client_version, "1.0");
+    EXPECT_EQ(tag.slots, 3);
+}
+
+TEST(NMDCProtocolTest, ParseTag_UploadLimitInPassiveMode) {
+    // Verify L: is parsed even in passive mode
+    TagData tag = ParseTag("<DC V:1.0,M:P,H:1/0/0,S:2,L:50>");
+    EXPECT_EQ(tag.mode, 'P');
+    EXPECT_EQ(tag.upload_limit, 50);
+}
+
+TEST(NMDCProtocolTest, ParseTag_ValidFieldSetTrue) {
+    TagData tag = ParseTag("<DC++ V:0.868,M:A,H:1/0/0,S:5>");
+    EXPECT_TRUE(tag.valid);
+}
+
+TEST(NMDCProtocolTest, ParseTag_InvalidSetFalse) {
+    TagData tag = ParseTag("");
+    EXPECT_FALSE(tag.valid);
+}
+
 // =============================================================================
 // ParseSR Tests
 // =============================================================================
@@ -630,6 +712,36 @@ TEST(NMDCProtocolTest, ParseSR_EmptyString) {
     EXPECT_FALSE(sr.valid);
 }
 
+TEST(NMDCProtocolTest, ParseSR_OnlyPrefix) {
+    // "$SR " with nothing after — no nick
+    SearchResultData sr = ParseSR("$SR ");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_NickOnly) {
+    // Nick but no space after it — find(' ') returns npos
+    SearchResultData sr = ParseSR("$SR sender");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_EmptyTargetNick) {
+    // Ends with \x05 but nothing after — to_nick should be empty
+    std::string msg = std::string("$SR sender payload\x05");
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_TRUE(sr.to_nick.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_MultipleSep05) {
+    // payload contains multiple \x05 — rfind picks last one for target
+    std::string msg = std::string("$SR sender file\x05") + "35/50\x05TTH:ABC (10.0.0.1:411)\x05target";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_EQ(sr.to_nick, "target");
+}
+
 // =============================================================================
 // MakeHubNameWithTopic Tests
 // =============================================================================
@@ -652,6 +764,10 @@ TEST(NMDCProtocolTest, MakeForceMove_Format) {
     EXPECT_EQ(MakeForceMove("other-hub.com:411"), "$ForceMove other-hub.com:411");
 }
 
+TEST(NMDCProtocolTest, MakeForceMove_EmptyAddress) {
+    EXPECT_EQ(MakeForceMove(""), "$ForceMove ");
+}
+
 // =============================================================================
 // MakeBotList Tests
 // =============================================================================
@@ -664,6 +780,21 @@ TEST(NMDCProtocolTest, MakeBotList_MultipleNicks) {
 TEST(NMDCProtocolTest, MakeBotList_Empty) {
     std::vector<std::string> bots;
     EXPECT_EQ(MakeBotList(bots), "$BotList ");
+}
+
+TEST(NMDCProtocolTest, MakeBotList_SingleBot) {
+    std::vector<std::string> bots = {"Hub-Security"};
+    EXPECT_EQ(MakeBotList(bots), "$BotList Hub-Security$$");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_EmptyName) {
+    std::string result = MakeHubNameWithTopic("", "Topic");
+    EXPECT_EQ(result, "$HubName  - Topic");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_BothEmpty) {
+    std::string result = MakeHubNameWithTopic("", "");
+    EXPECT_EQ(result, "$HubName ");
 }
 
 // =============================================================================
@@ -707,6 +838,78 @@ TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagAway) {
     MyINFOData data = ParseMyINFO(msg);
     EXPECT_TRUE(data.valid);
     EXPECT_EQ(data.status_flag, 0x02);
+}
+
+// =============================================================================
+// Status Flag Constants Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, StatusFlagConstants_Values) {
+    EXPECT_EQ(STATUS_NORMAL, 0x01);
+    EXPECT_EQ(STATUS_AWAY, 0x02);
+    EXPECT_EQ(STATUS_SERVER, 0x04);
+    EXPECT_EQ(STATUS_FIREBALL, 0x08);
+    EXPECT_EQ(STATUS_TLS, 0x10);
+    EXPECT_EQ(STATUS_NAT, 0x20);
+}
+
+TEST(NMDCProtocolTest, StatusFlagConstants_NoBitOverlap) {
+    // All flags should be distinct powers of 2
+    unsigned char all = STATUS_NORMAL | STATUS_AWAY | STATUS_SERVER |
+                        STATUS_FIREBALL | STATUS_TLS | STATUS_NAT;
+    // 6 flags, each a distinct bit → population count should be 6
+    int bits = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (all & (1 << i)) bits++;
+    }
+    EXPECT_EQ(bits, 6);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagServer) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x04$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x04);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagFireball) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x08$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x08);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagTLS) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x10$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x10);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagNAT) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x20$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x20);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagComposite) {
+    // TLS + AWAY = 0x12
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x12$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x12);
+    EXPECT_TRUE(data.status_flag & STATUS_TLS);
+    EXPECT_TRUE(data.status_flag & STATUS_AWAY);
+    EXPECT_FALSE(data.status_flag & STATUS_FIREBALL);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_EmptySpeedField) {
+    // Empty speed field — no status byte
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0);
 }
 
 // ============================================================

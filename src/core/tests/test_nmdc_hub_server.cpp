@@ -191,6 +191,24 @@ TEST(NMDCClientTest, DefaultConstruction) {
     EXPECT_EQ(client.login_attempts, 0);
 }
 
+TEST(NMDCClientTest, DefaultNewFields) {
+    NMDCClient client;
+    // GeoIP fields
+    EXPECT_TRUE(client.country_code.empty());
+    EXPECT_TRUE(client.country_name.empty());
+    EXPECT_TRUE(client.city.empty());
+    // Tag fields
+    EXPECT_TRUE(client.client_version.empty());
+    EXPECT_EQ(client.mode, '\0');
+    EXPECT_EQ(client.slots, 0);
+    EXPECT_EQ(client.hubs_normal, 0);
+    EXPECT_EQ(client.hubs_registered, 0);
+    EXPECT_EQ(client.hubs_operator, 0);
+    // Supports / status
+    EXPECT_EQ(client.status_flag, 0);
+    EXPECT_TRUE(client.supports_text.empty());
+}
+
 TEST(NMDCClientTest, SetFields) {
     NMDCClient client;
     client.nick = "TestUser";

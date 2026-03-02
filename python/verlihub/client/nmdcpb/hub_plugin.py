@@ -268,6 +268,14 @@ def _get_media_handler() -> MediaHandler | None:
         p2p_max_size=P2P_MEDIA_MAX_SIZE,
     )
     log.info(f"MediaHandler initialized: storage={cfg.storage_path}")
+    # Wire storage into the HTTP media API so uploads/downloads work
+    try:
+        from verlihub.client.nmdcpb.media_api import set_storage
+        if hasattr(_media_handler, "storage"):
+            set_storage(_media_handler.storage)
+            log.info("Media API storage bound to MediaHandler.storage")
+    except ImportError:
+        pass
     return _media_handler
 
 

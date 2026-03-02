@@ -24,7 +24,7 @@ from typing import Optional
 
 try:
     from fastapi import (
-        APIRouter, Depends, File, HTTPException, Header, UploadFile,
+        APIRouter, Depends, File, HTTPException, Header, Response, UploadFile,
     )
     from fastapi.responses import FileResponse, JSONResponse
     FASTAPI_AVAILABLE = True
@@ -218,6 +218,22 @@ if FASTAPI_AVAILABLE:
             "uploader": meta.uploader_nick,
         }, status_code=201)
 
+    @router.get("/quota", name="get_quota")
+    async def get_quota(
+        session: SessionInfo = Depends(_get_session),
+    ):
+        """Get current user's storage quota."""
+        if _storage is None:
+            raise HTTPException(status_code=503, detail="Media storage not configured")
+
+        quota = _storage.get_quota(session.nick)
+        return JSONResponse(content={
+            "nick": session.nick,
+            "used_bytes": quota.used_bytes,
+            "remaining_bytes": quota.remaining_bytes,
+            "max_bytes": quota.max_bytes,
+        })
+
     @router.get("/{media_id}")
     async def download_media(
         media_id: str,
@@ -231,14 +247,14 @@ if FASTAPI_AVAILABLE:
         if meta is None or meta.is_expired:
             raise HTTPException(status_code=404, detail="Media not found")
 
-        path = await _storage.get_path(media_id)
-        if not path or not os.path.isfile(path):
+        data = await _storage.retrieve(media_id)
+        if data is None:
             raise HTTPException(status_code=404, detail="Media file missing")
 
-        return FileResponse(
-            path,
+        return Response(
+            content=data,
             media_type=meta.mime_type,
-            filename=meta.filename,
+            headers={"Content-Disposition": f'attachment; filename="{meta.filename}"'},
         )
 
     @router.get("/{media_id}/thumb")
@@ -311,20 +327,5 @@ if FASTAPI_AVAILABLE:
 
         return JSONResponse(content={"deleted": media_id})
 
-    @router.get("/quota", name="get_quota")
-    async def get_quota(
-        session: SessionInfo = Depends(_get_session),
-    ):
-        """Get current user's storage quota."""
-        if _storage is None:
-            raise HTTPException(status_code=503, detail="Media storage not configured")
-
-        quota = _storage.get_quota(session.nick)
-        return JSONResponse(content={
-            "nick": session.nick,
-            "used_bytes": quota.used_bytes,
-            "remaining_bytes": quota.remaining_bytes,
-            "max_bytes": quota.max_bytes,
-        })
 else:
     router = None  # type: ignore

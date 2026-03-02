@@ -250,6 +250,31 @@ async def lifespan(app: FastAPI):
     except Exception as hl_err:
         logger.warning("Hublist registration client failed to start: %s", hl_err)
 
+    # Configure NMDCpb Media API (session token auth + storage binding)
+    try:
+        from verlihub.client.nmdcpb.media_api import (
+            configure as configure_media_api,
+            set_storage,
+        )
+        media_secret = os.getenv("VH_MEDIA_TOKEN_SECRET", "")
+        media_ttl = int(os.getenv("VH_MEDIA_TOKEN_TTL", "3600"))
+        configure_media_api(secret=media_secret, token_ttl=media_ttl)
+        logger.info("NMDCpb Media API configured (token_ttl=%ds)", media_ttl)
+        
+        # If the hub plugin has initialized a media handler, bind its storage
+        try:
+            from verlihub.client.nmdcpb.hub_plugin import _get_media_handler
+            handler = _get_media_handler()
+            if handler is not None and hasattr(handler, 'storage'):
+                set_storage(handler.storage)
+                logger.info("Media API bound to hub media storage")
+        except Exception:
+            logger.debug("Media handler not yet available — storage will bind lazily")
+    except ImportError:
+        logger.debug("NMDCpb media API not available")
+    except Exception as e:
+        logger.error("Failed to configure media API: %s", e)
+
     yield
     
     # Shutdown
@@ -340,6 +365,15 @@ def create_app() -> FastAPI:
                 logger.info("MCP endpoint mounted at /api/v1/mcp")
     except Exception as mcp_mount_err:
         logger.warning("MCP mount skipped: %s", mcp_mount_err)
+
+    # Include NMDCpb Media API router (HTTP upload/download)
+    try:
+        from verlihub.client.nmdcpb.media_api import router as media_router
+        if media_router is not None:
+            app.include_router(media_router, tags=["nmdcpb-media"])
+            logger.info("NMDCpb Media API routes registered")
+    except ImportError:
+        logger.debug("NMDCpb media_api not available — skipping media routes")
 
     # Include dashboard router
     from verlihub.dashboard import dashboard_router

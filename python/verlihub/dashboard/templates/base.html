@@ -371,6 +371,11 @@
                 <a class="navbar-item" href="/dashboard/invites">
                     <i class="fas fa-ticket-alt mr-2"></i> Invites
                 </a>
+                {% if user and user.user_class >= 10 %}
+                <a class="navbar-item" href="/dashboard/hublist">
+                    <i class="fas fa-network-wired mr-2"></i> Hub List
+                </a>
+                {% endif %}
                 {% endif %}
             </div>
             

@@ -90,6 +90,32 @@ TEST_F(NMDCHubServerTest, SetMaxUsers) {
 }
 
 // =============================================================================
+// Runtime Configuration Setter Tests
+// =============================================================================
+
+TEST_F(NMDCHubServerTest, SetLoginTimeout) {
+    // Should not crash, and value is stored
+    EXPECT_NO_THROW(server.SetLoginTimeout(120));
+}
+
+TEST_F(NMDCHubServerTest, SetLoginTimeout_Zero) {
+    EXPECT_NO_THROW(server.SetLoginTimeout(0));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts) {
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(5));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts_One) {
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(1));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts_Zero) {
+    // Edge case: 0 attempts should still be settable
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(0));
+}
+
+// =============================================================================
 // User Count / State Tests (no connections)
 // =============================================================================
 

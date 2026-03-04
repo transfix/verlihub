@@ -92,12 +92,22 @@ async def dashboard_home(
     context = get_base_context(request, user)
     
     # Get hub stats if available
+    motd = ""
+    try:
+        cfg = get_config_optional()
+        _config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+        _motd_file = Path(_config_dir) / "motd"
+        if _motd_file.exists():
+            motd = _motd_file.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        pass
+
     context.update({
         "user_count": ctx.user_count if ctx else 0,
         "share_size": _format_bytes(ctx.total_share if ctx else 0),
         "uptime": _format_uptime(ctx.uptime if ctx else 0),
         "hub_port": ctx.port if ctx else 411,
-        "hub_motd": (ctx.get_config() or {}).get("hub_motd", "") if ctx else "",
+        "hub_motd": motd,
     })
     
     return templates.TemplateResponse(request, "dashboard.html", context)
@@ -378,6 +388,47 @@ async def invites_page(
     return templates.TemplateResponse(request, "invites.html", context)
 
 
+@dashboard_router.get("/hublist", response_class=HTMLResponse)
+async def hublist_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Hub list management page (master-only)."""
+    if user is None:
+        return RedirectResponse(
+            url="/dashboard/login?next_url=/dashboard/hublist",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if user.user_class < 10:  # Master required
+        return RedirectResponse(
+            url="/dashboard/",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    context = get_base_context(request, user)
+
+    hubs: list = []
+    blocks: list = []
+    try:
+        from verlihub.models.database import get_async_session
+        from verlihub.models import HubListEntry, HubListBlock
+        async with get_async_session() as session:
+            result = await session.execute(select(HubListEntry))
+            hubs = result.scalars().all()
+            result2 = await session.execute(select(HubListBlock))
+            blocks = result2.scalars().all()
+    except Exception:
+        pass
+
+    context.update({
+        "hubs": hubs,
+        "blocks": blocks,
+    })
+
+    return templates.TemplateResponse(request, "hublist.html", context)
+
+
 @dashboard_router.get("/users", response_class=HTMLResponse)
 async def users_page(
     request: Request,
@@ -497,7 +548,55 @@ async def config_page(
     config = {}
     if ctx:
         try:
-            config = ctx.get_config() or {}
+            _g = lambda key, default="": ctx.get_config("config", key, default)
+            _gi = lambda key, default=0: int(_g(key, str(default)) or default)
+            config = {
+                "hub_name": _g("hub_name"),
+                "hub_desc": _g("hub_desc"),
+                "hub_topic": _g("hub_topic"),
+                "hub_owner": _g("hub_owner"),
+                "hub_category": _g("hub_category"),
+                "hub_encoding": _g("hub_encoding", "UTF-8"),
+                "port": _gi("listen_port", 411),
+                "listen_ip": _g("listen_ip", "0.0.0.0"),
+                "hub_host": _g("hub_host"),
+                "use_regserver": _g("use_regserver") == "1",
+                "regserver_host": _g("regserver_host"),
+                "enable_tls": _g("tls_enabled") == "1",
+                "allow_unregistered": _g("allow_unregistered") == "1",
+                "require_password": _g("require_password") == "1",
+                "login_timeout": _gi("login_timeout", 60),
+                "max_pass_attempts": _gi("max_pass_attempts", 3),
+                "flood_protection": _gi("flood_protection", 2),
+                "chat_filter": _g("chat_filter") == "1",
+                "anti_clone": _g("anti_clone") == "1",
+                "registration_require_invite": _g("registration_require_invite") == "1",
+                "max_users": _gi("max_users", 1000),
+                "min_share": _gi("min_share", 0),
+                "min_slots": _gi("min_slots", 0),
+                "max_hubs_user": _gi("max_hubs_user", 0),
+                "max_hubs_op": _gi("max_hubs_op", 0),
+                "max_conn_per_ip": _gi("max_conn_per_ip", 5),
+                "hub_motd": "",  # loaded from file below
+                "hub_security": _g("hub_security", "Hub-Security"),
+                "opchat_name": _g("opchat_name", "OpChat"),
+            }
+            # MOTD is stored in a file, not a C++ config key
+            try:
+                from verlihub.config import get_config_optional as _gcc
+                _cfg = _gcc()
+                _config_dir = _cfg._config_dir if _cfg else "/etc/verlihub"
+                _motd_file = Path(_config_dir) / "motd"
+                if _motd_file.exists():
+                    config["hub_motd"] = _motd_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+                # Hublist servers from YAML config (multi-server list)
+                if _cfg:
+                    config["hublist_servers"] = "\n".join(_cfg.hub.hublist_servers or [])
+                    config["hublist_server_enabled"] = _cfg.hublist.server_enabled
+            except Exception:
+                pass
         except Exception:
             pass
     

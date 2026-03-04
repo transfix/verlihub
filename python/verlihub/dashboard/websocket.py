@@ -30,6 +30,7 @@ class ConnectionManager:
         self.active_connections: dict[str, list[WebSocket]] = {
             "hub": [],
             "logs": [],
+            "hublist": [],
         }
         self._lock = asyncio.Lock()
     
@@ -233,6 +234,64 @@ async def websocket_logs(websocket: WebSocket):
         pass
     finally:
         await manager.disconnect(websocket, "logs")
+
+
+@ws_router.websocket("/hublist")
+async def websocket_hublist(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time hublist updates (master-only).
+
+    Broadcasts events like:
+    - hublist_register: A new hub registered
+    - hublist_update: Existing hub refreshed
+    - hublist_offline: Hub went stale/offline
+    - hublist_removed: Hub deleted by admin
+    - hublist_blocked: Registration was blocked
+    - hublist_block_added / hublist_block_removed: Block rule changes
+    """
+    user = await get_user_from_ws_cookie(websocket)
+
+    if not user or user.user_class < 10:  # Require master
+        await websocket.close(code=4403, reason="Master access required")
+        return
+
+    if not await manager.connect(websocket, "hublist"):
+        return
+
+    try:
+        await manager.send_personal(websocket, {
+            "type": "connected",
+            "message": "Connected to hublist events",
+            "time": datetime.now(timezone.utc).isoformat(),
+        })
+
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0,
+                )
+
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await manager.send_personal(websocket, {
+                            "type": "pong",
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        })
+                except json.JSONDecodeError:
+                    pass
+
+            except asyncio.TimeoutError:
+                await manager.send_personal(websocket, {
+                    "type": "ping",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                })
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect(websocket, "hublist")
 
 
 # --- Functions to be called by the hub core to push events ---

@@ -42,7 +42,17 @@ def _reg_enabled() -> bool:
 def _reg_require_invite() -> bool:
     from verlihub.config import get_config_optional
     cfg = get_config_optional()
-    return cfg.api.registration_require_invite if cfg else False
+    if cfg:
+        return cfg.api.registration_require_invite
+    # Fallback: check hub config store
+    try:
+        from verlihub.api.deps import get_hub_context
+        ctx = get_hub_context()
+        if ctx:
+            return ctx.get_config("config", "registration_require_invite", "0") == "1"
+    except Exception:
+        pass
+    return False
 
 
 def _reg_default_class() -> int:

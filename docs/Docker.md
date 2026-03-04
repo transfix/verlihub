@@ -290,14 +290,21 @@ registration:
 
 ### Hublist Registration
 
+Register this hub on external hublist servers and optionally host a
+built-in hublist directory for other hubs:
+
 ```yaml
+# External hublist servers to register on (in hub section)
+hub:
+  hublist_servers:
+    - hublist.te-home.net
+    - hublist.pwiam.com
+
+# Built-in hublist server (optional)
 hublist:
-  host: "hublist.te-home.net"
-  port: 2501
-  enabled: true
-  interval: 600                 # Ping interval (seconds)
-  send_address: true
-  send_min_share: true
+  server_enabled: true         # serve directory at /api/v1/hublist
+  registration_interval: 600   # client re-registration interval (seconds)
+  stale_timeout: 1800          # prune hubs not pinged within 30 min
 ```
 
 ### Permissions
@@ -716,9 +723,9 @@ registration:
   request_password: true
 
 hublist:
-  host: "hublist.te-home.net"
-  enabled: true
-  interval: 600
+  server_enabled: true
+  registration_interval: 600
+  stale_timeout: 1800
 
 permissions:
   oplist_class: 3

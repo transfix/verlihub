@@ -161,10 +161,43 @@ async def lifespan(app: FastAPI):
         except Exception as ws_err:
             logger.warning("WebSocket event wiring failed: %s", ws_err)
 
+    # Start hublist registration client if configured
+    _hublist_client = None
+    try:
+        from verlihub.hublist import HubListRegistrationClient, build_hub_info
+        hublist_servers = []
+        use_regserver = False
+        if cfg:
+            hublist_servers = cfg.hub.hublist_servers or []
+            # Check C++ config or treat non-empty server list as enabled
+            use_regserver = bool(hublist_servers)
+        if ctx:
+            try:
+                use_regserver = ctx.get_config("config", "use_regserver", "0") == "1"
+            except Exception:
+                pass
+        if use_regserver and hublist_servers:
+            interval = getattr(getattr(cfg, 'hublist', None), 'registration_interval', 600) if cfg else 600
+            _hublist_client = HubListRegistrationClient(
+                servers=hublist_servers,
+                interval=interval,
+            )
+            await _hublist_client.start(lambda: build_hub_info(ctx))
+            logger.info("Hublist registration client started for %d servers", len(hublist_servers))
+    except Exception as hl_err:
+        logger.warning("Hublist registration client failed to start: %s", hl_err)
+
     yield
     
     # Shutdown
     logger.info("Shutting down Thin Verlihub...")
+
+    # Stop hublist registration client
+    if _hublist_client is not None:
+        try:
+            await _hublist_client.stop()
+        except Exception:
+            pass
     
     # Stop stats broadcast
     try:

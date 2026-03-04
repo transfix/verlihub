@@ -91,16 +91,35 @@ struct HubConfig {
     std::string hub_security{"Hub-Security"};
     std::string opchat_name{"OpChat"};
     
+    std::string hub_category;
+
     int listen_port{411};
     std::string listen_ip{"0.0.0.0"};
     int max_users{1000};
     int min_share{0};
     int max_share{0};
+    int min_slots{0};
+    int max_hubs_user{0};
+    int max_hubs_op{0};
+    int max_conn_per_ip{5};
     
     bool tls_enabled{false};
     int tls_port{0};
     std::string tls_cert_file;
     std::string tls_key_file;
+
+    bool use_regserver{false};
+    std::string regserver_host;
+
+    // Security settings (persisted via Python config store)
+    bool allow_unregistered{true};
+    bool require_password{true};
+    int login_timeout{60};
+    int max_pass_attempts{3};
+    int flood_protection{2};
+    bool chat_filter{false};
+    bool anti_clone{false};
+    bool registration_require_invite{false};
 };
 
 /**
@@ -565,7 +584,13 @@ public:
      * Set hub topic.
      */
     bool SetHubTopic(std::string_view topic);
-    
+
+    /**
+     * Set the Message of the Day (MOTD).
+     * Pushes to the live NMDCHubServer so new logins see it immediately.
+     */
+    void SetMOTD(const std::string& motd);
+
     /**
      * Get total share size.
      * Delegates to NMDCHubServer when available, falls back to local counter.

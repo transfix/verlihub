@@ -134,7 +134,7 @@ TEST_F(HubContextLifecycleTest, DoubleStart) {
 }
 
 TEST_F(HubContextLifecycleTest, StopWithoutStart) {
-    ctx->Initialize();
+    (void)ctx->Initialize();
     
     // Stop without start should be a no-op (not crash)
     ctx->Stop();
@@ -270,9 +270,125 @@ TEST_F(HubContextConfigTest, SetConfigValue) {
     EXPECT_EQ("New Topic", ctx->GetConfig("config", "hub_topic"));
     
     // Unknown key should still work (return false or handle gracefully)
-    bool result = ctx->SetConfig("unknown_section", "unknown_key", "value");
+    (void)ctx->SetConfig("unknown_section", "unknown_key", "value");
     // We accept either behavior as long as it doesn't crash
     SUCCEED();
+}
+
+// --- Security Config Get/Set Tests ---
+
+TEST_F(HubContextConfigTest, SecurityConfig_AllowUnregistered) {
+    // Default should be "1" (true)
+    EXPECT_EQ("1", ctx->GetConfig("config", "allow_unregistered"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "allow_unregistered", "0"));
+    EXPECT_EQ("0", ctx->GetConfig("config", "allow_unregistered"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "allow_unregistered", "1"));
+    EXPECT_EQ("1", ctx->GetConfig("config", "allow_unregistered"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_RequirePassword) {
+    EXPECT_EQ("1", ctx->GetConfig("config", "require_password"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "require_password", "0"));
+    EXPECT_EQ("0", ctx->GetConfig("config", "require_password"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_LoginTimeout) {
+    EXPECT_EQ("60", ctx->GetConfig("config", "login_timeout"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "login_timeout", "120"));
+    EXPECT_EQ("120", ctx->GetConfig("config", "login_timeout"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_MaxPassAttempts) {
+    EXPECT_EQ("3", ctx->GetConfig("config", "max_pass_attempts"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "max_pass_attempts", "5"));
+    EXPECT_EQ("5", ctx->GetConfig("config", "max_pass_attempts"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_FloodProtection) {
+    EXPECT_EQ("2", ctx->GetConfig("config", "flood_protection"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "flood_protection", "3"));
+    EXPECT_EQ("3", ctx->GetConfig("config", "flood_protection"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "flood_protection", "0"));
+    EXPECT_EQ("0", ctx->GetConfig("config", "flood_protection"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_ChatFilter) {
+    EXPECT_EQ("0", ctx->GetConfig("config", "chat_filter"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "chat_filter", "1"));
+    EXPECT_EQ("1", ctx->GetConfig("config", "chat_filter"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_AntiClone) {
+    EXPECT_EQ("0", ctx->GetConfig("config", "anti_clone"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "anti_clone", "1"));
+    EXPECT_EQ("1", ctx->GetConfig("config", "anti_clone"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_RegistrationRequireInvite) {
+    EXPECT_EQ("0", ctx->GetConfig("config", "registration_require_invite"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "registration_require_invite", "1"));
+    EXPECT_EQ("1", ctx->GetConfig("config", "registration_require_invite"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_NumericFields) {
+    // listen_port
+    EXPECT_TRUE(ctx->SetConfig("config", "listen_port", "5000"));
+    EXPECT_EQ("5000", ctx->GetConfig("config", "listen_port"));
+    
+    // max_users
+    EXPECT_TRUE(ctx->SetConfig("config", "max_users", "200"));
+    EXPECT_EQ("200", ctx->GetConfig("config", "max_users"));
+    
+    // min_share
+    EXPECT_TRUE(ctx->SetConfig("config", "min_share", "1048576"));
+    EXPECT_EQ("1048576", ctx->GetConfig("config", "min_share"));
+    
+    // tls_enabled
+    EXPECT_TRUE(ctx->SetConfig("config", "tls_enabled", "1"));
+    EXPECT_EQ("1", ctx->GetConfig("config", "tls_enabled"));
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_GetHubConfigStruct) {
+    // Set some security values
+    EXPECT_TRUE(ctx->SetConfig("config", "allow_unregistered", "0"));
+    EXPECT_TRUE(ctx->SetConfig("config", "require_password", "1"));
+    EXPECT_TRUE(ctx->SetConfig("config", "login_timeout", "90"));
+    EXPECT_TRUE(ctx->SetConfig("config", "max_pass_attempts", "5"));
+    EXPECT_TRUE(ctx->SetConfig("config", "flood_protection", "3"));
+    EXPECT_TRUE(ctx->SetConfig("config", "chat_filter", "1"));
+    EXPECT_TRUE(ctx->SetConfig("config", "anti_clone", "1"));
+    EXPECT_TRUE(ctx->SetConfig("config", "registration_require_invite", "1"));
+    
+    auto config = ctx->GetHubConfig();
+    
+    EXPECT_FALSE(config.allow_unregistered);
+    EXPECT_TRUE(config.require_password);
+    EXPECT_EQ(90, config.login_timeout);
+    EXPECT_EQ(5, config.max_pass_attempts);
+    EXPECT_EQ(3, config.flood_protection);
+    EXPECT_TRUE(config.chat_filter);
+    EXPECT_TRUE(config.anti_clone);
+    EXPECT_TRUE(config.registration_require_invite);
+}
+
+TEST_F(HubContextConfigTest, SecurityConfig_InvalidIntegerFallback) {
+    // Setting non-numeric value for an int field should use default
+    EXPECT_TRUE(ctx->SetConfig("config", "login_timeout", "not_a_number"));
+    // Implementation catches the parse error and uses fallback (60)
+    EXPECT_EQ("60", ctx->GetConfig("config", "login_timeout"));
+    
+    EXPECT_TRUE(ctx->SetConfig("config", "max_pass_attempts", "abc"));
+    EXPECT_EQ("3", ctx->GetConfig("config", "max_pass_attempts"));
 }
 
 TEST_F(HubContextConfigTest, ConfigThreadSafety) {

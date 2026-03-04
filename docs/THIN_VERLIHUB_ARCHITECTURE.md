@@ -34,8 +34,10 @@
 | Schemas / services layers | **Planned** | Using model classes directly |
 | EventBus / cache modules | **Planned** | Not yet separate modules |
 | TLS management API | **Planned** | FearTLS section is aspirational |
-| WebSocket API routes | **Done** | Dashboard WS for real-time updates; HubEventBroadcaster |
+| WebSocket API routes | **Done** | Dashboard WS for real-time updates; HubEventBroadcaster; hublist channel |
 | Full API endpoint matrix | **Partial** | ~50 endpoints planned; auth, hub, users, bans, stats, console, invites done |
+| **Hublist server** | **Done** | `python/verlihub/hublist.py` — registration client/server, master-only admin, blocking, GeoIP enrichment |
+| **Hublist dashboard** | **Done** | `hublist.html` — real-time table, search, block rules, hub detail modal, WebSocket updates |
 
 ## Overview
 
@@ -3047,10 +3049,22 @@ async def create_user(session: AsyncSession, user_data: RegUserCreate) -> RegUse
 - Ban management with search and CRUD
 - Configuration editor with tabbed sections
 - Logs viewer with real-time WebSocket streaming
+- Hublist management (master-only) with real-time WebSocket updates
+
+**Hublist Dashboard Features:**
+- Real-time hub table (name, address, owner, country flag, users, status)
+- Hub detail modal with full info (IP, hostname, city, ASN, email, logo)
+- Search bar with autocomplete
+- Block rules management (IP, hostname, domain, ASN, city, country)
+- GeoIP enrichment on registration (country, city, ASN, hostname)
+- Online/offline status with automatic stale hub detection
+- Stats cards (total hubs, online, offline, total users, block rules)
+- WebSocket events for hub register/update/offline/remove/block
 
 **WebSocket Endpoints:**
 - `/ws/hub` - Real-time hub events (user join/leave, chat)
 - `/ws/logs` - Real-time log streaming
+- `/ws/hublist` - Real-time hublist updates (master-only)
 
 **Deliverables:**
 - [x] Working web dashboard with Bulma CSS
@@ -3458,6 +3472,117 @@ Unit tests must verify:
 | **Director** | SWIG feature enabling callbacks from C++ to Python |
 | **Thread-safe** | Safe for concurrent access from multiple threads |
 | **Lock-free** | Using atomic operations instead of mutexes |
+
+---
+
+## Appendix C: Hub List Directory Feature
+
+### Overview
+
+Verlihub-py includes a complete hublist directory system with two parts:
+
+1. **Registration Client** (`HubListRegistrationClient`) — A background
+   asyncio task that periodically POSTs hub info to one or more external
+   hublist servers (e.g. `hublist.te-home.net`, `hublist.pwiam.com`).
+
+2. **Hublist Server** (`hublist_router`) — A FastAPI router that turns
+   this Verlihub-py instance into a hublist directory, accepting registrations
+   from other hubs and serving the hub list in XML or JSON format.
+
+### Architecture
+
+```
+┌─────────────────────┐     HTTP POST (form)     ┌─────────────────────┐
+│   This Hub          │ ──────────────────────── │  External Hublist   │
+│   (Registration     │   every N seconds        │  Server             │
+│    Client)          │                          │                     │
+└─────────────────────┘                          └─────────────────────┘
+
+┌─────────────────────┐     HTTP POST /register  ┌─────────────────────┐
+│   Other Hubs        │ ──────────────────────── │  This Hub           │
+│                     │   form/JSON              │  (Hublist Server)   │
+│                     │                          │                     │
+│                     │     HTTP GET /            │  → XML / JSON list  │
+│   Hublist Clients   │ ──────────────────────── │                     │
+│   (DC++ clients)    │                          │                     │
+└─────────────────────┘                          └─────────────────────┘
+```
+
+### Data Model
+
+```
+HubListEntry (SQLModel, table="hublist_entries")
+├── id          : int (PK, auto-increment)
+├── name        : str(255), indexed
+├── address     : str(512), indexed (dchub://host:port)
+├── description : str(1024)
+├── users       : int
+├── share       : int (bytes)
+├── min_share   : int
+├── max_users   : int
+├── country     : str(2) (ISO)
+├── encoding    : str(32) (default UTF-8)
+├── owner       : str(128)
+├── website     : str(512)
+├── status      : int (1=online)
+├── software    : str(128)
+├── last_seen   : datetime (TZ-aware, for stale pruning)
+└── registered_at: datetime (TZ-aware)
+```
+
+### Configuration
+
+```yaml
+# Hub settings — which external hublists to register on
+hub:
+  hublist_servers:
+    - hublist.te-home.net
+    - hublist.pwiam.com
+
+# Hublist server — host a directory for other hubs
+hublist:
+  server_enabled: true         # default: false
+  registration_interval: 600   # 10 min (client re-register interval)
+  stale_timeout: 1800          # 30 min (prune stale entries)
+```
+
+These map to `HubConfig.hublist_servers` (list[str]) and `HubListConfig`
+(server_enabled, registration_interval, stale_timeout) in Python config.
+
+### API Endpoints
+
+All under `/api/v1/hublist`:
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | Public | Download list (XML by default, `?fmt=json` for JSON) |
+| GET | `/stats` | Public | `{total_hubs, total_users, total_share}` |
+| POST | `/register` | Public | Upsert hub by address (form or JSON) |
+| DELETE | `/{hub_id}` | Admin | Remove an entry |
+
+### Registration Protocol (NMDC Standard)
+
+The POST body uses standard NMDC form fields: `Name`, `Host`,
+`Description`, `Users`, `Share`, `Minshare`, `Maxusers`, `Country`,
+`Encoding`, `Owner`, `Website`, `Status`, `Software`.
+
+### Stale Pruning
+
+Entries not refreshed within `stale_timeout` seconds are excluded from
+GET responses and periodically deleted by `prune_stale_hubs()`.
+
+### Test Coverage (59 tests)
+
+- Model CRUD (8 tests)
+- XML / JSON serialization (5 tests)
+- Stale hub pruning (4 tests)
+- Registration client unit tests with httpx mocking (9 tests)
+- `build_hub_info()` helper (3 tests)
+- `HubListConfig` dataclass + YAML round-trip (7 tests)
+- Endpoint integration via HTTPX/ASGI (16 tests)
+- `HubConfigUpdate` API fields (3 tests)
+- Router registration verification (2 tests)
+- Constants validation (3 tests)
 
 ---
 

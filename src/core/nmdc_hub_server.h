@@ -178,6 +178,7 @@ public:
     }
     void SetHubSecurity(const std::string& name) { m_hub_security = name; }
     void SetMaxUsers(int max) { m_max_users = max; }
+    void SetMOTD(const std::string& motd) { m_motd = motd; }
 
     const std::string& GetHubName() const { return m_hub_name; }
     const std::string& GetHubTopic() const { return m_hub_topic; }
@@ -246,12 +247,22 @@ public:
     // User Management
     // =========================================================================
 
-    /// Kick a user by nick
+    /// Kick a user by nick (uses configured hub security bot name as default op)
     bool KickUser(const std::string& nick, const std::string& reason,
-                  const std::string& op = "Hub-Security");
+                  const std::string& op = "");
 
     /// Disconnect a user by nick (no message, just close)
     bool DisconnectUser(const std::string& nick);
+
+    // =========================================================================
+    // Runtime Configuration Setters (thread-safe, called from Python)
+    // =========================================================================
+
+    /// Set the login timeout in seconds
+    void SetLoginTimeout(int seconds) { m_login_timeout_sec = seconds; }
+
+    /// Set the maximum number of password attempts before disconnect
+    void SetMaxLoginAttempts(int attempts) { m_max_login_attempts = attempts; }
 
 protected:
     // =========================================================================
@@ -316,6 +327,9 @@ private:
     /// Send the hub bot's $MyINFO to a client
     void SendHubBotInfo(NMDCClient& client);
 
+    /// Send the MOTD (Message of the Day) to a newly logged-in client
+    void SendMOTD(NMDCClient& client);
+
     // =========================================================================
     // State
     // =========================================================================
@@ -342,6 +356,7 @@ private:
     std::string m_hub_name{"Verlihub Hub"};
     std::string m_hub_topic;
     std::string m_hub_security{"Hub-Security"};
+    std::string m_motd;  ///< Message of the Day (sent to users on login)
     int m_max_users{1000};
     int m_max_login_attempts{3};
     int m_login_timeout_sec{60};  ///< Seconds to complete login before disconnect

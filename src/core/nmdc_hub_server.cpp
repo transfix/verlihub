@@ -23,6 +23,7 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 
 namespace nVerliHub {
 
@@ -413,6 +414,9 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
         // Send hub bot info
         SendHubBotInfo(client);
 
+        // Send MOTD to the newly logged-in user
+        SendMOTD(client);
+
         // Announce new user to existing users (broadcast MyINFO)
         AnnounceNewUser(client);
 
@@ -657,6 +661,20 @@ void NMDCHubServer::SendHubBotInfo(NMDCClient& client) {
     SendToConn(client.conn, bot_myinfo);
 }
 
+void NMDCHubServer::SendMOTD(NMDCClient& client) {
+    if (m_motd.empty()) return;
+
+    // Send MOTD as a chat message from the hub security bot.
+    // Split into lines so multi-line MOTDs render properly in DC clients.
+    std::istringstream stream(m_motd);
+    std::string line;
+    while (std::getline(stream, line)) {
+        // Remove trailing \r if present
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        SendToConn(client.conn, NMDCProtocol::MakeChat(m_hub_security, line));
+    }
+}
+
 // =============================================================================
 // Public Messaging API
 // =============================================================================
@@ -812,7 +830,8 @@ bool NMDCHubServer::KickUser(const std::string& nick, const std::string& reason,
     if (client_it == m_clients.end()) return false;
 
     // Send kick message
-    std::string kick_msg = NMDCProtocol::MakeChat(op,
+    std::string kick_from = op.empty() ? m_hub_security : op;
+    std::string kick_msg = NMDCProtocol::MakeChat(kick_from,
         "You are being kicked: " + reason);
     SendToConn(conn, kick_msg);
 

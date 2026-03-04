@@ -231,16 +231,44 @@ async def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
 
 class HubConfigUpdate(BaseModel):
     """Request to update hub configuration."""
+    # General
     hub_name: Optional[str] = None
     hub_desc: Optional[str] = None
     hub_topic: Optional[str] = None
     hub_host: Optional[str] = None
     hub_owner: Optional[str] = None
     hub_encoding: Optional[str] = None
+    hub_category: Optional[str] = None
+    # Network — UI sends "port" and "enable_tls"; accept both names
     listen_port: Optional[int] = None
+    port: Optional[int] = None          # alias for listen_port (UI data-key)
+    listen_ip: Optional[str] = None
+    tls_enabled: Optional[bool] = None
+    enable_tls: Optional[bool] = None   # alias for tls_enabled (UI data-key)
+    use_regserver: Optional[bool] = None
+    regserver_host: Optional[str] = None
+    hublist_servers: Optional[list[str]] = None
+    hublist_server_enabled: Optional[bool] = None
+    # Limits
     max_users: Optional[int] = None
     min_share: Optional[int] = None
-    tls_enabled: Optional[bool] = None
+    min_slots: Optional[int] = None
+    max_hubs_user: Optional[int] = None
+    max_hubs_op: Optional[int] = None
+    max_conn_per_ip: Optional[int] = None
+    # Security settings
+    allow_unregistered: Optional[bool] = None
+    require_password: Optional[bool] = None
+    login_timeout: Optional[int] = None
+    max_pass_attempts: Optional[int] = None
+    flood_protection: Optional[int] = None
+    chat_filter: Optional[bool] = None
+    anti_clone: Optional[bool] = None
+    registration_require_invite: Optional[bool] = None
+    # Messages
+    hub_motd: Optional[str] = None
+    hub_security: Optional[str] = None
+    opchat_name: Optional[str] = None
 
 
 @router.put("/config")
@@ -251,15 +279,41 @@ async def update_hub_config(
 ) -> dict:
     """Update hub configuration. Requires ADMIN (5) permission."""
     updated = {}
+
+    # Resolve UI alias names: "port" → "listen_port", "enable_tls" → "tls_enabled"
+    effective_listen_port = request.listen_port if request.listen_port is not None else request.port
+    effective_tls = request.tls_enabled if request.tls_enabled is not None else request.enable_tls
+
     field_map = {
         "hub_name": ("config", "hub_name"),
         "hub_desc": ("config", "hub_desc"),
         "hub_host": ("config", "hub_host"),
         "hub_owner": ("config", "hub_owner"),
         "hub_encoding": ("config", "hub_encoding"),
-        "listen_port": ("config", "listen_port"),
+        "hub_category": ("config", "hub_category"),
+        "hub_security": ("config", "hub_security"),
+        "opchat_name": ("config", "opchat_name"),
+        "listen_ip": ("config", "listen_ip"),
+        "regserver_host": ("config", "regserver_host"),
         "max_users": ("config", "max_users"),
         "min_share": ("config", "min_share"),
+        "min_slots": ("config", "min_slots"),
+        "max_hubs_user": ("config", "max_hubs_user"),
+        "max_hubs_op": ("config", "max_hubs_op"),
+        "max_conn_per_ip": ("config", "max_conn_per_ip"),
+        "login_timeout": ("config", "login_timeout"),
+        "max_pass_attempts": ("config", "max_pass_attempts"),
+        "flood_protection": ("config", "flood_protection"),
+    }
+
+    # Boolean fields that need "0"/"1" conversion
+    bool_field_map = {
+        "allow_unregistered": ("config", "allow_unregistered"),
+        "require_password": ("config", "require_password"),
+        "chat_filter": ("config", "chat_filter"),
+        "anti_clone": ("config", "anti_clone"),
+        "registration_require_invite": ("config", "registration_require_invite"),
+        "use_regserver": ("config", "use_regserver"),
     }
 
     for field, (section, key) in field_map.items():
@@ -268,13 +322,75 @@ async def update_hub_config(
             ctx.set_config(section, key, str(value))
             updated[field] = value
 
+    for field, (section, key) in bool_field_map.items():
+        value = getattr(request, field, None)
+        if value is not None:
+            ctx.set_config(section, key, "1" if value else "0")
+            updated[field] = value
+
+    # Aliased fields: listen_port / port, tls_enabled / enable_tls
+    if effective_listen_port is not None:
+        ctx.set_config("config", "listen_port", str(effective_listen_port))
+        updated["listen_port"] = effective_listen_port
+
+    if effective_tls is not None:
+        ctx.set_config("config", "tls_enabled", "1" if effective_tls else "0")
+        updated["tls_enabled"] = effective_tls
+
+    # Hub topic — set directly on the context property
     if request.hub_topic is not None:
         ctx.hub_topic = request.hub_topic
         updated["hub_topic"] = request.hub_topic
 
-    if request.tls_enabled is not None:
-        ctx.set_config("config", "tls_enabled", "1" if request.tls_enabled else "0")
-        updated["tls_enabled"] = request.tls_enabled
+    # MOTD — stored as a file, not a C++ config key
+    if request.hub_motd is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+            motd_file = Path(config_dir) / "motd"
+            motd_file.write_text(request.hub_motd, encoding="utf-8")
+            updated["hub_motd"] = request.hub_motd
+            # Push to live server so new connections see it immediately
+            try:
+                ctx.set_motd(request.hub_motd)
+            except AttributeError:
+                pass  # SWIG wrapper may not expose SetMOTD yet
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to write MOTD file: %s", exc)
+
+    # Sync registration_require_invite to the Python config singleton
+    if request.registration_require_invite is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.api.registration_require_invite = request.registration_require_invite
+        except Exception:
+            pass
+
+    # Hublist servers (Python config — list of external hublist servers)
+    if request.hublist_servers is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.hub.hublist_servers = request.hublist_servers
+                updated["hublist_servers"] = request.hublist_servers
+        except Exception:
+            pass
+
+    # Hublist server enabled (Python config — run built-in hublist directory)
+    if request.hublist_server_enabled is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.hublist.server_enabled = request.hublist_server_enabled
+                updated["hublist_server_enabled"] = request.hublist_server_enabled
+        except Exception:
+            pass
 
     return {"success": True, "updated": updated}
 

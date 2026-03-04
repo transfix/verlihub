@@ -7,7 +7,7 @@ allowing the Python layer to read/write hub data.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Optional
 
 from sqlalchemy import DateTime as SADateTime
@@ -331,3 +331,108 @@ class RegisterRequest(SQLModel):
     nick: str = Field(max_length=64)
     password: str = Field(max_length=128)
     invite_code: Optional[str] = Field(default=None, max_length=64)
+
+
+# =============================================================================
+# Hub List Entry Models (for hublist server feature)
+# =============================================================================
+
+
+class HubListEntryBase(SQLModel):
+    """Base model for a hub registered on our hublist server."""
+    name: str = Field(max_length=255, index=True)
+    address: str = Field(max_length=512, index=True)  # dchub://host:port or adcs://host:port
+    description: str = Field(default="", max_length=1024)
+    users: int = Field(default=0)
+    share: int = Field(default=0)  # Total share in bytes
+    min_share: int = Field(default=0)  # Minimum share required (bytes)
+    max_users: int = Field(default=0)
+    country: str = Field(default="", max_length=2)  # Two-letter ISO
+    encoding: str = Field(default="UTF-8", max_length=32)
+    owner: str = Field(default="", max_length=128)
+    email: str = Field(default="", max_length=256)
+    website: str = Field(default="", max_length=512)
+    logo: str = Field(default="", max_length=512)  # URL to hub icon/logo
+    status: int = Field(default=1)  # 1=online
+    software: str = Field(default="", max_length=128)
+    # GeoIP enrichment (resolved server-side on registration)
+    ip: str = Field(default="", max_length=45)
+    hostname: str = Field(default="", max_length=256)
+    city: str = Field(default="", max_length=128)
+    asn: str = Field(default="", max_length=128)  # e.g. "AS13335 Cloudflare"
+    last_seen: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    registered_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+
+
+class HubListEntry(HubListEntryBase, table=True):
+    """A hub registered on our hublist server."""
+    __tablename__ = "hublist_entries"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class HubListEntryRead(HubListEntryBase):
+    """Schema for reading a hublist entry."""
+    id: int
+
+
+class HubListEntryCreate(SQLModel):
+    """Schema for creating / updating a hublist entry via HTTP POST."""
+    name: str = Field(max_length=255)
+    address: str = Field(max_length=512)
+    description: str = Field(default="", max_length=1024)
+    users: int = Field(default=0, ge=0)
+    share: int = Field(default=0, ge=0)
+    min_share: int = Field(default=0, ge=0)
+    max_users: int = Field(default=0, ge=0)
+    country: str = Field(default="", max_length=2)
+    encoding: str = Field(default="UTF-8", max_length=32)
+    owner: str = Field(default="", max_length=128)
+    email: str = Field(default="", max_length=256)
+    website: str = Field(default="", max_length=512)
+    logo: str = Field(default="", max_length=512)
+    software: str = Field(default="", max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# Block-level enum and models for hublist blocking
+# ---------------------------------------------------------------------------
+
+class HubListBlockType(str, Enum):
+    """The level at which a hub is blocked from the hublist."""
+    IP = "ip"
+    HOSTNAME = "hostname"
+    DOMAIN = "domain"
+    ASN = "asn"
+    CITY = "city"
+    COUNTRY = "country"
+
+
+class HubListBlockBase(SQLModel):
+    """Base model for a hublist block rule."""
+    block_type: HubListBlockType = Field(index=True)
+    value: str = Field(max_length=512, index=True)       # e.g. IP, hostname, "AS13335", "DE"
+    reason: str = Field(default="", max_length=1024)
+    created_by: str = Field(default="", max_length=128)   # nick of creator
+    created_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    expires_at: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
+
+
+class HubListBlock(HubListBlockBase, table=True):  # type: ignore[call-arg]
+    """Persisted hublist block rule."""
+    __tablename__ = "hublist_blocks"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class HubListBlockRead(HubListBlockBase):
+    """Schema returned via API."""
+    id: int
+
+
+class HubListBlockCreate(SQLModel):
+    """Schema for creating a new block rule."""
+    block_type: HubListBlockType
+    value: str = Field(max_length=512)
+    reason: str = Field(default="", max_length=1024)
+    expires_at: Optional[datetime] = None

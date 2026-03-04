@@ -25,6 +25,7 @@
 #include <chrono>
 #include <sstream>
 #include <fstream>
+#include <filesystem>
 #include <thread>
 
 namespace nVerliHub {
@@ -132,6 +133,23 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     m_nmdc_server->SetHubSecurity(m_hub_config.hub_security);
     m_nmdc_server->SetMaxUsers(m_hub_config.max_users);
     m_nmdc_server->SetCallback(m_event_callback);
+
+    // Load MOTD from file and push to NMDC server
+    {
+        auto motd_path = std::filesystem::path(m_config_dir) / "motd";
+        if (std::filesystem::exists(motd_path)) {
+            std::ifstream ifs(motd_path, std::ios::in);
+            if (ifs) {
+                std::string motd((std::istreambuf_iterator<char>(ifs)),
+                                  std::istreambuf_iterator<char>());
+                // Trim trailing whitespace
+                while (!motd.empty() && (motd.back() == '\n' || motd.back() == '\r' || motd.back() == ' '))
+                    motd.pop_back();
+                m_nmdc_server->SetMOTD(motd);
+                Log(0, vh::fmt("Loaded MOTD ({} chars)", motd.size()));
+            }
+        }
+    }
     
     // Set the listen address on the server
     if (!actual_ip.empty()) {
@@ -341,6 +359,12 @@ bool HubContext::SetHubTopic(std::string_view topic) {
     return true;
 }
 
+void HubContext::SetMOTD(const std::string& motd) {
+    if (m_nmdc_server) {
+        m_nmdc_server->SetMOTD(motd);
+    }
+}
+
 std::string HubContext::GetHubEncoding() const {
     std::shared_lock lock(m_config_mutex);
     return m_hub_config.hub_encoding;
@@ -364,6 +388,29 @@ std::string HubContext::GetConfig(std::string_view section, std::string_view key
         if (key == "hub_encoding") return m_hub_config.hub_encoding;
         if (key == "hub_security") return m_hub_config.hub_security;
         if (key == "opchat_name") return m_hub_config.opchat_name;
+        if (key == "hub_category") return m_hub_config.hub_category;
+        // Network settings
+        if (key == "listen_ip") return m_hub_config.listen_ip;
+        if (key == "listen_port") return std::to_string(m_hub_config.listen_port);
+        if (key == "tls_enabled") return m_hub_config.tls_enabled ? "1" : "0";
+        if (key == "use_regserver") return m_hub_config.use_regserver ? "1" : "0";
+        if (key == "regserver_host") return m_hub_config.regserver_host;
+        // Security settings
+        if (key == "allow_unregistered") return m_hub_config.allow_unregistered ? "1" : "0";
+        if (key == "require_password") return m_hub_config.require_password ? "1" : "0";
+        if (key == "login_timeout") return std::to_string(m_hub_config.login_timeout);
+        if (key == "max_pass_attempts") return std::to_string(m_hub_config.max_pass_attempts);
+        if (key == "flood_protection") return std::to_string(m_hub_config.flood_protection);
+        if (key == "chat_filter") return m_hub_config.chat_filter ? "1" : "0";
+        if (key == "anti_clone") return m_hub_config.anti_clone ? "1" : "0";
+        if (key == "registration_require_invite") return m_hub_config.registration_require_invite ? "1" : "0";
+        // Limits
+        if (key == "max_users") return std::to_string(m_hub_config.max_users);
+        if (key == "min_share") return std::to_string(m_hub_config.min_share);
+        if (key == "min_slots") return std::to_string(m_hub_config.min_slots);
+        if (key == "max_hubs_user") return std::to_string(m_hub_config.max_hubs_user);
+        if (key == "max_hubs_op") return std::to_string(m_hub_config.max_hubs_op);
+        if (key == "max_conn_per_ip") return std::to_string(m_hub_config.max_conn_per_ip);
     }
     
     return std::string(default_val);
@@ -375,14 +422,100 @@ bool HubContext::SetConfig(std::string_view section, std::string_view key,
     std::unique_lock lock(m_config_mutex);
     
     if (section == "config") {
-        if (key == "hub_name") { m_hub_config.hub_name = value; return true; }
+        if (key == "hub_name") {
+            m_hub_config.hub_name = value;
+            if (m_nmdc_server) { m_nmdc_server->SetHubName(std::string(value)); }
+            return true;
+        }
         if (key == "hub_desc") { m_hub_config.hub_desc = value; return true; }
         if (key == "hub_topic") { m_hub_config.hub_topic = value; return true; }
         if (key == "hub_host") { m_hub_config.hub_host = value; return true; }
         if (key == "hub_owner") { m_hub_config.hub_owner = value; return true; }
         if (key == "hub_encoding") { m_hub_config.hub_encoding = value; return true; }
-        if (key == "hub_security") { m_hub_config.hub_security = value; return true; }
+        if (key == "hub_security") {
+            m_hub_config.hub_security = value;
+            if (m_nmdc_server) { m_nmdc_server->SetHubSecurity(std::string(value)); }
+            return true;
+        }
         if (key == "opchat_name") { m_hub_config.opchat_name = value; return true; }
+        if (key == "hub_category") { m_hub_config.hub_category = value; return true; }
+        // Network settings
+        if (key == "listen_ip") { m_hub_config.listen_ip = value; return true; }
+        if (key == "listen_port") {
+            int v = 411;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.listen_port = v;
+            return true;
+        }
+        if (key == "tls_enabled") { m_hub_config.tls_enabled = (value == "1"); return true; }
+        if (key == "use_regserver") { m_hub_config.use_regserver = (value == "1"); return true; }
+        if (key == "regserver_host") { m_hub_config.regserver_host = value; return true; }
+        // Security settings
+        if (key == "allow_unregistered") { m_hub_config.allow_unregistered = (value == "1"); return true; }
+        if (key == "require_password") { m_hub_config.require_password = (value == "1"); return true; }
+        if (key == "login_timeout") {
+            int v = 60;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.login_timeout = v;
+            // Push to NMDCHubServer if running
+            if (m_nmdc_server) { m_nmdc_server->SetLoginTimeout(v); }
+            return true;
+        }
+        if (key == "max_pass_attempts") {
+            int v = 3;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_pass_attempts = v;
+            // Push to NMDCHubServer if running
+            if (m_nmdc_server) { m_nmdc_server->SetMaxLoginAttempts(v); }
+            return true;
+        }
+        if (key == "flood_protection") {
+            int v = 2;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.flood_protection = v;
+            return true;
+        }
+        if (key == "chat_filter") { m_hub_config.chat_filter = (value == "1"); return true; }
+        if (key == "anti_clone") { m_hub_config.anti_clone = (value == "1"); return true; }
+        if (key == "registration_require_invite") { m_hub_config.registration_require_invite = (value == "1"); return true; }
+        // Limits
+        if (key == "max_users") {
+            int v = 1000;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_users = v;
+            if (m_nmdc_server) { m_nmdc_server->SetMaxUsers(v); }
+            return true;
+        }
+        if (key == "min_share") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.min_share = v;
+            return true;
+        }
+        if (key == "min_slots") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.min_slots = v;
+            return true;
+        }
+        if (key == "max_hubs_user") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_hubs_user = v;
+            return true;
+        }
+        if (key == "max_hubs_op") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_hubs_op = v;
+            return true;
+        }
+        if (key == "max_conn_per_ip") {
+            int v = 5;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_conn_per_ip = v;
+            return true;
+        }
     }
     
     return false;
@@ -488,10 +621,16 @@ bool HubContext::LoadConfiguration() {
         .max_users    = cfgInt("max_users",    1000),
         .min_share    = 0,
         .max_share    = 0,
+        .min_slots    = 0,
+        .max_hubs_user = 0,
+        .max_hubs_op  = 0,
+        .max_conn_per_ip = cfgInt("max_conn_per_ip", 5),
         .tls_enabled  = false,
         .tls_port     = 0,
         .tls_cert_file = {},
-        .tls_key_file  = {}
+        .tls_key_file  = {},
+        .use_regserver = false,
+        .regserver_host = {}
     };
     
     Log(0, vh::fmt("Config: hub_name='{}', hub_topic='{}'",

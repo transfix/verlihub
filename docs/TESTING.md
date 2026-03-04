@@ -179,7 +179,7 @@ src/core/tests/                          # C++ GTest unit tests (259 tests)
                                          #   ThreadSafeMap, LockFreeCounter, EventFlag,
                                          #   ThreadSafeUserCollection
 
-python/tests/                            # Python pytest suite (1025+ tests)
+python/tests/                            # Python pytest suite (1208+ tests)
 ├── conftest.py                          # Pytest fixtures and configuration
 ├── test_verlihub_core.py                # SWIG binding tests
 ├── test_plugins.py                      # Generic plugin management tests
@@ -200,6 +200,11 @@ python/tests/                            # Python pytest suite (1025+ tests)
 ├── test_websocket_e2e.py                # End-to-end WebSocket tests
 ├── test_dashboard_extended.py           # Dashboard HTML rendering tests
 ├── test_config.py                       # Configuration system tests
+├── test_hublist.py                      # Hublist registration server tests (59 tests)
+├── test_hublist_dashboard.py            # Hublist dashboard, blocking, GeoIP (84 tests)
+│                                        #   Block CRUD, block enforcement, search,
+│                                        #   master-only access, WebSocket events,
+│                                        #   two-hub integration, GeoIP enrichment
 └── test_benchmarks.py                   # Performance benchmarks
 
 docker/

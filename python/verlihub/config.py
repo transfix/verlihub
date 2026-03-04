@@ -212,6 +212,25 @@ class HubConfig:
 
 
 @dataclass
+class HubListConfig:
+    """
+    Hublist server configuration.
+
+    When ``server_enabled`` is True this Verlihub-py instance acts as a
+    hublist directory that other hubs can register on.
+
+    ``registration_interval`` controls how often (in seconds) we re-register
+    this hub on external hublist servers listed in ``HubConfig.hublist_servers``.
+
+    ``stale_timeout`` is how long (in seconds) a hub entry can go without a
+    registration ping before it is automatically pruned from the directory.
+    """
+    server_enabled: bool = False  # serve a hublist directory on /api/v1/hublist
+    registration_interval: int = 600  # 10 minutes
+    stale_timeout: int = 1800  # 30 minutes
+
+
+@dataclass
 class BotConfig:
     """Bot configuration."""
     nick: str
@@ -336,6 +355,7 @@ class VerlihubConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     hub: HubConfig = field(default_factory=HubConfig)
+    hublist: HubListConfig = field(default_factory=HubListConfig)
     bots: BotsConfig = field(default_factory=BotsConfig)
     users: UsersConfig = field(default_factory=UsersConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
@@ -434,6 +454,15 @@ class VerlihubConfig:
                 max_users=hub.get("max_users", config.hub.max_users),
                 logo=hub.get("logo", config.hub.logo),
                 hublist_servers=hub.get("hublist_servers", config.hub.hublist_servers),
+            )
+        
+        # Hublist server
+        if "hublist" in data:
+            hl = data["hublist"]
+            config.hublist = HubListConfig(
+                server_enabled=hl.get("server_enabled", config.hublist.server_enabled),
+                registration_interval=hl.get("registration_interval", config.hublist.registration_interval),
+                stale_timeout=hl.get("stale_timeout", config.hublist.stale_timeout),
             )
         
         # Bots

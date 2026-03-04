@@ -14,6 +14,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+import bcrypt
+from sqlmodel import select
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -72,6 +75,9 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
         # Config dict for OnGetConfig callback — populated before Initialize().
         # Structure: {"hub": {"hub_name": "...", "hub_topic": "..."}, ...}
         self._config: dict[str, dict[str, str]] = {}
+        # Back-reference to HubContext (set by HubContext.__init__)
+        # Used by OnValidateNick/OnCheckPassword to read config values.
+        self._hub_context_ref: Optional["HubContext"] = None
     
     # ------------------------------------------------------------------
     # Config bridge
@@ -158,6 +164,136 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
     def OnHubStopping(self) -> None:
         self._dispatch('hub_stopping')
 
+    # ------------------------------------------------------------------
+    # NMDC Authentication callbacks (called from C++ I/O thread)
+    # ------------------------------------------------------------------
+    # These must be synchronous (C++ blocks until they return).
+    # We bridge to the async DB via run_coroutine_threadsafe().
+    # ------------------------------------------------------------------
+
+    def _get_event_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """Return the running asyncio event loop, or None."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return loop
+        except RuntimeError:
+            pass
+        return None
+
+    def _sync_db_lookup(self, nick: str):
+        """
+        Synchronously look up a registered user by nick.
+        Returns (user_class, hashed_password, authorised) or None.
+        Called from the C++ I/O thread.
+        """
+        try:
+            from verlihub.models import RegUser
+            from verlihub.models.database import get_database
+
+            db = get_database()
+
+            async def _query():
+                async with db._session_factory() as session:
+                    result = await session.execute(
+                        select(RegUser).where(RegUser.nick == nick)
+                    )
+                    user = result.scalar_one_or_none()
+                    if user is None:
+                        return None
+                    return (user.user_class, user.login_pwd, user.authorised)
+
+            loop = self._get_event_loop()
+            if loop is not None:
+                future = asyncio.run_coroutine_threadsafe(_query(), loop)
+                return future.result(timeout=5)
+            else:
+                # No event loop available; try creating one in this thread
+                return asyncio.run(_query())
+        except Exception:
+            logger.exception("DB lookup failed for nick=%s", nick)
+            return None
+
+    def _get_config_value(self, key: str, default: str = "") -> str:
+        """Read a config value from the HubContext (thread-safe C++ call)."""
+        try:
+            if self._hub_context_ref is not None:
+                return self._hub_context_ref.get_config("config", key, default)
+        except Exception:
+            pass
+        return default
+
+    def OnValidateNick(self, nick: str, ip: str) -> int:
+        """
+        Called by C++ when a client sends $ValidateNick.
+        
+        Returns:
+            -1  → reject (nick denied)
+             0  → allow as guest (no password required)
+            >0  → registered user class (password required via OnCheckPassword)
+        """
+        try:
+            db_result = self._sync_db_lookup(nick)
+
+            if db_result is not None:
+                user_class, _pwd, authorised = db_result
+                if not authorised:
+                    logger.info("Rejecting disabled user: %s", nick)
+                    return -1
+                # Registered user → require password
+                return max(user_class, 1)
+
+            # Nick not in DB → check allow_unregistered
+            allow_unreg = self._get_config_value("allow_unregistered", "1")
+            if allow_unreg != "1":
+                logger.info("Rejecting unregistered nick: %s (allow_unregistered=0)", nick)
+                return -1
+
+            # Allow as guest
+            return 0
+        except Exception:
+            logger.exception("OnValidateNick error for nick=%s", nick)
+            return -1
+
+    def OnCheckPassword(self, nick: str, password: str) -> int:
+        """
+        Called by C++ when a client sends $MyPass (registered users only).
+        
+        Returns:
+            -1  → wrong password
+            >=0 → user class on success
+        """
+        try:
+            db_result = self._sync_db_lookup(nick)
+            if db_result is None:
+                return -1
+
+            user_class, hashed_pwd, authorised = db_result
+            if not authorised:
+                return -1
+
+            # Verify password using bcrypt
+            if not hashed_pwd:
+                # No password set — accept if require_password is off
+                require_pw = self._get_config_value("require_password", "1")
+                if require_pw != "1":
+                    return user_class
+                return -1
+
+            try:
+                if bcrypt.checkpw(
+                    password.encode("utf-8"),
+                    hashed_pwd.encode("utf-8") if isinstance(hashed_pwd, str) else hashed_pwd,
+                ):
+                    return user_class
+            except (ValueError, TypeError):
+                logger.warning("Password hash format error for nick=%s", nick)
+
+            return -1
+        except Exception:
+            logger.exception("OnCheckPassword error for nick=%s", nick)
+            return -1
+
 
 class HubContext:
     """
@@ -174,6 +310,7 @@ class HubContext:
     def __init__(self, cpp_context: verlihub_core.HubContext) -> None:
         self._cpp = cpp_context
         self._event_handler = HubEventHandler()
+        self._event_handler._hub_context_ref = self
         self._cpp.SetEventCallback(self._event_handler)
         self._shutdown_event = asyncio.Event()
         self._start_time: float | None = None
@@ -306,39 +443,48 @@ class HubContext:
         try:
             # Prefer the efficient single-lock C++ method
             snapshots = self._cpp.GetUserInfoSnapshots()
-            user_list = []
-            for snap in snapshots:
-                user_list.append({
-                    "nick": snap.nick,
-                    "user_class": snap.user_class,
-                    "share": snap.share,
-                    "ip": snap.ip,
-                    "country": snap.country,
-                    "country_name": getattr(snap, 'country_name', ''),
-                    "city": getattr(snap, 'city', ''),
-                    "client": snap.client_name,
-                    "client_version": getattr(snap, 'client_version', ''),
-                    "description": snap.description,
-                    "tag": snap.tag,
-                    "speed": snap.speed,
-                    "email": snap.email,
-                    "mode": chr(getattr(snap, 'mode', 0)) if getattr(snap, 'mode', 0) else '',
-                    "slots": getattr(snap, 'slots', 0),
-                    "hubs_normal": getattr(snap, 'hubs_normal', 0),
-                    "hubs_registered": getattr(snap, 'hubs_registered', 0),
-                    "hubs_operator": getattr(snap, 'hubs_operator', 0),
-                    "status_flag": getattr(snap, 'status_flag', 0),
-                    "supports": getattr(snap, 'supports', ''),
-                    "login_time": getattr(snap, 'login_time', 0),
-                    "status": "",
-                })
-            return user_list
-        except (AttributeError, TypeError):
+        except AttributeError:
             # Fallback: SWIG module too old or method unavailable
             logger.warning("GetUserInfoSnapshots not available, falling back to nick list")
             return [{"nick": n, "user_class": 0, "share": 0, "ip": "",
                       "country": "", "client": "", "status": ""}
                      for n in self.get_user_nicks()]
+
+        user_list = []
+        for snap in snapshots:
+            # SWIG maps C++ char → Python str; normalise mode to a
+            # single-character string (or empty when unset).
+            raw_mode = getattr(snap, 'mode', '')
+            if isinstance(raw_mode, int):
+                mode = chr(raw_mode) if raw_mode else ''
+            else:
+                mode = raw_mode if raw_mode and raw_mode != '\x00' else ''
+
+            user_list.append({
+                "nick": snap.nick,
+                "user_class": snap.user_class,
+                "share": snap.share,
+                "ip": snap.ip,
+                "country": snap.country,
+                "country_name": getattr(snap, 'country_name', ''),
+                "city": getattr(snap, 'city', ''),
+                "client": snap.client_name,
+                "client_version": getattr(snap, 'client_version', ''),
+                "description": snap.description,
+                "tag": snap.tag,
+                "speed": snap.speed,
+                "email": snap.email,
+                "mode": mode,
+                "slots": getattr(snap, 'slots', 0),
+                "hubs_normal": getattr(snap, 'hubs_normal', 0),
+                "hubs_registered": getattr(snap, 'hubs_registered', 0),
+                "hubs_operator": getattr(snap, 'hubs_operator', 0),
+                "status_flag": getattr(snap, 'status_flag', 0),
+                "supports": getattr(snap, 'supports', ''),
+                "login_time": getattr(snap, 'login_time', 0),
+                "status": "",
+            })
+        return user_list
 
     def get_user_info(self, nick: str) -> dict | None:
         """
@@ -350,6 +496,12 @@ class HubContext:
             from verlihub import verlihub_core
             snap = verlihub_core.UserInfoSnapshot()
             if self._cpp.GetUserInfo(nick, snap):
+                raw_mode = getattr(snap, 'mode', '')
+                if isinstance(raw_mode, int):
+                    mode = chr(raw_mode) if raw_mode else ''
+                else:
+                    mode = raw_mode if raw_mode and raw_mode != '\x00' else ''
+
                 return {
                     "nick": snap.nick,
                     "user_class": snap.user_class,
@@ -364,7 +516,7 @@ class HubContext:
                     "tag": snap.tag,
                     "speed": snap.speed,
                     "email": snap.email,
-                    "mode": chr(getattr(snap, 'mode', 0)) if getattr(snap, 'mode', 0) else '',
+                    "mode": mode,
                     "slots": getattr(snap, 'slots', 0),
                     "hubs_normal": getattr(snap, 'hubs_normal', 0),
                     "hubs_registered": getattr(snap, 'hubs_registered', 0),
@@ -374,7 +526,7 @@ class HubContext:
                     "login_time": getattr(snap, 'login_time', 0),
                     "status": "",
                 }
-        except (AttributeError, TypeError):
+        except (AttributeError, ImportError):
             pass
         return None
     

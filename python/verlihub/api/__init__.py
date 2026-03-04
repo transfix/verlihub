@@ -10,6 +10,7 @@ from fastapi import APIRouter
 
 # Import route modules
 from verlihub.api.routes import auth, hub, users, bans, console, stats, invites
+from verlihub.hublist import hublist_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -22,5 +23,6 @@ api_router.include_router(bans.router, prefix="/bans", tags=["bans"])
 api_router.include_router(stats.router, prefix="/stats", tags=["statistics"])
 api_router.include_router(console.router, tags=["console"])
 api_router.include_router(invites.router, prefix="/invites", tags=["invites"])
+api_router.include_router(hublist_router, prefix="/hublist", tags=["hublist"])
 
 __all__ = ["api_router"]

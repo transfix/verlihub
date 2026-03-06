@@ -110,8 +110,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-multipart>=0.0.6 \
     bcrypt>=4.0.0
 
-# Install verlihub-py package
-RUN pip3 install --no-cache-dir --break-system-packages -e /src/python
+# Install verlihub-py package (with ai extra for LLM + MCP support)
+RUN pip3 install --no-cache-dir --break-system-packages -e "/src/python[ai]"
 
 # Copy SWIG module into the installed verlihub package directory
 # The SWIG build outputs to /build/python/verlihub/ but pip installed

@@ -161,6 +161,21 @@ async def lifespan(app: FastAPI):
         except Exception as ws_err:
             logger.warning("WebSocket event wiring failed: %s", ws_err)
 
+    # Start in-process MCP session manager (if enabled & SDK installed)
+    _mcp_session_mgr = None
+    _mcp_task = None
+    try:
+        mcp_cfg = cfg.mcp if cfg else None
+        if mcp_cfg and mcp_cfg.enabled:
+            from verlihub.api.routes.mcp import create_mcp_mount
+            mcp_app, _mcp_session_mgr = create_mcp_mount()
+            if _mcp_session_mgr is not None:
+                import asyncio
+                _mcp_task = asyncio.create_task(_mcp_session_mgr.run())
+                logger.info("In-process MCP session manager started")
+    except Exception as mcp_err:
+        logger.warning("MCP session manager failed to start: %s", mcp_err)
+
     # Start hublist registration client if configured
     _hublist_client = None
     try:
@@ -191,6 +206,14 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Thin Verlihub...")
+
+    # Stop in-process MCP session manager
+    if _mcp_task is not None:
+        _mcp_task.cancel()
+        try:
+            await _mcp_task
+        except Exception:
+            pass
 
     # Stop hublist registration client
     if _hublist_client is not None:
@@ -241,7 +264,20 @@ def create_app() -> FastAPI:
     
     # Include API router
     app.include_router(api_router)
-    
+
+    # Mount in-process MCP endpoint (ASGI sub-app, not a FastAPI router)
+    try:
+        mcp_cfg_check = cfg.mcp if cfg else None
+        if mcp_cfg_check and mcp_cfg_check.enabled:
+            from verlihub.api.routes.mcp import create_mcp_mount
+            mcp_app, _ = create_mcp_mount()
+            if mcp_app is not None:
+                from starlette.routing import Mount
+                app.routes.append(Mount("/api/v1/mcp", app=mcp_app))
+                logger.info("MCP endpoint mounted at /api/v1/mcp")
+    except Exception as mcp_mount_err:
+        logger.warning("MCP mount skipped: %s", mcp_mount_err)
+
     # Include dashboard router
     from verlihub.dashboard import dashboard_router
     from verlihub.dashboard.websocket import ws_router

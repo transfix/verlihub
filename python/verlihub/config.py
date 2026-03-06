@@ -363,12 +363,20 @@ class LlmConfig:
 @dataclass
 class McpConfig:
     """
-    MCP (Model Context Protocol) server configuration.
-    
-    Enables running `python -m verlihub.client.mcp` as a standalone
-    MCP server that exposes hub operations to IDE LLM tools.
+    MCP (Model Context Protocol) endpoint configuration.
+
+    When ``enabled``, the hub API mounts an MCP Streamable HTTP endpoint at
+    ``/api/v1/mcp``.  The endpoint is protected by the same JWT auth used by
+    the rest of the API — ``min_class`` controls who can connect,
+    ``admin_class`` who gets write tools (kick, ban, broadcast, etc.).
+
+    The standalone ``verlihub-mcp serve`` CLI is **not** affected by this
+    config.  This section only governs the in-process MCP route inside the
+    FastAPI application.
     """
     enabled: bool = False
+    min_class: int = 3    # Minimum user class to access MCP (3=Operator)
+    admin_class: int = 5  # Minimum class for admin/write tools (5=Admin)
 
 
 @dataclass
@@ -396,6 +404,7 @@ class VerlihubConfig:
     lua: LuaConfig = field(default_factory=LuaConfig)
     python: PythonConfig = field(default_factory=PythonConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode

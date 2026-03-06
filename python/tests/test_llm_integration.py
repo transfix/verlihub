@@ -1113,3 +1113,623 @@ class TestFormatBytes:
         assert "1.0 MiB" == _format_bytes(1024 ** 2)
         assert "1.0 GiB" == _format_bytes(1024 ** 3)
         assert "1.0 TiB" == _format_bytes(1024 ** 4)
+
+
+# ======================================================================
+# In-process MCP endpoint tests
+# ======================================================================
+
+
+def _mcp_enabled_config() -> MagicMock:
+    """Mock VerlihubConfig with MCP and LLM enabled."""
+    from verlihub.config import McpConfig
+    cfg = _llm_enabled_config()
+    cfg.mcp = McpConfig(enabled=True, min_class=3, admin_class=5)
+    return cfg
+
+
+def _mcp_disabled_config() -> MagicMock:
+    """Mock VerlihubConfig with MCP disabled."""
+    from verlihub.config import McpConfig
+    cfg = _llm_enabled_config()
+    cfg.mcp = McpConfig(enabled=False)
+    return cfg
+
+
+class TestInProcessMcpBuild:
+    """Test the in-process MCP server builder and auth middleware."""
+
+    def test_build_inprocess_server(self):
+        """build_inprocess_mcp_server returns a Server with context-var."""
+        try:
+            from verlihub.api.routes.mcp import build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+        server = build_inprocess_mcp_server()
+        assert server is not None
+        assert server.name == "verlihub"
+        assert hasattr(server, "_current_user")
+
+    def test_create_mcp_mount_returns_tuple(self):
+        """create_mcp_mount returns (asgi_app, session_manager) or (None, None)."""
+        try:
+            from verlihub.api.routes.mcp import create_mcp_mount, _session_manager, _authed_app
+            import verlihub.api.routes.mcp as mcp_mod
+            # Reset globals to force fresh creation
+            mcp_mod._session_manager = None
+            mcp_mod._mcp_server = None
+            mcp_mod._authed_app = None
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        app, mgr = create_mcp_mount()
+        assert app is not None
+        assert mgr is not None
+
+        # Calling again returns the same objects (idempotent)
+        app2, mgr2 = create_mcp_mount()
+        assert app2 is app
+        assert mgr2 is mgr
+
+        # Clean up
+        mcp_mod._session_manager = None
+        mcp_mod._mcp_server = None
+        mcp_mod._authed_app = None
+
+    def test_mcp_config_defaults(self):
+        """McpConfig defaults to disabled, min_class=3, admin_class=5."""
+        from verlihub.config import McpConfig
+        cfg = McpConfig()
+        assert cfg.enabled is False
+        assert cfg.min_class == 3
+        assert cfg.admin_class == 5
+
+
+class TestInProcessMcpTools:
+    """Test the in-process MCP tool dispatch against mock hub context."""
+
+    @pytest.fixture
+    def mcp_server(self):
+        try:
+            from verlihub.api.routes.mcp import build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+        return build_inprocess_mcp_server()
+
+    @staticmethod
+    async def _call(server, name: str, arguments: dict | None = None):
+        """Invoke an MCP tool via the server's request handler."""
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        handler = server.request_handlers[CallToolRequest]
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(name=name, arguments=arguments or {}),
+        )
+        result = await handler(req)
+        return result.root.content  # list[TextContent]
+
+    @staticmethod
+    async def _list_tools(server):
+        from mcp.types import ListToolsRequest
+        handler = server.request_handlers[ListToolsRequest]
+        req = ListToolsRequest(method="tools/list")
+        result = await handler(req)
+        return result.root.tools
+
+    async def test_tool_get_hub_info(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_hub_info")
+            data = json.loads(content[0].text)
+            assert data["name"] == "TestHub"
+            assert data["users_online"] == 3
+
+    async def test_tool_list_online_users(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "list_online_users")
+            users = json.loads(content[0].text)
+            assert len(users) == 3
+            assert users[0]["nick"] == "Alice"
+            assert "ip" in users[0]
+
+    async def test_tool_list_online_users_no_ip_for_operator(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        op_td = _make_token_data("oper", 3)
+        mcp_server._current_user.set(op_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "list_online_users")
+            users = json.loads(content[0].text)
+            assert "ip" not in users[0]
+
+    async def test_tool_get_user_info(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_user_info", {"nick": "Alice"})
+            data = json.loads(content[0].text)
+            assert data["nick"] == "Alice"
+
+    async def test_tool_get_user_info_not_found(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_user_info", {"nick": "nobody"})
+            data = json.loads(content[0].text)
+            assert "error" in data
+
+    async def test_tool_get_hub_statistics(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_hub_statistics")
+            data = json.loads(content[0].text)
+            assert data["users_online"] == 3
+            assert data["is_running"] is True
+
+    async def test_tool_get_share_statistics(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_share_statistics")
+            data = json.loads(content[0].text)
+            assert data["user_count"] == 3
+
+    async def test_tool_get_geo_distribution(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "get_geo_distribution")
+            data = json.loads(content[0].text)
+            assert isinstance(data, list)
+            assert data[0]["country"] == "US"
+            assert data[0]["users"] == 2
+
+    async def test_tool_list_operators(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "list_operators")
+            ops = json.loads(content[0].text)
+            assert len(ops) == 1
+            assert ops[0]["nick"] == "Alice"
+
+    async def test_tool_list_bots(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "list_bots")
+            bots = json.loads(content[0].text)
+            assert len(bots) == 1
+            assert bots[0]["nick"] == "HubBot"
+
+    async def test_tool_health_check(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "health_check")
+            data = json.loads(content[0].text)
+            assert data["hub_running"] is True
+
+    async def test_tool_kick_user_admin(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "kick_user", {"nick": "Bob", "reason": "test"})
+            data = json.loads(content[0].text)
+            assert data["success"] is True
+            ctx.kick_user.assert_called_once()
+
+    async def test_tool_kick_user_denied_for_operator(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        op_td = _make_token_data("oper", 3)
+        mcp_server._current_user.set(op_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "kick_user", {"nick": "Bob", "reason": "test"})
+            data = json.loads(content[0].text)
+            assert "Permission denied" in data["error"]
+
+    async def test_tool_send_broadcast_admin(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "send_broadcast", {"message": "Hello all"})
+            data = json.loads(content[0].text)
+            assert data["success"] is True
+
+    async def test_tool_send_message_to_user_admin(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "send_message_to_user",
+                                       {"nick": "Alice", "message": "Hi"})
+            data = json.loads(content[0].text)
+            assert data["success"] is True
+
+    async def test_tool_ban_user_admin(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            content = await self._call(mcp_server, "ban_user", {"nick": "Bob", "reason": "spam"})
+            data = json.loads(content[0].text)
+            assert data["success"] is True
+
+    async def test_tool_unknown(self, mcp_server):
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=None), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=_mcp_enabled_config()):
+            content = await self._call(mcp_server, "nonexistent_tool")
+            data = json.loads(content[0].text)
+            assert "Unknown tool" in data["error"]
+
+    async def test_tools_list_admin_sees_all(self, mcp_server):
+        cfg = _mcp_enabled_config()
+        admin_td = _make_token_data("admin", 5)
+        mcp_server._current_user.set(admin_td)
+        with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            tools = await self._list_tools(mcp_server)
+            names = [t.name for t in tools]
+            assert "kick_user" in names
+            assert "ban_user" in names
+            assert "get_hub_info" in names
+
+    async def test_tools_list_operator_sees_readonly_only(self, mcp_server):
+        cfg = _mcp_enabled_config()
+        op_td = _make_token_data("oper", 3)
+        mcp_server._current_user.set(op_td)
+        with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            tools = await self._list_tools(mcp_server)
+            names = [t.name for t in tools]
+            assert "get_hub_info" in names
+            assert "kick_user" not in names
+            assert "ban_user" not in names
+
+
+class TestInProcessMcpResources:
+    """Test MCP resource reads against mock hub context."""
+
+    @pytest.fixture
+    def mcp_server(self):
+        try:
+            from verlihub.api.routes.mcp import build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+        return build_inprocess_mcp_server()
+
+    @staticmethod
+    async def _list_resources(server):
+        from mcp.types import ListResourcesRequest
+        handler = server.request_handlers[ListResourcesRequest]
+        req = ListResourcesRequest(method="resources/list")
+        result = await handler(req)
+        return result.root.resources
+
+    @staticmethod
+    async def _read_resource(server, uri: str):
+        from mcp.types import ReadResourceRequest, ReadResourceRequestParams
+        handler = server.request_handlers[ReadResourceRequest]
+        req = ReadResourceRequest(
+            method="resources/read",
+            params=ReadResourceRequestParams(uri=uri),
+        )
+        result = await handler(req)
+        # result.root is ReadResourceResult with .contents list
+        contents = result.root.contents
+        # Each item is TextResourceContents with .text attribute
+        return contents[0].text
+
+    async def test_list_resources(self, mcp_server):
+        resources = await self._list_resources(mcp_server)
+        uris = [str(r.uri) for r in resources]
+        assert "hub://info" in uris
+        assert "hub://users" in uris
+        assert "hub://stats" in uris
+        assert "hub://bans" in uris
+
+    async def test_read_hub_info_resource(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            data_str = await self._read_resource(mcp_server, "hub://info")
+            data = json.loads(data_str)
+            assert data["name"] == "TestHub"
+
+    async def test_read_users_resource(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            data_str = await self._read_resource(mcp_server, "hub://users")
+            data = json.loads(data_str)
+            assert len(data) == 3
+
+    async def test_read_stats_resource(self, mcp_server):
+        ctx = _mock_hub_context()
+        cfg = _mcp_enabled_config()
+        with patch("verlihub.api.routes.mcp.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            data_str = await self._read_resource(mcp_server, "hub://stats")
+            data = json.loads(data_str)
+            assert data["users_online"] == 3
+
+    async def test_read_unknown_resource(self, mcp_server):
+        data_str = await self._read_resource(mcp_server, "hub://nonexistent")
+        data = json.loads(data_str)
+        assert "error" in data
+
+
+class TestInProcessMcpPrompts:
+    """Test MCP prompt listing and retrieval."""
+
+    @pytest.fixture
+    def mcp_server(self):
+        try:
+            from verlihub.api.routes.mcp import build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+        return build_inprocess_mcp_server()
+
+    @staticmethod
+    async def _list_prompts(server):
+        from mcp.types import ListPromptsRequest
+        handler = server.request_handlers[ListPromptsRequest]
+        req = ListPromptsRequest(method="prompts/list")
+        result = await handler(req)
+        return result.root.prompts
+
+    @staticmethod
+    async def _get_prompt(server, name: str, arguments: dict | None = None):
+        from mcp.types import GetPromptRequest, GetPromptRequestParams
+        handler = server.request_handlers[GetPromptRequest]
+        req = GetPromptRequest(
+            method="prompts/get",
+            params=GetPromptRequestParams(name=name, arguments=arguments or {}),
+        )
+        result = await handler(req)
+        return result.root.messages
+
+    async def test_list_prompts(self, mcp_server):
+        prompts = await self._list_prompts(mcp_server)
+        names = [p.name for p in prompts]
+        assert "hub_report" in names
+        assert "user_lookup" in names
+        assert "troubleshoot" in names
+
+    async def test_get_hub_report_prompt(self, mcp_server):
+        messages = await self._get_prompt(mcp_server, "hub_report")
+        assert len(messages) == 1
+        assert "status report" in messages[0].content.text.lower()
+
+    async def test_get_user_lookup_prompt(self, mcp_server):
+        messages = await self._get_prompt(mcp_server, "user_lookup", {"nick": "Alice"})
+        assert "Alice" in messages[0].content.text
+
+    async def test_get_troubleshoot_prompt(self, mcp_server):
+        messages = await self._get_prompt(mcp_server, "troubleshoot", {"symptom": "slow"})
+        assert "slow" in messages[0].content.text
+
+
+class TestInProcessMcpAuthMiddleware:
+    """Test the JWT auth middleware for the in-process MCP endpoint."""
+
+    async def test_no_token_returns_401(self):
+        """Request without any auth token gets 401."""
+        try:
+            from verlihub.api.routes.mcp import _McpAuthMiddleware, build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        # Create a simple ASGI app that the middleware wraps
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(True)
+
+        server = build_inprocess_mcp_server()
+        mw = _McpAuthMiddleware(inner, mcp_server=server)
+
+        # Simulate an HTTP request with no auth
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp",
+            "headers": [],
+            "query_string": b"",
+        }
+
+        # Capture the response
+        response_started = {}
+        body_parts = []
+
+        async def receive_fn():
+            return {"type": "http.request", "body": b""}
+
+        async def send_fn(message):
+            if message["type"] == "http.response.start":
+                response_started["status"] = message["status"]
+            elif message["type"] == "http.response.body":
+                body_parts.append(message.get("body", b""))
+
+        await mw(scope, receive_fn, send_fn)
+        assert response_started["status"] == 401
+        assert len(calls) == 0  # Inner app was not called
+
+    async def test_invalid_token_returns_401(self):
+        """Request with invalid JWT gets 401."""
+        try:
+            from verlihub.api.routes.mcp import _McpAuthMiddleware, build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(True)
+
+        server = build_inprocess_mcp_server()
+        mw = _McpAuthMiddleware(inner, mcp_server=server)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp",
+            "headers": [(b"authorization", b"Bearer invalid_token_here")],
+            "query_string": b"",
+        }
+
+        response_started = {}
+
+        async def receive_fn():
+            return {"type": "http.request", "body": b""}
+
+        async def send_fn(message):
+            if message["type"] == "http.response.start":
+                response_started["status"] = message["status"]
+
+        await mw(scope, receive_fn, send_fn)
+        assert response_started["status"] == 401
+
+    async def test_low_class_returns_403(self):
+        """Request with valid token but insufficient class gets 403."""
+        try:
+            from verlihub.api.routes.mcp import _McpAuthMiddleware, build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(True)
+
+        server = build_inprocess_mcp_server()
+        mw = _McpAuthMiddleware(inner, mcp_server=server)
+
+        # Create a token with class 1 (below min_class 3)
+        raw_token = _token_str("lowuser", cls=1)
+        cfg = _mcp_enabled_config()
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp",
+            "headers": [(b"authorization", f"Bearer {raw_token}".encode())],
+            "query_string": b"",
+        }
+
+        response_started = {}
+
+        async def receive_fn():
+            return {"type": "http.request", "body": b""}
+
+        async def send_fn(message):
+            if message["type"] == "http.response.start":
+                response_started["status"] = message["status"]
+
+        with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            await mw(scope, receive_fn, send_fn)
+        assert response_started["status"] == 403
+        assert len(calls) == 0
+
+    async def test_valid_token_passes_through(self):
+        """Request with valid token and sufficient class passes to inner app."""
+        try:
+            from verlihub.api.routes.mcp import _McpAuthMiddleware, build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(True)
+
+        server = build_inprocess_mcp_server()
+        mw = _McpAuthMiddleware(inner, mcp_server=server)
+
+        raw_token = _token_str("admin", cls=5)
+        cfg = _mcp_enabled_config()
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp",
+            "headers": [(b"authorization", f"Bearer {raw_token}".encode())],
+            "query_string": b"",
+        }
+
+        async def receive_fn():
+            return {"type": "http.request", "body": b""}
+
+        async def send_fn(message):
+            pass
+
+        with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            await mw(scope, receive_fn, send_fn)
+        assert len(calls) == 1  # Inner app was called
+
+    async def test_cookie_auth_works(self):
+        """Auth via access_token cookie is accepted."""
+        try:
+            from verlihub.api.routes.mcp import _McpAuthMiddleware, build_inprocess_mcp_server
+        except ImportError:
+            pytest.skip("mcp package not installed")
+
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(True)
+
+        server = build_inprocess_mcp_server()
+        mw = _McpAuthMiddleware(inner, mcp_server=server)
+
+        raw_token = _token_str("admin", cls=5)
+        cfg = _mcp_enabled_config()
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp",
+            "headers": [(b"cookie", f"access_token=Bearer {raw_token}".encode())],
+            "query_string": b"",
+        }
+
+        async def receive_fn():
+            return {"type": "http.request", "body": b""}
+
+        async def send_fn(message):
+            pass
+
+        with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
+            await mw(scope, receive_fn, send_fn)
+        assert len(calls) == 1

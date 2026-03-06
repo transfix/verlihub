@@ -50,12 +50,23 @@ Both features connect to any **OpenAI-compatible LLM backend** (Ollama, vLLM, ll
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  MCP Client (VS Code, Claude Desktop, etc.)                     │
-│         │  MCP protocol (stdio)                                 │
+│         │  MCP protocol (stdio or HTTP)                         │
 │         ▼                                                       │
-│  verlihub.client.mcp  (standalone process)                      │
+│  verlihub.client.mcp  (standalone process, uses REST client)    │
 │         │  REST API calls via verlihub.client.api                │
 │         ▼                                                       │
 │  Verlihub REST API  /api/v1/*                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  MCP Client (VS Code, Claude Desktop, etc.)                     │
+│         │  MCP Streamable HTTP (POST /api/v1/mcp)               │
+│         ▼                                                       │
+│  In-process MCP endpoint (verlihub.api.routes.mcp)              │
+│         │  JWT auth (same tokens as REST API)                   │
+│         │  Direct hub context (no REST round-trip)              │
+│         ▼                                                       │
+│  Verlihub Hub Context (live hub)                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -318,6 +329,92 @@ POST http://localhost:8080/mcp
 GET  http://localhost:8080/mcp          (SSE stream)
 DELETE http://localhost:8080/mcp        (session termination)
 ```
+
+### In-Process MCP Endpoint (Recommended for HTTP)
+
+Instead of running a separate `verlihub-mcp serve --transport http` process,
+you can enable an **in-process** MCP endpoint that lives inside the main
+FastAPI application at `/api/v1/mcp`.
+
+**Advantages over the standalone HTTP server:**
+
+- **JWT authentication** — uses the same tokens as the REST API; no separate credentials
+- **Permission-gated tools** — read-only tools require `min_class`, admin tools require `admin_class`
+- **No REST round-trip** — talks directly to the live hub context
+- **Single process** — no extra service to manage
+
+#### Enable in `config.yml`
+
+```yaml
+mcp:
+  enabled: true
+  min_class: 3     # Operator (read-only tools)
+  admin_class: 5   # Admin (kick, ban, broadcast)
+```
+
+#### Obtain a JWT Token
+
+```bash
+# Login to get a token
+TOKEN=$(curl -s -X POST http://localhost:4112/api/v1/auth/login \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'username=admin&password=secret' | jq -r .access_token)
+```
+
+#### VS Code / Copilot (HTTP)
+
+Create `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "verlihub": {
+      "type": "http",
+      "url": "http://localhost:4112/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:verlihubToken}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "verlihubToken",
+      "type": "promptString",
+      "description": "Verlihub JWT token (from /api/v1/auth/login)"
+    }
+  ]
+}
+```
+
+#### Claude Desktop (HTTP)
+
+Claude Desktop does not support custom headers natively. Use the
+standalone stdio server (`verlihub-mcp serve`) for Claude Desktop instead.
+
+#### curl / Any HTTP Client
+
+```bash
+# List tools
+curl -X POST http://localhost:4112/api/v1/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST http://localhost:4112/api/v1/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_hub_info","arguments":{}}}'
+```
+
+#### Permission Model
+
+| Tool Category | Minimum Class | Examples |
+|--------------|---------------|----------|
+| Read-only | `min_class` (3) | `get_hub_info`, `list_online_users`, `search_bans` |
+| Admin / write | `admin_class` (5) | `kick_user`, `ban_user`, `send_broadcast` |
+
+Admin-only tools are hidden from `tools/list` for users below `admin_class`.
 
 ### MCP Client CLI
 

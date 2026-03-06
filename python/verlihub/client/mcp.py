@@ -1,38 +1,45 @@
 """
-Verlihub MCP Server — Model Context Protocol interface for AI assistants.
+Verlihub MCP — Model Context Protocol server & client CLI.
 
-Exposes Verlihub hub resources and tools to AI coding assistants
-(VS Code Copilot, Claude Desktop, Cursor, etc.) via MCP over stdio or HTTP.
+The **server** exposes Verlihub hub resources and tools to AI coding
+assistants (VS Code Copilot, Claude Desktop, Cursor, etc.) via MCP over
+stdio or Streamable HTTP.
 
-This module uses the ``verlihub.client.api.AsyncHubClient`` to communicate
-with the hub's REST API, so it can run in a separate process or on a
-different machine from the hub itself.
+The **client** connects to a running MCP server (over HTTP) and lets you
+list tools/resources/prompts and call them from the terminal.
 
-Usage (stdio mode — for AI editors):
-    python -m verlihub.client.mcp \\
+Both sides communicate with the hub through the REST API using
+``verlihub.client.api.AsyncHubClient``.
+
+Server usage:
+    verlihub-mcp serve \\
         --hub-url http://localhost:4112/api/v1 \\
         --username admin --password secret
 
-Usage (HTTP mode — for remote / web clients):
-    python -m verlihub.client.mcp --transport http \\
+    verlihub-mcp serve --transport http --port 8080 \\
         --hub-url http://localhost:4112/api/v1 \\
-        --username admin --password secret \\
-        --host 0.0.0.0 --port 8080
+        --username admin --password secret
 
-Usage (from VS Code .vscode/mcp.json — stdio):
+Client usage:
+    verlihub-mcp client --url http://localhost:8080/mcp tools
+    verlihub-mcp client --url http://localhost:8080/mcp call get_hub_info
+    verlihub-mcp client --url http://localhost:8080/mcp resources
+    verlihub-mcp client --url http://localhost:8080/mcp read hub://info
+
+VS Code integration (.vscode/mcp.json — stdio):
     {
         "servers": {
             "verlihub": {
                 "type": "stdio",
-                "command": "python",
-                "args": ["-m", "verlihub.client.mcp",
+                "command": "verlihub-mcp",
+                "args": ["serve",
                          "--hub-url", "http://localhost:4112/api/v1",
                          "--username", "admin", "--password", "secret"]
             }
         }
     }
 
-Usage (from VS Code .vscode/mcp.json — HTTP):
+VS Code integration (.vscode/mcp.json — HTTP):
     {
         "servers": {
             "verlihub": {
@@ -49,13 +56,14 @@ Environment variables:
 """
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import logging
 import os
 import sys
 from typing import Any
+
+import click
 
 logger = logging.getLogger("verlihub.client.mcp")
 
@@ -528,71 +536,61 @@ def build_mcp_server(
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# Click CLI
 # ---------------------------------------------------------------------------
 
-def main():
-    """Run the MCP server in stdio or HTTP mode."""
-    parser = argparse.ArgumentParser(
-        prog="verlihub-mcp",
-        description="Verlihub MCP Server — expose hub tools to AI assistants",
-    )
-    parser.add_argument(
-        "--hub-url",
-        default=os.environ.get("VERLIHUB_HUB_URL", "http://localhost:4112/api/v1"),
-        help="Hub REST API base URL (default: $VERLIHUB_HUB_URL or http://localhost:4112/api/v1)",
-    )
-    parser.add_argument(
-        "--username",
-        default=os.environ.get("VERLIHUB_USERNAME", ""),
-        help="Login username (default: $VERLIHUB_USERNAME)",
-    )
-    parser.add_argument(
-        "--password",
-        default=os.environ.get("VERLIHUB_PASSWORD", ""),
-        help="Login password (default: $VERLIHUB_PASSWORD)",
-    )
-    parser.add_argument(
-        "--name",
-        default="verlihub",
-        help="MCP server name (default: verlihub)",
-    )
-    parser.add_argument(
-        "--log-level",
-        default="WARNING",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Log level (default: WARNING)",
-    )
-    parser.add_argument(
-        "--transport",
-        default="stdio",
-        choices=["stdio", "http"],
-        help="Transport mode (default: stdio)",
-    )
-    parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="HTTP listen address (default: 0.0.0.0, only used with --transport http)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8080,
-        help="HTTP listen port (default: 8080, only used with --transport http)",
-    )
-    parser.add_argument(
-        "--json-response",
-        action="store_true",
-        default=False,
-        help="Use JSON responses instead of SSE streams (only used with --transport http)",
-    )
+# Shared options for hub credentials used by both ``serve`` and ``client``.
+_hub_url_option = click.option(
+    "--hub-url", envvar="VERLIHUB_HUB_URL",
+    default="http://localhost:4112/api/v1", show_default=True, show_envvar=True,
+    help="Hub REST API base URL.",
+)
+_username_option = click.option(
+    "--username", envvar="VERLIHUB_USERNAME", default="",
+    show_envvar=True, help="Login username.",
+)
+_password_option = click.option(
+    "--password", envvar="VERLIHUB_PASSWORD", default="",
+    show_envvar=True, help="Login password.",
+)
+_log_level_option = click.option(
+    "--log-level", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+    default="WARNING", show_default=True, help="Log level.",
+)
 
-    args = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, args.log_level), stream=sys.stderr)
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
+    """Verlihub MCP — expose hub tools to AI assistants (server + client)."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
-    if not args.username or not args.password:
-        parser.error(
+
+# ── serve ─────────────────────────────────────────────────────────────────
+
+@cli.command()
+@_hub_url_option
+@_username_option
+@_password_option
+@click.option("--name", default="verlihub", show_default=True, help="MCP server name.")
+@_log_level_option
+@click.option(
+    "--transport", type=click.Choice(["stdio", "http"], case_sensitive=False),
+    default="stdio", show_default=True, help="Transport mode.",
+)
+@click.option("--host", default="0.0.0.0", show_default=True,
+              help="HTTP listen address (only with --transport http).")
+@click.option("--port", type=int, default=8080, show_default=True,
+              help="HTTP listen port (only with --transport http).")
+@click.option("--json-response", is_flag=True, default=False,
+              help="Use JSON responses instead of SSE streams (HTTP only).")
+def serve(hub_url, username, password, name, log_level, transport, host, port, json_response):
+    """Start the MCP server (stdio or HTTP)."""
+    logging.basicConfig(level=getattr(logging, log_level.upper()), stream=sys.stderr)
+
+    if not username or not password:
+        raise click.UsageError(
             "Username and password are required. "
             "Use --username/--password or set VERLIHUB_USERNAME/VERLIHUB_PASSWORD."
         )
@@ -600,18 +598,233 @@ def main():
     _ensure_mcp()
 
     server = build_mcp_server(
-        hub_url=args.hub_url,
-        username=args.username,
-        password=args.password,
-        server_name=args.name,
+        hub_url=hub_url,
+        username=username,
+        password=password,
+        server_name=name,
     )
 
-    if args.transport == "http":
-        _run_http(server, host=args.host, port=args.port, json_response=args.json_response,
-                  log_level=args.log_level)
+    if transport.lower() == "http":
+        _run_http(server, host=host, port=port, json_response=json_response,
+                  log_level=log_level.upper())
     else:
         _run_stdio(server)
 
+
+# ── client ────────────────────────────────────────────────────────────────
+
+@cli.group()
+@click.option("--url", envvar="VERLIHUB_MCP_URL",
+              default="http://localhost:8080/mcp", show_default=True, show_envvar=True,
+              help="MCP server Streamable HTTP URL.")
+@_log_level_option
+@click.pass_context
+def client(ctx, url, log_level):
+    """Connect to a running MCP server over HTTP."""
+    logging.basicConfig(level=getattr(logging, log_level.upper()), stream=sys.stderr)
+    ctx.ensure_object(dict)
+    ctx.obj["url"] = url
+
+
+@client.command("tools")
+@click.pass_context
+def client_tools(ctx):
+    """List available tools on the MCP server."""
+    _ensure_mcp()
+    asyncio.run(_client_list_tools(ctx.obj["url"]))
+
+
+@client.command("resources")
+@click.pass_context
+def client_resources(ctx):
+    """List available resources on the MCP server."""
+    _ensure_mcp()
+    asyncio.run(_client_list_resources(ctx.obj["url"]))
+
+
+@client.command("prompts")
+@click.pass_context
+def client_prompts(ctx):
+    """List available prompts on the MCP server."""
+    _ensure_mcp()
+    asyncio.run(_client_list_prompts(ctx.obj["url"]))
+
+
+@client.command("call")
+@click.argument("tool_name")
+@click.argument("args_json", default="{}")
+@click.pass_context
+def client_call(ctx, tool_name, args_json):
+    """Call a tool on the MCP server.
+
+    TOOL_NAME is the tool to invoke.  ARGS_JSON is an optional JSON object
+    with the tool's input arguments (default: "{}").
+
+    \b
+    Examples:
+        verlihub-mcp client call get_hub_info
+        verlihub-mcp client call get_user_info '{"nick":"admin"}'
+        verlihub-mcp client call kick_user '{"nick":"spam","reason":"flooding"}'
+    """
+    _ensure_mcp()
+    try:
+        arguments = json.loads(args_json)
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"Invalid JSON: {exc}") from exc
+    asyncio.run(_client_call_tool(ctx.obj["url"], tool_name, arguments))
+
+
+@client.command("read")
+@click.argument("uri")
+@click.pass_context
+def client_read(ctx, uri):
+    """Read a resource from the MCP server.
+
+    \b
+    Examples:
+        verlihub-mcp client read hub://info
+        verlihub-mcp client read hub://users
+    """
+    _ensure_mcp()
+    asyncio.run(_client_read_resource(ctx.obj["url"], uri))
+
+
+@client.command("prompt")
+@click.argument("prompt_name")
+@click.argument("args_json", default="{}")
+@click.pass_context
+def client_prompt(ctx, prompt_name, args_json):
+    """Get a prompt from the MCP server.
+
+    \b
+    Examples:
+        verlihub-mcp client prompt hub_report
+        verlihub-mcp client prompt user_lookup '{"nick":"admin"}'
+    """
+    _ensure_mcp()
+    try:
+        arguments = json.loads(args_json)
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"Invalid JSON: {exc}") from exc
+    asyncio.run(_client_get_prompt(ctx.obj["url"], prompt_name, arguments))
+
+
+# ── client async helpers ──────────────────────────────────────────────────
+
+async def _connect_client(url: str):
+    """Open an MCP client session over Streamable HTTP and return (session, cm).
+
+    Caller is responsible for closing the context managers.
+    """
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    return streamablehttp_client(url=url), ClientSession
+
+
+async def _client_list_tools(url: str):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.list_tools()
+            for tool in result.tools:
+                props = tool.inputSchema.get("properties", {})
+                req = tool.inputSchema.get("required", [])
+                params = ", ".join(
+                    f"{k}{'*' if k in req else ''}" for k in props
+                ) or "(none)"
+                click.echo(f"  {click.style(tool.name, fg='cyan', bold=True)}")
+                click.echo(f"    {tool.description}")
+                click.echo(f"    params: {params}")
+
+
+async def _client_list_resources(url: str):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.list_resources()
+            for res in result.resources:
+                click.echo(
+                    f"  {click.style(str(res.uri), fg='green', bold=True)}  "
+                    f"{res.description or res.name}"
+                )
+
+
+async def _client_list_prompts(url: str):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.list_prompts()
+            for p in result.prompts:
+                args = ", ".join(
+                    f"{a.name}{'*' if a.required else ''}" for a in (p.arguments or [])
+                ) or "(none)"
+                click.echo(f"  {click.style(p.name, fg='yellow', bold=True)}")
+                click.echo(f"    {p.description}")
+                click.echo(f"    args: {args}")
+
+
+async def _client_call_tool(url: str, tool_name: str, arguments: dict):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+            for content in result.content:
+                text = getattr(content, "text", str(content))
+                # Pretty-print JSON if possible
+                try:
+                    obj = json.loads(text)
+                    click.echo(json.dumps(obj, indent=2))
+                except (json.JSONDecodeError, TypeError):
+                    click.echo(text)
+
+
+async def _client_read_resource(url: str, uri: str):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.read_resource(uri)
+            for content in result.contents:
+                text = getattr(content, "text", str(content))
+                try:
+                    obj = json.loads(text)
+                    click.echo(json.dumps(obj, indent=2))
+                except (json.JSONDecodeError, TypeError):
+                    click.echo(text)
+
+
+async def _client_get_prompt(url: str, prompt_name: str, arguments: dict):
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.session import ClientSession
+
+    async with streamablehttp_client(url=url) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.get_prompt(prompt_name, arguments)
+            for msg in result.messages:
+                role = click.style(msg.role, fg="magenta", bold=True)
+                text = getattr(msg.content, "text", str(msg.content))
+                click.echo(f"[{role}]\n{text}\n")
+
+
+# ---------------------------------------------------------------------------
+# Transport runners (used by ``serve``)
+# ---------------------------------------------------------------------------
 
 def _run_stdio(server):
     """Run the MCP server over stdio (for AI editors)."""
@@ -626,6 +839,8 @@ def _run_stdio(server):
 
 def _run_http(server, *, host: str, port: int, json_response: bool, log_level: str):
     """Run the MCP server over Streamable HTTP (for remote/web clients)."""
+    import contextlib
+
     import uvicorn
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -638,6 +853,7 @@ def _run_http(server, *, host: str, port: int, json_response: bool, log_level: s
         stateless=True,
     )
 
+    @contextlib.asynccontextmanager
     async def _lifespan(app):
         async with session_manager.run():
             logger.info("MCP HTTP server ready at http://%s:%d/mcp", host, port)
@@ -657,6 +873,15 @@ def _run_http(server, *, host: str, port: int, json_response: bool, log_level: s
         port=port,
         log_level=log_level.lower(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    """Click CLI entry point — registered as ``verlihub-mcp`` console script."""
+    cli(standalone_mode=True)
 
 
 if __name__ == "__main__":

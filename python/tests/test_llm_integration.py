@@ -939,79 +939,73 @@ class TestMcpServerBuild:
         except (ImportError, SystemExit):
             pytest.skip("mcp package not installed")
 
-    def test_mcp_cli_argparse(self):
-        """Verify the CLI module is importable (or correctly reports missing dep)."""
+    def test_mcp_cli_help(self):
+        """Verify the click CLI top-level --help works."""
         import subprocess
         import sys
-        # Use a proper Python script rather than one-liner to avoid syntax issues
-        script = (
-            "import sys\n"
-            "try:\n"
-            "    from verlihub.client.mcp import main\n"
-            "    sys.argv = ['test', '--help']\n"
-            "    try:\n"
-            "        main()\n"
-            "    except SystemExit:\n"
-            "        pass\n"
-            "except (ImportError, SystemExit):\n"
-            "    print('mcp not installed')\n"
-        )
         result = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "-m", "verlihub.client.mcp", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0
+        assert "serve" in result.stdout
+        assert "client" in result.stdout
 
-    def test_mcp_cli_transport_flag(self):
-        """Verify --transport http is accepted by the argument parser."""
+    def test_mcp_cli_serve_help(self):
+        """Verify 'serve --help' shows transport options."""
         import subprocess
         import sys
-        script = (
-            "import sys\n"
-            "try:\n"
-            "    from verlihub.client.mcp import main\n"
-            "    sys.argv = ['test', '--transport', 'http', '--help']\n"
-            "    try:\n"
-            "        main()\n"
-            "    except SystemExit:\n"
-            "        pass\n"
-            "except (ImportError, SystemExit):\n"
-            "    print('mcp not installed')\n"
-        )
         result = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "-m", "verlihub.client.mcp", "serve", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0
-        # --help output should mention both transports
         combined = result.stdout + result.stderr
-        if "mcp not installed" not in combined:
-            assert "http" in combined
-            assert "stdio" in combined
+        assert "http" in combined
+        assert "stdio" in combined
+        assert "--hub-url" in combined
+        assert "--transport" in combined
 
-    def test_mcp_cli_http_flags(self):
-        """Verify --host, --port, --json-response are accepted."""
+    def test_mcp_cli_serve_http_flags(self):
+        """Verify --host, --port, --json-response are accepted on serve."""
         import subprocess
         import sys
-        script = (
-            "import sys\n"
-            "try:\n"
-            "    from verlihub.client.mcp import main\n"
-            "    sys.argv = ['test', '--transport', 'http',\n"
-            "                '--host', '127.0.0.1', '--port', '9999',\n"
-            "                '--json-response', '--help']\n"
-            "    try:\n"
-            "        main()\n"
-            "    except SystemExit:\n"
-            "        pass\n"
-            "except (ImportError, SystemExit):\n"
-            "    print('mcp not installed')\n"
-        )
         result = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "-m", "verlihub.client.mcp", "serve", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0
+        combined = result.stdout + result.stderr
+        assert "--host" in combined
+        assert "--port" in combined
+        assert "--json-response" in combined
+
+    def test_mcp_cli_client_help(self):
+        """Verify the client subcommand shows tool/resource/prompt commands."""
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "verlihub.client.mcp", "client", "--help"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        combined = result.stdout + result.stderr
+        assert "tools" in combined
+        assert "resources" in combined
+        assert "call" in combined
+        assert "read" in combined
+        assert "prompts" in combined
+
+    def test_mcp_cli_client_call_help(self):
+        """Verify 'client call --help' shows usage examples."""
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "verlihub.client.mcp", "client", "call", "--help"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        assert "TOOL_NAME" in result.stdout
 
     def test_run_http_creates_starlette_app(self):
         """Test that _run_http builds a Starlette app and calls uvicorn."""
@@ -1025,21 +1019,15 @@ class TestMcpServerBuild:
         except (ImportError, SystemExit):
             pytest.skip("mcp package not installed")
 
-        with patch("verlihub.client.mcp.uvicorn") as mock_uvicorn:
-            mock_uvicorn.run = MagicMock()
-            # Monkey-patch uvicorn into the function's module scope
-            import verlihub.client.mcp as mcp_mod
-            original = getattr(mcp_mod, "uvicorn", None)
+        # uvicorn is imported locally inside _run_http, so we patch the
+        # module namespace that _run_http will import from.
+        mock_uvicorn = MagicMock()
+        with patch.dict("sys.modules", {"uvicorn": mock_uvicorn}):
             try:
-                mcp_mod.uvicorn = mock_uvicorn
                 _run_http(server, host="127.0.0.1", port=9090,
                           json_response=True, log_level="WARNING")
             except Exception:
-                pass  # uvicorn.run may raise in mock context
-            finally:
-                if original is not None:
-                    mcp_mod.uvicorn = original
-            # Verify uvicorn.run was called if mock captured it
+                pass  # may raise in mock context
             if mock_uvicorn.run.called:
                 call_kwargs = mock_uvicorn.run.call_args
                 assert call_kwargs[1]["host"] == "127.0.0.1"

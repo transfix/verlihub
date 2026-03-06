@@ -65,6 +65,7 @@ dependencies = [
     "jinja2>=3.1.0",         # For dashboard templates
     "python-multipart>=0.0.6",  # For form parsing in FastAPI/Starlette
     "pyyaml>=6.0.0",         # For YAML configuration files
+    "click>=8.0.0",          # For CLI tools
 ]
 
 [project.optional-dependencies]

@@ -186,14 +186,19 @@ The AI chat enforces the same permission model as the REST API:
 
 The LLM's system prompt is adjusted per user to prevent information leakage (e.g., regular users don't see IP addresses in responses).
 
-## MCP Server
+## MCP Server & Client
 
-The MCP server (`verlihub.client.mcp`) exposes the hub as context for AI
-coding assistants via the Model Context Protocol. It runs as a separate
-process and connects to the hub through the REST API using
-`verlihub.client.api.AsyncHubClient`.
+The `verlihub-mcp` CLI (`verlihub.client.mcp`) provides both a **server**
+and a **client** for the Model Context Protocol. The server exposes the hub
+as context for AI coding assistants; the client connects to a running MCP
+server and lets you interact from the terminal.
 
-Two transport modes are supported:
+```
+verlihub-mcp serve   — start the MCP server (stdio or HTTP)
+verlihub-mcp client  — query a running MCP server over HTTP
+```
+
+Two transport modes are supported for the server:
 
 | Transport | Flag | Use Case |
 |-----------|------|----------|
@@ -220,7 +225,7 @@ Create `.vscode/mcp.json`:
     "verlihub": {
       "type": "stdio",
       "command": "verlihub-mcp",
-      "args": [
+      "args": ["serve",
         "--hub-url", "http://localhost:4112/api/v1",
         "--username", "admin",
         "--password", "your_password"
@@ -238,7 +243,7 @@ Or using environment variables:
     "verlihub": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "verlihub.client.mcp"],
+      "args": ["-m", "verlihub.client.mcp", "serve"],
       "env": {
         "VERLIHUB_HUB_URL": "http://localhost:4112/api/v1",
         "VERLIHUB_USERNAME": "admin",
@@ -258,7 +263,7 @@ Add to `~/.config/claude/claude_desktop_config.json`:
   "mcpServers": {
     "verlihub": {
       "command": "verlihub-mcp",
-      "args": [
+      "args": ["serve",
         "--hub-url", "http://localhost:4112/api/v1",
         "--username", "admin",
         "--password", "your_password"
@@ -273,7 +278,7 @@ Add to `~/.config/claude/claude_desktop_config.json`:
 Start the MCP server over Streamable HTTP:
 
 ```bash
-verlihub-mcp --transport http \
+verlihub-mcp serve --transport http \
     --hub-url http://localhost:4112/api/v1 \
     --username admin --password secret \
     --host 0.0.0.0 --port 8080
@@ -313,6 +318,34 @@ POST http://localhost:8080/mcp
 GET  http://localhost:8080/mcp          (SSE stream)
 DELETE http://localhost:8080/mcp        (session termination)
 ```
+
+### MCP Client CLI
+
+Once an MCP server is running over HTTP, you can query it from the
+terminal using the built-in client:
+
+```bash
+# List tools, resources, and prompts
+verlihub-mcp client tools
+verlihub-mcp client resources
+verlihub-mcp client prompts
+
+# Call a tool
+verlihub-mcp client call get_hub_info
+verlihub-mcp client call get_user_info '{"nick":"admin"}'
+verlihub-mcp client call kick_user '{"nick":"spam","reason":"flooding"}'
+
+# Read a resource
+verlihub-mcp client read hub://info
+verlihub-mcp client read hub://users
+
+# Get a prompt
+verlihub-mcp client prompt hub_report
+verlihub-mcp client prompt user_lookup '{"nick":"admin"}'
+```
+
+By default the client connects to `http://localhost:8080/mcp`.  Use
+`--url` or set `VERLIHUB_MCP_URL` to point elsewhere.
 
 ### MCP Resources
 

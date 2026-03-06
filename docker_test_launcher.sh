@@ -13,6 +13,7 @@
 #   py-mysql      Run verlihub-py tests against MySQL
 #   py-postgres   Run verlihub-py tests against PostgreSQL
 #   py-all-db     Run verlihub-py tests against all databases
+#   llm           Run LLM integration tests (Ollama + qwen2.5:1.5b)
 #   original      Run original verlihub tests (MySQL only)
 #   dual          Run both original and verlihub-py tests
 #   sql-semantics Compare SQL semantics across databases
@@ -37,6 +38,7 @@ NC='\033[0m' # No Color
 # Docker compose files
 COMPOSE_TEST="docker/docker-compose.test.yml"
 COMPOSE_DUAL="docker/docker-compose.dual-test.yml"
+COMPOSE_LLM="docker/docker-compose.llm-test.yml"
 
 show_help() {
     echo -e "${BLUE}============================================${NC}"
@@ -51,6 +53,7 @@ show_help() {
     echo "  py-mysql      Run verlihub-py tests against MySQL"
     echo "  py-postgres   Run verlihub-py tests against PostgreSQL"
     echo "  py-all-db     Run verlihub-py tests against all databases"
+    echo "  llm           Run LLM integration tests (Ollama + qwen2.5:1.5b, CPU)"
     echo "  original      Run original verlihub tests (MySQL only)"
     echo "  dual          Run both original and verlihub-py tests"
     echo "  sql-semantics Compare SQL semantics across databases"
@@ -150,6 +153,7 @@ cleanup_containers() {
     
     docker compose -f "$COMPOSE_TEST" down -v --remove-orphans 2>/dev/null || true
     docker compose -f "$COMPOSE_DUAL" down -v --remove-orphans 2>/dev/null || true
+    docker compose -f "$COMPOSE_LLM" down -v --remove-orphans 2>/dev/null || true
     
     # Remove any dangling test images
     docker image prune -f --filter "label=verlihub-test" 2>/dev/null || true
@@ -381,6 +385,36 @@ run_sql_semantics_tests() {
     return $exit_code
 }
 
+run_llm_tests() {
+    log_info "Running LLM integration tests (Ollama + qwen2.5:1.5b)..."
+    log_info "This pulls ~1.2 GB model on first run — subsequent runs use cache"
+    cd "$PROJECT_DIR"
+
+    # Build images
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_LLM" build --quiet
+    fi
+
+    # Run tests (ollama-pull runs automatically via depends_on)
+    local exit_code=0
+    docker compose -f "$COMPOSE_LLM" up \
+        --build --abort-on-container-exit llm-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_LLM" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "LLM integration tests completed"
+    else
+        log_error "LLM integration tests failed"
+    fi
+
+    return $exit_code
+}
+
 run_all_tests() {
     log_info "Running all test suites..."
     
@@ -487,6 +521,9 @@ case $COMMAND in
         ;;
     py-all-db)
         run_py_all_db_tests
+        ;;
+    llm)
+        run_llm_tests
         ;;
     original)
         run_original_tests

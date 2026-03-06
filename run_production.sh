@@ -197,9 +197,23 @@ print(f"MATTERBRIDGE_TOKEN={matterbridge.get('api_token', '')}")
 print(f"MATTERBRIDGE_GATEWAY={matterbridge.get('gateway', 'verlihub')}")
 print(f"MATTERBRIDGE_CHANNEL={matterbridge.get('channel', '#general')}")
 
-# Check for startup commands
-startup_cmds = config.get('startup_commands', [])
-plugin_cmds = config.get('plugin_commands', [])
+# Matterbridge
+print(f"MATTERBRIDGE_ENABLED={q(str(mb.get('enabled', False)).lower())}")
+print(f"MATTERBRIDGE_URL={q(mb.get('api_url', 'http://matterbridge:4242'))}")
+print(f"MATTERBRIDGE_TOKEN={q(mb.get('api_token', ''))}")
+print(f"MATTERBRIDGE_GATEWAY={q(mb.get('gateway', 'verlihub'))}")
+print(f"MATTERBRIDGE_CHANNEL={q(mb.get('channel', '#general'))}")
+
+# LLM (Ollama sidecar)
+llm = config.get("llm", {})
+print(f"LLM_ENABLED={q(str(llm.get('enabled', False)).lower())}")
+print(f"LLM_MODEL={q(llm.get('model', 'qwen2.5:7b'))}")
+print(f"LLM_BASE_URL={q(llm.get('base_url', 'http://ollama:11434/v1'))}")
+print(f"LLM_PORT={q(llm.get('ollama_port', 11434))}")
+
+# Startup commands
+startup_cmds = config.get("startup_commands", [])
+plugin_cmds  = config.get("plugin_commands", [])
 all_cmds = startup_cmds + plugin_cmds
 print(f"HAS_COMMANDS={'true' if all_cmds else 'false'}")
 print(f"CMD_COUNT={len(all_cmds)}")
@@ -302,10 +316,174 @@ EOF
     networks:
       - ${NETWORK}
     restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Compose generation — verlihub-py hub ─────────────────────────────────────
+
+_compose_py_hub() {
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        # SQLite — no db container dependency, mount a volume for the DB file
+        local sqlite_vol="${CONFIG_VOLUME}-sqlite"
+        local sqlite_mount="/data"
+        local sqlite_file="${DB_PATH:-/data/verlihub.db}"
+        cat << EOF
+  # Verlihub-py Hub (Python) — SQLite
+  ${CONTAINER_PREFIX}-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: ${CONTAINER_PREFIX}-hub
+    command: >
+      python3 -m verlihub.server
+        -c /config/production.yml
+        --mode api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${HUB_PORT}:${HUB_PORT}"
+      - "${API_PORT}:${API_PORT}"
+    volumes:
+      - ./${CONFIG_FILE}:/config/production.yml:ro
+      - ${sqlite_vol}:${sqlite_mount}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+    else
+        cat << EOF
+  # Verlihub-py Hub (Python)
+  ${CONTAINER_PREFIX}-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: ${CONTAINER_PREFIX}-hub
+    depends_on:
+      ${CONTAINER_PREFIX}-db:
+        condition: service_healthy
+    command: >
+      python3 -m verlihub.server
+        -c /config/production.yml
+        --mode api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${HUB_PORT}:${HUB_PORT}"
+      - "${API_PORT}:${API_PORT}"
+    volumes:
+      - ./${CONFIG_FILE}:/config/production.yml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+    fi
+}
+
+# ── Compose generation — Ollama LLM sidecar ──────────────────────────────────
+
+_compose_ollama_service() {
+    cat << EOF
+  # Ollama LLM inference server
+  ${CONTAINER_PREFIX}-ollama:
+    image: ollama/ollama:latest
+    container_name: ${CONTAINER_PREFIX}-ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    volumes:
+      - ${CONTAINER_PREFIX}-ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Full compose file generation ─────────────────────────────────────────────
+
+generate_compose() {
+    local compose_file="docker-compose.production.yml"
+
+    log_info "Generating $compose_file (edition=${EDITION}, db=${DB_TYPE})..."
+
+    # Header
+    cat > "$compose_file" << EOF
+# Verlihub Production Docker Compose
+# Edition: ${EDITION}
+# Database: ${DB_TYPE}
+# Generated from: ${CONFIG_FILE}
+# Generated at: $(date -Iseconds)
+#
+# DO NOT EDIT — regenerate with: ./run_production.sh --config ${CONFIG_FILE} --edition ${EDITION}
+
+services:
+EOF
+
+    # Database service (not needed for SQLite)
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        log_info "SQLite mode — no database container needed"
+    elif [ "$DB_TYPE" = "postgresql" ]; then
+        _compose_postgres_service >> "$compose_file"
+    else
+        _compose_mysql_service >> "$compose_file"
+    fi
+
+    echo "" >> "$compose_file"
+
+    # Hub service
+    if [ "$EDITION" = "py" ]; then
+        _compose_py_hub >> "$compose_file"
+    else
+        _compose_legacy_hub >> "$compose_file"
+    fi
+
+    # Ollama LLM sidecar (verlihub-py only)
+    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        echo "" >> "$compose_file"
+        _compose_ollama_service >> "$compose_file"
+    fi
+
+    # Volumes and network
+    if [ "$DB_TYPE" = "sqlite" ]; then
+        local sqlite_vol="${CONFIG_VOLUME}-sqlite"
+        local ollama_vol_line=""
+        [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ] && \
+            ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
+        cat >> "$compose_file" << EOF
 
 volumes:
-  ${MYSQL_VOLUME}:
   ${CONFIG_VOLUME}:
+  ${sqlite_vol}:${ollama_vol_line}
+
+networks:
+  ${NETWORK}:
+    driver: bridge
+EOF
+    else
+        local ollama_vol_line=""
+        [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ] && \
+            ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
+        cat >> "$compose_file" << EOF
+
+volumes:
+  ${DB_VOLUME}:
+  ${CONFIG_VOLUME}:${ollama_vol_line}
 
 networks:
   ${NETWORK}:
@@ -612,6 +790,10 @@ start_production() {
         fi
     fi
     echo "  Matterbridge: $MATTERBRIDGE_ENABLED"
+    if [ "$EDITION" = "py" ]; then
+        echo "  LLM (Ollama): $LLM_ENABLED"
+        [ "$LLM_ENABLED" = "true" ] && echo "    Model: $LLM_MODEL"
+    fi
     echo "  Container Prefix: $CONTAINER_PREFIX"
     echo "  Startup Commands: $CMD_COUNT"
     echo ""
@@ -650,22 +832,32 @@ start_production() {
     
     # Give hub a moment to fully initialize
     sleep 5
-    
-    # Update hub settings from config (runs on every start to sync config changes)
-    update_hub_settings || true
-    
-    # Update MOTD file if configured (runs on every start)
-    update_motd || true
-    
-    # Update TLS certificates if configured
-    update_tls_certs || true
-    
-    # Register additional users (runs on every start to sync config changes)
-    register_users || true
-    
-    # Run startup commands
-    if [ "$first_run" = "true" ] || [ "$HAS_COMMANDS" = "true" ]; then
-        run_startup_commands || true
+
+    # Pull LLM model if Ollama sidecar is enabled
+    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        log_info "Pulling LLM model '${LLM_MODEL}' via Ollama (this may take a while on first run)..."
+        local ollama_container="${CONTAINER_PREFIX}-ollama"
+        docker exec "$ollama_container" ollama pull "$LLM_MODEL" 2>&1 | tail -5
+        if [ $? -eq 0 ]; then
+            log_success "Model '$LLM_MODEL' is ready"
+        else
+            log_warn "Failed to pull model '$LLM_MODEL' — LLM chat may not work"
+        fi
+    fi
+
+    # Post-start steps (legacy only — verlihub-py handles all of this from YAML)
+    if [ "$EDITION" = "legacy" ]; then
+        update_hub_settings || true
+        update_motd || true
+        update_tls_certs || true
+        register_users || true
+
+        if [ "$first_run" = "true" ] || [ "$HAS_COMMANDS" = "true" ]; then
+            run_startup_commands || true
+        fi
+        
+        # Auto-load Lua scripts after startup commands (which load the Lua plugin)
+        run_lua_autoload || true
     fi
     
     echo ""
@@ -678,6 +870,10 @@ start_production() {
     if [ "$API_ENABLED" = "true" ] && [ "$PYTHON_MODE" = "single" ]; then
         echo "  API: http://$HOSTNAME:$API_PORT"
         echo "  Web App: http://$HOSTNAME:$API_PORT/app"
+    fi
+    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        echo "  LLM Chat:  http://$HOSTNAME:$API_PORT/api/v1/llm/chat"
+        echo "  LLM Model: $LLM_MODEL (via Ollama)"
     fi
     echo ""
     echo "Commands:"

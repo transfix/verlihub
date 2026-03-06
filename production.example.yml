@@ -307,6 +307,45 @@ api:
     - "https://your-domain.com"
     - "https://www.your-domain.com"
 
+# =============================================================================
+# LLM Chat Integration (verlihub-py only)
+# Enables AI assistant chat via a self-hosted LLM (Ollama sidecar).
+# When enabled, run_production.sh automatically starts an Ollama container
+# alongside the hub and pulls the configured model on first run.
+# =============================================================================
+llm:
+  enabled: false
+  # Ollama-compatible OpenAI base URL.
+  # The default points to the Ollama sidecar container started by run_production.sh.
+  base_url: "http://vh-prod-ollama:11434/v1"
+  # Model to use. Recommendations:
+  #   Budget (CPU, ~2 GB):   qwen2.5:3b
+  #   Quality (GPU, ~4.5 GB): qwen2.5:7b
+  model: "qwen2.5:7b"
+  # API key (Ollama ignores this but it's required by the OpenAI client)
+  api_key: "ollama"
+  # LLM generation parameters
+  temperature: 0.3
+  max_tokens: 2048
+  # Max tool-calling rounds per request (prevents infinite loops)
+  max_tool_rounds: 8
+  # Minimum user class to access LLM chat (3 = operators)
+  min_class: 3
+  # Minimum user class for admin-level LLM tools (5 = masters)
+  admin_class: 5
+  # Ollama host port to expose on the Docker host (0 = don't expose)
+  # ollama_port: 11434
+
+# =============================================================================
+# MCP (Model Context Protocol) Server
+# Exposes hub tools/resources via MCP for external AI clients.
+# Mounted at /api/v1/mcp when enabled.
+# =============================================================================
+mcp:
+  enabled: false
+  min_class: 3
+  admin_class: 5
+
 # TLS Configuration
 # Enables encrypted NMDCS connections for clients
 # Requires Verlihub built with USE_FEARTLS_PROXY=ON or USE_TLS_PROXY=ON

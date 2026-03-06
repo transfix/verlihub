@@ -2,7 +2,7 @@
 Verlihub MCP Server — Model Context Protocol interface for AI assistants.
 
 Exposes Verlihub hub resources and tools to AI coding assistants
-(VS Code Copilot, Claude Desktop, Cursor, etc.) via the MCP stdio protocol.
+(VS Code Copilot, Claude Desktop, Cursor, etc.) via MCP over stdio or HTTP.
 
 This module uses the ``verlihub.client.api.AsyncHubClient`` to communicate
 with the hub's REST API, so it can run in a separate process or on a
@@ -13,7 +13,13 @@ Usage (stdio mode — for AI editors):
         --hub-url http://localhost:4112/api/v1 \\
         --username admin --password secret
 
-Usage (from VS Code .vscode/mcp.json):
+Usage (HTTP mode — for remote / web clients):
+    python -m verlihub.client.mcp --transport http \\
+        --hub-url http://localhost:4112/api/v1 \\
+        --username admin --password secret \\
+        --host 0.0.0.0 --port 8080
+
+Usage (from VS Code .vscode/mcp.json — stdio):
     {
         "servers": {
             "verlihub": {
@@ -22,6 +28,16 @@ Usage (from VS Code .vscode/mcp.json):
                 "args": ["-m", "verlihub.client.mcp",
                          "--hub-url", "http://localhost:4112/api/v1",
                          "--username", "admin", "--password", "secret"]
+            }
+        }
+    }
+
+Usage (from VS Code .vscode/mcp.json — HTTP):
+    {
+        "servers": {
+            "verlihub": {
+                "type": "http",
+                "url": "http://localhost:8080/mcp"
             }
         }
     }
@@ -516,7 +532,7 @@ def build_mcp_server(
 # ---------------------------------------------------------------------------
 
 def main():
-    """Run the MCP server in stdio mode."""
+    """Run the MCP server in stdio or HTTP mode."""
     parser = argparse.ArgumentParser(
         prog="verlihub-mcp",
         description="Verlihub MCP Server — expose hub tools to AI assistants",
@@ -547,6 +563,29 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: WARNING)",
     )
+    parser.add_argument(
+        "--transport",
+        default="stdio",
+        choices=["stdio", "http"],
+        help="Transport mode (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="HTTP listen address (default: 0.0.0.0, only used with --transport http)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="HTTP listen port (default: 8080, only used with --transport http)",
+    )
+    parser.add_argument(
+        "--json-response",
+        action="store_true",
+        default=False,
+        help="Use JSON responses instead of SSE streams (only used with --transport http)",
+    )
 
     args = parser.parse_args()
 
@@ -559,7 +598,6 @@ def main():
         )
 
     _ensure_mcp()
-    from mcp.server.stdio import stdio_server
 
     server = build_mcp_server(
         hub_url=args.hub_url,
@@ -568,11 +606,57 @@ def main():
         server_name=args.name,
     )
 
+    if args.transport == "http":
+        _run_http(server, host=args.host, port=args.port, json_response=args.json_response,
+                  log_level=args.log_level)
+    else:
+        _run_stdio(server)
+
+
+def _run_stdio(server):
+    """Run the MCP server over stdio (for AI editors)."""
+    from mcp.server.stdio import stdio_server
+
     async def _run():
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, server.create_initialization_options())
 
     asyncio.run(_run())
+
+
+def _run_http(server, *, host: str, port: int, json_response: bool, log_level: str):
+    """Run the MCP server over Streamable HTTP (for remote/web clients)."""
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=json_response,
+        stateless=True,
+    )
+
+    async def _lifespan(app):
+        async with session_manager.run():
+            logger.info("MCP HTTP server ready at http://%s:%d/mcp", host, port)
+            yield
+
+    starlette_app = Starlette(
+        debug=(log_level == "DEBUG"),
+        routes=[
+            Mount("/mcp", app=session_manager.handle_request),
+        ],
+        lifespan=_lifespan,
+    )
+
+    uvicorn.run(
+        starlette_app,
+        host=host,
+        port=port,
+        log_level=log_level.lower(),
+    )
 
 
 if __name__ == "__main__":

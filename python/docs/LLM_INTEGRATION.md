@@ -193,6 +193,13 @@ coding assistants via the Model Context Protocol. It runs as a separate
 process and connects to the hub through the REST API using
 `verlihub.client.api.AsyncHubClient`.
 
+Two transport modes are supported:
+
+| Transport | Flag | Use Case |
+|-----------|------|----------|
+| **stdio** (default) | `--transport stdio` | AI editors (VS Code, Cursor, Claude Desktop) |
+| **HTTP** | `--transport http` | Remote clients, web dashboards, multi-user setups |
+
 ### Installation
 
 ```bash
@@ -201,7 +208,9 @@ pip install 'verlihub[mcp]'
 pip install 'verlihub[ai]'
 ```
 
-### VS Code Integration
+### Stdio Mode (AI Editors)
+
+#### VS Code Integration
 
 Create `.vscode/mcp.json`:
 
@@ -240,7 +249,7 @@ Or using environment variables:
 }
 ```
 
-### Claude Desktop Integration
+#### Claude Desktop Integration
 
 Add to `~/.config/claude/claude_desktop_config.json`:
 
@@ -257,6 +266,52 @@ Add to `~/.config/claude/claude_desktop_config.json`:
     }
   }
 }
+```
+
+### HTTP Mode (Remote / Web Clients)
+
+Start the MCP server over Streamable HTTP:
+
+```bash
+verlihub-mcp --transport http \
+    --hub-url http://localhost:4112/api/v1 \
+    --username admin --password secret \
+    --host 0.0.0.0 --port 8080
+```
+
+The server listens on `http://<host>:<port>/mcp` using the
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
+transport from the MCP specification.
+
+#### HTTP-specific flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `8080` | Bind port |
+| `--json-response` | off | Reply with JSON instead of SSE streams |
+
+#### VS Code (HTTP)
+
+```json
+{
+  "servers": {
+    "verlihub": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+#### Any MCP HTTP Client
+
+The endpoint is a standard MCP Streamable HTTP endpoint:
+
+```
+POST http://localhost:8080/mcp
+GET  http://localhost:8080/mcp          (SSE stream)
+DELETE http://localhost:8080/mcp        (session termination)
 ```
 
 ### MCP Resources

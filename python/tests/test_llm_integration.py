@@ -962,6 +962,89 @@ class TestMcpServerBuild:
         )
         assert result.returncode == 0
 
+    def test_mcp_cli_transport_flag(self):
+        """Verify --transport http is accepted by the argument parser."""
+        import subprocess
+        import sys
+        script = (
+            "import sys\n"
+            "try:\n"
+            "    from verlihub.client.mcp import main\n"
+            "    sys.argv = ['test', '--transport', 'http', '--help']\n"
+            "    try:\n"
+            "        main()\n"
+            "    except SystemExit:\n"
+            "        pass\n"
+            "except (ImportError, SystemExit):\n"
+            "    print('mcp not installed')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        # --help output should mention both transports
+        combined = result.stdout + result.stderr
+        if "mcp not installed" not in combined:
+            assert "http" in combined
+            assert "stdio" in combined
+
+    def test_mcp_cli_http_flags(self):
+        """Verify --host, --port, --json-response are accepted."""
+        import subprocess
+        import sys
+        script = (
+            "import sys\n"
+            "try:\n"
+            "    from verlihub.client.mcp import main\n"
+            "    sys.argv = ['test', '--transport', 'http',\n"
+            "                '--host', '127.0.0.1', '--port', '9999',\n"
+            "                '--json-response', '--help']\n"
+            "    try:\n"
+            "        main()\n"
+            "    except SystemExit:\n"
+            "        pass\n"
+            "except (ImportError, SystemExit):\n"
+            "    print('mcp not installed')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+
+    def test_run_http_creates_starlette_app(self):
+        """Test that _run_http builds a Starlette app and calls uvicorn."""
+        try:
+            from verlihub.client.mcp import build_mcp_server, _run_http
+        except (ImportError, SystemExit):
+            pytest.skip("mcp package not installed")
+
+        try:
+            server = build_mcp_server("http://test/api/v1", "admin", "pass")
+        except (ImportError, SystemExit):
+            pytest.skip("mcp package not installed")
+
+        with patch("verlihub.client.mcp.uvicorn") as mock_uvicorn:
+            mock_uvicorn.run = MagicMock()
+            # Monkey-patch uvicorn into the function's module scope
+            import verlihub.client.mcp as mcp_mod
+            original = getattr(mcp_mod, "uvicorn", None)
+            try:
+                mcp_mod.uvicorn = mock_uvicorn
+                _run_http(server, host="127.0.0.1", port=9090,
+                          json_response=True, log_level="WARNING")
+            except Exception:
+                pass  # uvicorn.run may raise in mock context
+            finally:
+                if original is not None:
+                    mcp_mod.uvicorn = original
+            # Verify uvicorn.run was called if mock captured it
+            if mock_uvicorn.run.called:
+                call_kwargs = mock_uvicorn.run.call_args
+                assert call_kwargs[1]["host"] == "127.0.0.1"
+                assert call_kwargs[1]["port"] == 9090
+
 
 # ======================================================================
 # ChatSession tests

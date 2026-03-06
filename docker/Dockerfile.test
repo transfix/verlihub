@@ -43,8 +43,8 @@ RUN pip install --no-cache-dir \
     python-multipart>=0.0.6 \
     httpx>=0.26.0
 
-# Install the verlihub package in editable mode
-RUN pip install --no-cache-dir -e ./python
+# Install the verlihub package in editable mode (include mcp extra for MCP tests)
+RUN pip install --no-cache-dir -e "./python[mcp]"
 
 # Create results directory
 RUN mkdir -p /app/results

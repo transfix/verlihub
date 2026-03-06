@@ -439,11 +439,7 @@ class TestSendPmAs:
         ctx._cpp = MagicMock()
         ctx._cpp.SendToUser.return_value = True
 
-        # Import and call the real method bound to a mock
-        from verlihub.core import HubContext
-
-        # We can't easily instantiate HubContext (needs C++ bindings),
-        # so test the format logic directly
+        # Test the format logic directly (no C++ bindings needed)
         from_nick = "Hub-Security"
         to_nick = "TestUser"
         message = "Hello there!"

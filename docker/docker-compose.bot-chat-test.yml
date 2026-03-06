@@ -16,8 +16,6 @@
 #   # Clean up
 #   docker compose -f docker/docker-compose.bot-chat-test.yml down -v
 
-version: "3.8"
-
 services:
   # ==========================================================================
   # Ollama Inference Server
@@ -28,11 +26,11 @@ services:
     environment:
       OLLAMA_HOST: "0.0.0.0"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 5s
-      timeout: 5s
+      timeout: 10s
       retries: 30
-      start_period: 10s
+      start_period: 15s
     networks:
       - bot-chat-test-network
     volumes:

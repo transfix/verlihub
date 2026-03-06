@@ -404,11 +404,11 @@ _compose_ollama_service() {
     volumes:
       - ${CONTAINER_PREFIX}-ollama-models:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 30
-      start_period: 10s
+      start_period: 15s
     networks:
       - ${NETWORK}
     restart: ${RESTART_POLICY}

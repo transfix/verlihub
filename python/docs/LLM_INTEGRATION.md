@@ -84,12 +84,6 @@ llm:
   min_class: 3      # 3 = Operator
   # Permission: minimum class for admin/write tools
   admin_class: 5    # 5 = Admin
-
-# =============================================================================
-# MCP Server
-# =============================================================================
-mcp:
-  enabled: false
 ```
 
 ### Environment Variables
@@ -107,7 +101,6 @@ All LLM settings can also be set via environment variables:
 | `VH_LLM_MAX_TOKENS` | `llm.max_tokens` | `2048` |
 | `VH_LLM_MIN_CLASS` | `llm.min_class` | `3` |
 | `VH_LLM_ADMIN_CLASS` | `llm.admin_class` | `5` |
-| `VH_MCP_ENABLED` | `mcp.enabled` | `false` |
 
 For the MCP server (separate process):
 

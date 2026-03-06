@@ -341,12 +341,5 @@ llm:
   # Permission: minimum class for admin/write tools (kick, broadcast, config)
   admin_class: 5         # 5 = Admin
 
-# =============================================================================
-# MCP Server Configuration (Model Context Protocol)
-# =============================================================================
-# Enables an MCP server that exposes hub resources/tools to AI coding
-# assistants (VS Code Copilot, Claude Desktop, etc.).
-# See docs/LLM_INTEGRATION.md for setup instructions.
-mcp:
-  enabled: false
+
 

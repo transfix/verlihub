@@ -396,7 +396,6 @@ class VerlihubConfig:
     lua: LuaConfig = field(default_factory=LuaConfig)
     python: PythonConfig = field(default_factory=PythonConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
-    mcp: McpConfig = field(default_factory=McpConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
@@ -607,13 +606,6 @@ class VerlihubConfig:
                 admin_class=llm_data.get("admin_class", config.llm.admin_class),
             )
         
-        # MCP server
-        if "mcp" in data:
-            mcp_data = data["mcp"]
-            config.mcp = McpConfig(
-                enabled=mcp_data.get("enabled", config.mcp.enabled),
-            )
-        
         # Logging
         if "logging" in data:
             log = data["logging"]
@@ -704,12 +696,6 @@ class VerlihubConfig:
                 max_tokens=int(os.getenv("VH_LLM_MAX_TOKENS", str(config.llm.max_tokens))),
                 min_class=int(os.getenv("VH_LLM_MIN_CLASS", str(config.llm.min_class))),
                 admin_class=int(os.getenv("VH_LLM_ADMIN_CLASS", str(config.llm.admin_class))),
-            )
-        
-        # MCP from environment
-        if os.getenv("VH_MCP_ENABLED"):
-            config.mcp = McpConfig(
-                enabled=os.getenv("VH_MCP_ENABLED", "").lower() in ("1", "true", "yes"),
             )
         
         return config

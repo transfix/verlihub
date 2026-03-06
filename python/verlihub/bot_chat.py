@@ -345,6 +345,10 @@ class BotChatHandler:
             return True  # not for us — let it through
 
         if not self.llm_cfg or not self.llm_cfg.enabled:
+            self._send_pm(
+                from_nick,
+                "AI chat is currently disabled. Please contact a hub operator.",
+            )
             return True
 
         log.info("Bot PM from %s: %s", from_nick, message[:120])
@@ -352,6 +356,10 @@ class BotChatHandler:
         loop = self._get_loop()
         if loop is None:
             log.warning("No asyncio loop — cannot process bot PM")
+            self._send_pm(
+                from_nick,
+                "I'm not fully started yet — please try again in a moment.",
+            )
             return True
 
         # Fire-and-forget the async LLM call
@@ -409,16 +417,39 @@ class BotChatHandler:
             )
             response_text, _tools = await session.chat(message)
             self._send_pm(nick, response_text)
-        except Exception:
+        except ImportError:
+            log.warning("openai package not installed — bot chat unavailable")
+            self._send_pm(
+                nick,
+                "AI chat is not available (missing dependencies). "
+                "Please contact a hub operator.",
+            )
+        except Exception as exc:
             log.exception("Bot PM handler error for %s", nick)
-            self._send_pm(nick, "Sorry, I encountered an error processing your message.")
+            # Provide a user-friendly message depending on error type
+            err_msg = str(exc).lower()
+            if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
+                self._send_pm(
+                    nick,
+                    "The AI backend is temporarily unreachable. Please try again later.",
+                )
+            else:
+                self._send_pm(
+                    nick,
+                    "Sorry, I encountered an error processing your message.",
+                )
 
     async def _handle_chat_async(self, nick: str, message: str) -> None:
-        """Process a main-chat mention via the LLM pipeline (no tools)."""
+        """Process a main-chat mention via the LLM pipeline (no tools).
+
+        All users share one public chat session (``chat:public``) so
+        conversation context is visible and consistent for everyone in
+        the main chat room.
+        """
         try:
             user_class = self._get_user_class(nick)
             session = _get_or_create_session(
-                f"chat:{nick}",
+                "chat:public",
                 nick,
                 user_class,
                 self._bot_nick,
@@ -428,6 +459,8 @@ class BotChatHandler:
             )
             response_text, _tools = await session.chat(message)
             self._send_chat(response_text)
+        except ImportError:
+            log.warning("openai package not installed — bot chat unavailable")
         except Exception:
             log.exception("Bot chat handler error for %s", nick)
 

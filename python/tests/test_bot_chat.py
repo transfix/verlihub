@@ -256,6 +256,52 @@ class TestBotChatHandler:
         assert handler._on_pm("user1", "Hub-Security", "hi") is True
         assert handler._on_chat("user1", "Hub-Security: hi") is True
 
+    def test_llm_disabled_pm_sends_friendly_message(self, mock_hub_context):
+        """PM to bot when LLM disabled sends a friendly explanation."""
+        from verlihub.bot_chat import BotChatHandler
+
+        disabled_cfg = LlmConfig(enabled=False)
+        with patch("verlihub.config.get_config_optional", return_value=None):
+            handler = BotChatHandler(mock_hub_context, disabled_cfg)
+            handler._bot_nick = "Hub-Security"
+
+        handler._on_pm("user1", "Hub-Security", "hello")
+        mock_hub_context.send_pm_as.assert_called_once()
+        _, args, _ = mock_hub_context.send_pm_as.mock_calls[0]
+        assert args[1] == "user1"  # to_nick
+        assert "disabled" in args[2].lower()
+
+    def test_llm_none_cfg_pm_sends_friendly_message(self, mock_hub_context):
+        """PM to bot when llm_cfg is None sends a friendly explanation."""
+        from verlihub.bot_chat import BotChatHandler
+
+        with patch("verlihub.config.get_config_optional", return_value=None):
+            handler = BotChatHandler(mock_hub_context, None)
+            handler._bot_nick = "Hub-Security"
+
+        handler._on_pm("user1", "Hub-Security", "hello")
+        mock_hub_context.send_pm_as.assert_called_once()
+        _, args, _ = mock_hub_context.send_pm_as.mock_calls[0]
+        assert "disabled" in args[2].lower()
+
+    def test_no_loop_pm_sends_friendly_message(self, mock_hub_context, llm_cfg):
+        """PM when no event loop sends a 'try again' message."""
+        from verlihub.bot_chat import BotChatHandler
+
+        with patch("verlihub.config.get_config_optional", return_value=None):
+            handler = BotChatHandler(mock_hub_context, llm_cfg)
+            handler._bot_nick = "Hub-Security"
+            handler._hub_name = "TestHub"
+            handler._loop = None  # force no loop
+
+        # Patch _get_loop to return None simulating no running event loop
+        with patch.object(handler, "_get_loop", return_value=None):
+            handler._on_pm("user1", "Hub-Security", "hi")
+
+        mock_hub_context.send_pm_as.assert_called_once()
+        _, args, _ = mock_hub_context.send_pm_as.mock_calls[0]
+        assert "try again" in args[2].lower()
+
     def test_shutdown_clears_sessions(self, mock_hub_context, llm_cfg):
         """Shutdown clears all active sessions."""
         from verlihub.bot_chat import BotChatHandler, _sessions, _sessions_lock
@@ -329,11 +375,51 @@ class TestSessionManagement:
             "pm:user", "user", 3, "Hub-Security", "TestHub", "pm", llm_cfg
         )
         s_chat = _get_or_create_session(
-            "chat:user", "user", 3, "Hub-Security", "TestHub", "chat", llm_cfg
+            "chat:public", "user", 3, "Hub-Security", "TestHub", "chat", llm_cfg
         )
         assert s_pm is not s_chat
         assert len(s_pm.tools) > 0  # operator in PM gets tools
         assert len(s_chat.tools) == 0  # chat never gets tools
+
+        with _sessions_lock:
+            _sessions.clear()
+
+    def test_shared_public_chat_session(self, llm_cfg):
+        """All users share the same 'chat:public' session in main chat."""
+        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+
+        with _sessions_lock:
+            _sessions.clear()
+
+        s1 = _get_or_create_session(
+            "chat:public", "alice", 3, "Hub-Security", "TestHub", "chat", llm_cfg
+        )
+        s2 = _get_or_create_session(
+            "chat:public", "bob", 1, "Hub-Security", "TestHub", "chat", llm_cfg
+        )
+        assert s1 is s2  # same session object — shared context
+
+        with _sessions_lock:
+            _sessions.clear()
+
+    def test_private_sessions_isolated_per_user(self, llm_cfg):
+        """Each user gets their own PM session — no shared state."""
+        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+
+        with _sessions_lock:
+            _sessions.clear()
+
+        s_alice = _get_or_create_session(
+            "pm:alice", "alice", 5, "Hub-Security", "TestHub", "pm", llm_cfg
+        )
+        s_bob = _get_or_create_session(
+            "pm:bob", "bob", 3, "Hub-Security", "TestHub", "pm", llm_cfg
+        )
+        assert s_alice is not s_bob
+        assert s_alice.nick == "alice"
+        assert s_bob.nick == "bob"
+        # They should have independent message histories
+        assert s_alice.messages is not s_bob.messages
 
         with _sessions_lock:
             _sessions.clear()

@@ -198,7 +198,7 @@ class BotChatE2ETests:
             # Authenticate to get a JWT
             r = requests.post(
                 f"{self.api_url}/api/v1/auth/login",
-                json={"username": self.admin_user, "password": self.admin_pass},
+                json={"nick": self.admin_user, "password": self.admin_pass},
                 timeout=10,
             )
             token = r.json().get("access_token", "")

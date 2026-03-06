@@ -136,7 +136,7 @@ class LlmE2ETests:
         name = "authenticate"
         try:
             r = _post(f"{self.api_url}/api/v1/auth/login", json_data={
-                "username": self.admin_user,
+                "nick": self.admin_user,
                 "password": self.admin_pass,
             }, timeout=15)
             if r.status_code == 200:

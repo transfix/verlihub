@@ -115,6 +115,13 @@ async def get_user_from_ws_cookie(websocket: WebSocket) -> Optional[TokenData]:
         return None
 
 
+@ws_router.websocket("/llm-chat")
+async def websocket_llm_chat(websocket: WebSocket):
+    """LLM chat WebSocket — delegates to the llm route module."""
+    from verlihub.api.routes.llm import ws_llm_chat
+    await ws_llm_chat(websocket)
+
+
 @ws_router.websocket("/hub")
 async def websocket_hub(websocket: WebSocket):
     """

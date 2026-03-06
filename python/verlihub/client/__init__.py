@@ -41,4 +41,11 @@ __all__ = [
     "HubClient",
     "AsyncHubClient",
     "HubClientError",
+    "build_mcp_server",
 ]
+
+
+def build_mcp_server(*args, **kwargs):
+    """Lazy import wrapper for the MCP server builder."""
+    from verlihub.client.mcp import build_mcp_server as _build
+    return _build(*args, **kwargs)

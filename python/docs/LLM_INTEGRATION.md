@@ -61,48 +61,34 @@ Both features connect to any **OpenAI-compatible LLM backend** (Ollama, vLLM, ll
 
 ## Configuration
 
-Add to your `config.yml`:
+Add to your `config.yml` (see also `config.example.yml`):
 
 ```yaml
 # =============================================================================
 # LLM Integration (AI Chat Assistant)
 # =============================================================================
 llm:
-  # Enable the AI chat feature in the dashboard
   enabled: false
 
   # OpenAI-compatible API endpoint
-  # Works with: Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, any OpenAI API
   base_url: "http://localhost:11434/v1"   # Ollama default
+  model: "qwen2.5:7b"                    # Must support tool/function calling
+  api_key: ""                             # Leave empty for most local servers
 
-  # Model name (must support tool/function calling)
-  model: "llama3.1"
-
-  # API key (use "ollama" for local Ollama, real key for hosted services)
-  api_key: "ollama"
-
-  # Maximum tool-call round-trips per user message (prevents runaway loops)
-  max_tool_rounds: 5
-
-  # Temperature for LLM responses (lower = more deterministic)
+  # LLM parameters
   temperature: 0.3
-
-  # Maximum tokens in LLM response
   max_tokens: 2048
+  max_tool_rounds: 8
 
-  # Minimum user class to access AI chat
-  # -1 = public (no login), 0 = any logged-in user, 3 = operators, 5 = admins
-  min_class: 3
-
-  # Minimum user class for admin-level AI tools (kick, ban, config, console)
-  # Users below this class get read-only tools only
-  admin_class: 5
+  # Permission: minimum DC++ user class to access AI chat
+  min_class: 3      # 3 = Operator
+  # Permission: minimum class for admin/write tools
+  admin_class: 5    # 5 = Admin
 
 # =============================================================================
 # MCP Server
 # =============================================================================
 mcp:
-  # Enable the MCP server entry point
   enabled: false
 ```
 
@@ -114,12 +100,22 @@ All LLM settings can also be set via environment variables:
 |----------|-----------|---------|
 | `VH_LLM_ENABLED` | `llm.enabled` | `false` |
 | `VH_LLM_BASE_URL` | `llm.base_url` | `http://localhost:11434/v1` |
-| `VH_LLM_MODEL` | `llm.model` | `llama3.1` |
-| `VH_LLM_API_KEY` | `llm.api_key` | `ollama` |
-| `VH_LLM_MAX_TOOL_ROUNDS` | `llm.max_tool_rounds` | `5` |
+| `VH_LLM_MODEL` | `llm.model` | `qwen2.5:7b` |
+| `VH_LLM_API_KEY` | `llm.api_key` | (empty) |
+| `VH_LLM_MAX_TOOL_ROUNDS` | `llm.max_tool_rounds` | `8` |
+| `VH_LLM_TEMPERATURE` | `llm.temperature` | `0.3` |
+| `VH_LLM_MAX_TOKENS` | `llm.max_tokens` | `2048` |
 | `VH_LLM_MIN_CLASS` | `llm.min_class` | `3` |
 | `VH_LLM_ADMIN_CLASS` | `llm.admin_class` | `5` |
 | `VH_MCP_ENABLED` | `mcp.enabled` | `false` |
+
+For the MCP server (separate process):
+
+| Variable | CLI Flag | Default |
+|----------|---------|---------|
+| `VERLIHUB_HUB_URL` | `--hub-url` | `http://localhost:4112/api/v1` |
+| `VERLIHUB_USERNAME` | `--username` | (required) |
+| `VERLIHUB_PASSWORD` | `--password` | (required) |
 
 ## Setup Guide
 
@@ -131,7 +127,7 @@ All LLM settings can also be set via environment variables:
 curl -fsSL https://ollama.ai/install.sh | sh
 
 # Pull a model with tool-calling support
-ollama pull llama3.1
+ollama pull qwen2.5:7b
 
 # Ollama serves on http://localhost:11434 by default
 ```
@@ -163,8 +159,7 @@ llm:
 llm:
   enabled: true
   base_url: "http://localhost:11434/v1"
-  model: "llama3.1"
-  api_key: "ollama"
+  model: "qwen2.5:7b"
   min_class: 0      # Allow all logged-in users
   admin_class: 5    # Only admins get write tools
 ```
@@ -200,7 +195,18 @@ The LLM's system prompt is adjusted per user to prevent information leakage (e.g
 
 ## MCP Server
 
-The MCP server exposes the hub as context for LLM tools in IDEs.
+The MCP server (`verlihub.client.mcp`) exposes the hub as context for AI
+coding assistants via the Model Context Protocol. It runs as a separate
+process and connects to the hub through the REST API using
+`verlihub.client.api.AsyncHubClient`.
+
+### Installation
+
+```bash
+pip install 'verlihub[mcp]'
+# or for everything:
+pip install 'verlihub[ai]'
+```
 
 ### VS Code Integration
 
@@ -211,12 +217,30 @@ Create `.vscode/mcp.json`:
   "servers": {
     "verlihub": {
       "type": "stdio",
+      "command": "verlihub-mcp",
+      "args": [
+        "--hub-url", "http://localhost:4112/api/v1",
+        "--username", "admin",
+        "--password", "your_password"
+      ]
+    }
+  }
+}
+```
+
+Or using environment variables:
+
+```json
+{
+  "servers": {
+    "verlihub": {
+      "type": "stdio",
       "command": "python",
       "args": ["-m", "verlihub.client.mcp"],
       "env": {
-        "VERLIHUB_API_URL": "http://localhost:8000/api/v1",
-        "VERLIHUB_API_USER": "admin",
-        "VERLIHUB_API_PASSWORD": "your_password"
+        "VERLIHUB_HUB_URL": "http://localhost:4112/api/v1",
+        "VERLIHUB_USERNAME": "admin",
+        "VERLIHUB_PASSWORD": "your_password"
       }
     }
   }
@@ -231,13 +255,12 @@ Add to `~/.config/claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "verlihub": {
-      "command": "python",
-      "args": ["-m", "verlihub.client.mcp"],
-      "env": {
-        "VERLIHUB_API_URL": "http://localhost:8000/api/v1",
-        "VERLIHUB_API_USER": "admin",
-        "VERLIHUB_API_PASSWORD": "your_password"
-      }
+      "command": "verlihub-mcp",
+      "args": [
+        "--hub-url", "http://localhost:4112/api/v1",
+        "--username", "admin",
+        "--password", "your_password"
+      ]
     }
   }
 }
@@ -247,36 +270,36 @@ Add to `~/.config/claude/claude_desktop_config.json`:
 
 | URI | Description |
 |-----|-------------|
-| `verlihub://hub/info` | Hub name, topic, version, user count, share |
-| `verlihub://hub/status` | Full hub status with uptime |
-| `verlihub://hub/users` | Connected user list |
-| `verlihub://hub/stats` | Comprehensive statistics |
-| `verlihub://hub/health` | Health check |
+| `hub://info` | Hub name, topic, version, user count, share |
+| `hub://users` | Connected users with details |
+| `hub://stats` | Comprehensive statistics |
+| `hub://bans` | Active bans |
 
 ### MCP Tools
 
-| Tool | Description | Permission |
-|------|-------------|-----------|
-| `get_hub_info` | Hub metadata | Any |
-| `get_hub_status` | Hub status | Any |
-| `list_users` | Online user list | Any |
-| `get_user_info` | User details | Any |
-| `list_operators` | Online operators | Any |
-| `list_bots` | Hub bots | Any |
-| `get_geo_distribution` | User geography | Any |
-| `get_share_stats` | Share statistics | Any |
-| `get_health` | Health check | Any |
-| `kick_user` | Kick a user | Admin |
-| `ban_user` | Ban a user | Admin |
-| `send_broadcast` | Broadcast message | Admin |
-| `execute_command` | Hub console command | Admin |
-| `get_config` | Read hub config | Admin |
-| `set_config` | Write hub config | Master |
+| Tool | Description |
+|------|-------------|
+| `get_hub_info` | Hub metadata (name, topic, version) |
+| `list_online_users` | Detailed online user list |
+| `get_user_info` | Look up a specific user |
+| `get_hub_statistics` | Comprehensive hub statistics |
+| `get_share_statistics` | File sharing stats |
+| `get_geo_distribution` | User geography by country |
+| `list_operators` | Online operators and admins |
+| `list_bots` | Hub bots |
+| `search_bans` | Search active bans |
+| `get_registered_users` | Registered user list |
+| `health_check` | Hub health check |
+| `kick_user` | Kick a user (admin) |
+| `send_broadcast` | Broadcast message (admin) |
+| `send_message_to_user` | PM a user (admin) |
+| `ban_user` | Ban a user (admin) |
+| `register_user` | Register a new user (admin) |
 
 ### MCP Prompts
 
 | Prompt | Description |
 |--------|-------------|
-| `hub_status_report` | Generate a comprehensive hub status report |
-| `investigate_user` | Deep-dive on a specific user |
-| `security_audit` | Review bans, suspicious users, share leeches |
+| `hub_report` | Generate a comprehensive hub status report |
+| `user_lookup` | Deep-dive on a specific user |
+| `troubleshoot` | Diagnose potential hub issues |

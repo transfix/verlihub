@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 # Import route modules
-from verlihub.api.routes import auth, hub, users, bans, console, stats, invites
+from verlihub.api.routes import auth, hub, users, bans, console, stats, invites, llm
 from verlihub.hublist import hublist_router
 
 # Create main API router
@@ -24,5 +24,6 @@ api_router.include_router(stats.router, prefix="/stats", tags=["statistics"])
 api_router.include_router(console.router, tags=["console"])
 api_router.include_router(invites.router, prefix="/invites", tags=["invites"])
 api_router.include_router(hublist_router, prefix="/hublist", tags=["hublist"])
+api_router.include_router(llm.router, prefix="/llm", tags=["llm"])
 
 __all__ = ["api_router"]

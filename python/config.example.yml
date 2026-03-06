@@ -315,3 +315,38 @@ logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
   file: ""     # Log file path (empty = stdout only)
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# =============================================================================
+# LLM Chat Assistant Configuration
+# =============================================================================
+# Self-hosted AI chat assistant integrated into the dashboard.
+# Connects to any OpenAI-compatible API (Ollama, vLLM, llama.cpp, LiteLLM).
+# See docs/LLM_INTEGRATION.md for setup instructions.
+llm:
+  enabled: false
+
+  # OpenAI-compatible chat completions endpoint
+  base_url: "http://localhost:11434/v1"  # Ollama default
+  model: "qwen2.5:7b"                   # Model name (must support tool calling)
+  api_key: ""                            # API key (leave empty for most local servers)
+
+  # LLM parameters
+  temperature: 0.3       # Lower = more deterministic
+  max_tokens: 2048       # Maximum response length
+  max_tool_rounds: 8     # Max tool-call cycles per request
+
+  # Permission: minimum DC++ user class required to access AI chat
+  min_class: 3           # 3 = Operator (see docs for DC++ class list)
+
+  # Permission: minimum class for admin/write tools (kick, broadcast, config)
+  admin_class: 5         # 5 = Admin
+
+# =============================================================================
+# MCP Server Configuration (Model Context Protocol)
+# =============================================================================
+# Enables an MCP server that exposes hub resources/tools to AI coding
+# assistants (VS Code Copilot, Claude Desktop, etc.).
+# See docs/LLM_INTEGRATION.md for setup instructions.
+mcp:
+  enabled: false
+

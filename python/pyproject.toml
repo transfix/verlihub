@@ -53,12 +53,23 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.8.0",
 ]
+llm = [
+    "openai>=1.12.0",  # OpenAI-compatible chat completions client
+]
+mcp = [
+    "mcp[cli]>=1.0.0",  # Model Context Protocol SDK
+    "httpx>=0.26.0",
+]
+ai = [
+    "verlihub[llm,mcp]",  # All AI integrations
+]
 
 [project.scripts]
 verlihub-server = "verlihub.server:main"
 verlihub-api = "verlihub.api.app:main"
 verlihub-cli = "verlihub.cli:main"
 verlihub-bench = "verlihub.benchmarks.cli:main"
+verlihub-mcp = "verlihub.client.mcp:main"
 
 [project.urls]
 Homepage = "https://verlihub.net"

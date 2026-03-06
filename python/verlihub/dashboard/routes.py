@@ -66,6 +66,10 @@ def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict
     hub_topic = ctx.hub_topic if ctx else (cfg.hub.topic if cfg else "")
     hub_logo = cfg.hub.logo if cfg else ""
 
+    # LLM feature flag
+    llm_enabled = cfg and hasattr(cfg, "llm") and cfg.llm and cfg.llm.enabled
+    llm_min_class = cfg.llm.min_class if llm_enabled else 99
+
     return {
         "request": request,
         "user": user,
@@ -76,6 +80,7 @@ def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict
         "hub_logo": hub_logo or VERLIHUB_DEFAULT_LOGO,
         "current_year": datetime.now(timezone.utc).year,
         "version": "1.7.0.0",
+        "llm_enabled": bool(llm_enabled and user and user.user_class >= llm_min_class),
     }
 
 
@@ -647,6 +652,41 @@ async def chat_page(
     context["user_count"] = ctx.user_count if ctx else 0
     
     return templates.TemplateResponse(request, "chat.html", context)
+
+
+@dashboard_router.get("/ai-chat", response_class=HTMLResponse)
+async def ai_chat_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+    access_token: Optional[str] = Cookie(default=None),
+):
+    """AI chat assistant page — LLM-powered hub interaction."""
+    if user is None:
+        return RedirectResponse(
+            url="/dashboard/login?next_url=/dashboard/ai-chat",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    cfg = get_config_optional()
+    llm_enabled = cfg and cfg.llm and cfg.llm.enabled
+    min_class = cfg.llm.min_class if (cfg and cfg.llm) else 3
+    admin_class = cfg.llm.admin_class if (cfg and cfg.llm) else 5
+
+    # Permission gate
+    if llm_enabled and user.user_class < min_class:
+        return RedirectResponse(
+            url="/dashboard/",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    context = get_base_context(request, user)
+    token = access_token[7:] if access_token and access_token.startswith("Bearer ") else access_token
+    context["auth_token"] = token or ""
+    context["llm_enabled"] = bool(llm_enabled)
+    context["llm_model"] = cfg.llm.model if (cfg and cfg.llm) else ""
+    context["access_level"] = "admin" if user.user_class >= admin_class else "read-only"
+
+    return templates.TemplateResponse(request, "ai_chat.html", context)
 
 
 @dashboard_router.get("/plugins", response_class=HTMLResponse)

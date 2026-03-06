@@ -338,6 +338,40 @@ class UsersConfig:
 
 
 @dataclass
+class LlmConfig:
+    """
+    LLM (Large Language Model) integration configuration.
+    
+    Enables the AI chat assistant in the dashboard. Connects to any
+    OpenAI-compatible API (Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, etc.).
+    
+    The LLM can query hub state and perform admin operations via tool calling.
+    Access is gated by user class: ``min_class`` controls who can use the
+    chat, ``admin_class`` controls who gets admin-level tools (kick, ban, etc.).
+    """
+    enabled: bool = False
+    base_url: str = "http://localhost:11434/v1"  # Ollama default
+    model: str = "llama3.1"
+    api_key: str = "ollama"
+    max_tool_rounds: int = 5
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    min_class: int = 3   # Minimum user class to access AI chat (3=Operator)
+    admin_class: int = 5  # Minimum class for admin tools (5=Admin)
+
+
+@dataclass
+class McpConfig:
+    """
+    MCP (Model Context Protocol) server configuration.
+    
+    Enables running `python -m verlihub.client.mcp` as a standalone
+    MCP server that exposes hub operations to IDE LLM tools.
+    """
+    enabled: bool = False
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
     level: str = "INFO"
@@ -361,6 +395,8 @@ class VerlihubConfig:
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     lua: LuaConfig = field(default_factory=LuaConfig)
     python: PythonConfig = field(default_factory=PythonConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
@@ -556,6 +592,28 @@ class VerlihubConfig:
                 registered=_parse_user_list(users.get("registered", [])),
             )
         
+        # LLM integration
+        if "llm" in data:
+            llm_data = data["llm"]
+            config.llm = LlmConfig(
+                enabled=llm_data.get("enabled", config.llm.enabled),
+                base_url=llm_data.get("base_url", config.llm.base_url),
+                model=llm_data.get("model", config.llm.model),
+                api_key=llm_data.get("api_key", config.llm.api_key),
+                max_tool_rounds=llm_data.get("max_tool_rounds", config.llm.max_tool_rounds),
+                temperature=llm_data.get("temperature", config.llm.temperature),
+                max_tokens=llm_data.get("max_tokens", config.llm.max_tokens),
+                min_class=llm_data.get("min_class", config.llm.min_class),
+                admin_class=llm_data.get("admin_class", config.llm.admin_class),
+            )
+        
+        # MCP server
+        if "mcp" in data:
+            mcp_data = data["mcp"]
+            config.mcp = McpConfig(
+                enabled=mcp_data.get("enabled", config.mcp.enabled),
+            )
+        
         # Logging
         if "logging" in data:
             log = data["logging"]
@@ -633,6 +691,26 @@ class VerlihubConfig:
         # Runtime
         config.mode = os.getenv("VH_MODE", config.mode)
         config.environment = os.getenv("VH_ENV", config.environment)
+        
+        # LLM from environment
+        if os.getenv("VH_LLM_ENABLED"):
+            config.llm = LlmConfig(
+                enabled=os.getenv("VH_LLM_ENABLED", "").lower() in ("1", "true", "yes"),
+                base_url=os.getenv("VH_LLM_BASE_URL", config.llm.base_url),
+                model=os.getenv("VH_LLM_MODEL", config.llm.model),
+                api_key=os.getenv("VH_LLM_API_KEY", config.llm.api_key),
+                max_tool_rounds=int(os.getenv("VH_LLM_MAX_TOOL_ROUNDS", str(config.llm.max_tool_rounds))),
+                temperature=float(os.getenv("VH_LLM_TEMPERATURE", str(config.llm.temperature))),
+                max_tokens=int(os.getenv("VH_LLM_MAX_TOKENS", str(config.llm.max_tokens))),
+                min_class=int(os.getenv("VH_LLM_MIN_CLASS", str(config.llm.min_class))),
+                admin_class=int(os.getenv("VH_LLM_ADMIN_CLASS", str(config.llm.admin_class))),
+            )
+        
+        # MCP from environment
+        if os.getenv("VH_MCP_ENABLED"):
+            config.mcp = McpConfig(
+                enabled=os.getenv("VH_MCP_ENABLED", "").lower() in ("1", "true", "yes"),
+            )
         
         return config
     

@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+
+{% block title %}AI Chat - {{ hub_name }}{% endblock %}
+
+{% block head %}
+<style>
+    .ai-chat-container {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 200px);
+        min-height: 400px;
+    }
+
+    .ai-messages {
+        flex: 1;
+        overflow-y: auto;
+        background: var(--ai-bg, #fafafa);
+        border: 1px solid var(--ai-border, #dbdbdb);
+        border-radius: 6px;
+        padding: 1rem;
+    }
+
+    [data-theme="dark"] .ai-messages {
+        --ai-bg: #1a1a2e;
+        --ai-border: #2a2a4a;
+    }
+
+    .ai-msg {
+        margin-bottom: 0.75rem;
+        line-height: 1.6;
+        word-wrap: break-word;
+    }
+
+    .ai-msg.user-msg {
+        text-align: right;
+    }
+
+    .ai-msg.user-msg .bubble {
+        display: inline-block;
+        background: var(--vh-primary, #00d1b2);
+        color: #fff;
+        padding: 0.5rem 1rem;
+        border-radius: 1rem 1rem 0.25rem 1rem;
+        max-width: 75%;
+        text-align: left;
+    }
+
+    .ai-msg.assistant-msg .bubble {
+        display: inline-block;
+        background: var(--asst-bg, #f0f0f0);
+        color: var(--asst-text, #363636);
+        padding: 0.5rem 1rem;
+        border-radius: 1rem 1rem 1rem 0.25rem;
+        max-width: 85%;
+        text-align: left;
+        white-space: pre-wrap;
+    }
+
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble {
+        --asst-bg: #16213e;
+        --asst-text: #e4e4e4;
+    }
+
+    .ai-msg.system-msg {
+        text-align: center;
+        font-size: 0.85rem;
+        color: #7a7a7a;
+        font-style: italic;
+    }
+
+    .ai-tool-badge {
+        display: inline-block;
+        background: #fff3cd;
+        color: #856404;
+        padding: 0.15rem 0.5rem;
+        border-radius: 0.75rem;
+        font-size: 0.8rem;
+        font-family: 'Consolas', 'Monaco', monospace;
+        margin: 0.1rem 0;
+    }
+
+    [data-theme="dark"] .ai-tool-badge {
+        background: #3a3000;
+        color: #ffd83d;
+    }
+
+    .ai-msg.thinking-msg {
+        text-align: center;
+        color: #7a7a7a;
+        font-size: 0.9rem;
+    }
+
+    .ai-msg.thinking-msg .dots {
+        display: inline-block;
+        animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 1; }
+    }
+
+    .ai-input-bar {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+    }
+
+    .ai-input-bar input {
+        flex: 1;
+    }
+
+    .ai-msg.assistant-msg .bubble strong {
+        font-weight: 700;
+    }
+
+    .ai-msg.assistant-msg .bubble code {
+        background: rgba(0,0,0,0.06);
+        padding: 0.1rem 0.3rem;
+        border-radius: 3px;
+        font-size: 0.9em;
+    }
+
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble code {
+        background: rgba(255,255,255,0.08);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="box p-4" style="height: calc(100vh - 160px); display: flex; flex-direction: column;">
+    <!-- Header -->
+    <div class="level mb-3" style="flex-shrink: 0;">
+        <div class="level-left">
+            <div class="level-item">
+                <h1 class="title is-5 mb-0">
+                    <i class="fas fa-robot mr-2"></i>
+                    AI Chat Assistant
+                </h1>
+            </div>
+            <div class="level-item">
+                <span class="tag is-rounded" id="ai-status">
+                    {% if llm_enabled %}Connecting...{% else %}Disabled{% endif %}
+                </span>
+            </div>
+            {% if llm_enabled %}
+            <div class="level-item">
+                <span class="tag is-info is-light is-rounded" id="ai-model">{{ llm_model }}</span>
+            </div>
+            {% endif %}
+        </div>
+        <div class="level-right">
+            <div class="level-item">
+                <button class="button is-small is-light" onclick="clearAiChat()" title="Clear chat">
+                    <i class="fas fa-eraser"></i>
+                </button>
+            </div>
+            <div class="level-item">
+                <button class="button is-small is-light" onclick="scrollAiToBottom()" title="Scroll to bottom">
+                    <i class="fas fa-arrow-down"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Messages -->
+    <div class="ai-messages" id="ai-messages">
+        {% if llm_enabled %}
+        <div class="ai-msg system-msg">
+            Welcome to the AI assistant. Ask anything about the hub — try &quot;who is online?&quot; or
+            &quot;show me share statistics&quot;.
+        </div>
+        <div class="ai-msg system-msg">
+            You are logged in as <strong>{{ user.nick }}</strong> ({{ access_level }}).
+            {% if access_level == "admin" %}
+            You have full admin access — the AI can kick users, run commands, and change config on your behalf.
+            {% else %}
+            You have read-only access — the AI can show hub info but cannot modify anything.
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="ai-msg system-msg">
+            LLM integration is not enabled. Enable it in your <code>config.yml</code> under the
+            <code>llm:</code> section. See the
+            <a href="https://github.com/transfix/verlihub/blob/verlihub-py-llm/python/docs/LLM_INTEGRATION.md">documentation</a>.
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Input -->
+    <div class="ai-input-bar" style="flex-shrink: 0;">
+        <input class="input" type="text" id="ai-input"
+               placeholder="{% if llm_enabled %}Ask about the hub...{% else %}LLM not enabled{% endif %}"
+               autocomplete="off" {% if not llm_enabled %}disabled{% endif %}>
+        <button class="button is-primary" id="ai-send-btn" onclick="sendAiMessage()"
+                {% if not llm_enabled %}disabled{% endif %}>
+            <i class="fas fa-paper-plane mr-1"></i> Send
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const aiMessages = document.getElementById('ai-messages');
+    const aiInput    = document.getElementById('ai-input');
+    const aiSendBtn  = document.getElementById('ai-send-btn');
+    const authToken  = '{{ auth_token }}';
+    const llmEnabled = {{ 'true' if llm_enabled else 'false' }};
+
+    let aiSocket = null;
+    let aiWaiting = false;
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    function formatResponse(text) {
+        // Light markdown formatting
+        let html = escapeHtml(text);
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+        html = html.replace(/\n/g, '<br>');
+        return html;
+    }
+
+    function isNearBottom() {
+        return aiMessages.scrollHeight - aiMessages.scrollTop - aiMessages.clientHeight < 80;
+    }
+
+    function scrollAiToBottom() {
+        aiMessages.scrollTop = aiMessages.scrollHeight;
+    }
+
+    function setInputEnabled(enabled) {
+        aiInput.disabled = !enabled;
+        aiSendBtn.disabled = !enabled;
+        aiWaiting = !enabled;
+    }
+
+    // ------------------------------------------------------------------
+    // Rendering
+    // ------------------------------------------------------------------
+    function appendUserMsg(text) {
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'ai-msg user-msg';
+        div.innerHTML = `<span class="bubble">${escapeHtml(text)}</span>`;
+        aiMessages.appendChild(div);
+        if (wasNear) scrollAiToBottom();
+    }
+
+    function appendAssistantMsg(text) {
+        const wasNear = isNearBottom();
+        // Remove thinking indicator if present
+        removeThinking();
+        const div = document.createElement('div');
+        div.className = 'ai-msg assistant-msg';
+        div.innerHTML = `<span class="bubble">${formatResponse(text)}</span>`;
+        aiMessages.appendChild(div);
+        if (wasNear) scrollAiToBottom();
+    }
+
+    function appendSystemMsg(text) {
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'ai-msg system-msg';
+        div.textContent = text;
+        aiMessages.appendChild(div);
+        if (wasNear) scrollAiToBottom();
+    }
+
+    function appendToolCall(name, args) {
+        const wasNear = isNearBottom();
+        removeThinking();
+        const div = document.createElement('div');
+        div.className = 'ai-msg system-msg';
+        const argsStr = Object.keys(args).length > 0 ? JSON.stringify(args) : '';
+        div.innerHTML = `<span class="ai-tool-badge">🔧 ${escapeHtml(name)}${argsStr ? '(' + escapeHtml(argsStr) + ')' : '()'}</span>`;
+        aiMessages.appendChild(div);
+        if (wasNear) scrollAiToBottom();
+    }
+
+    function showThinking() {
+        removeThinking();
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'ai-msg thinking-msg';
+        div.id = 'ai-thinking';
+        div.innerHTML = '<span class="dots">⏳ Thinking...</span>';
+        aiMessages.appendChild(div);
+        if (wasNear) scrollAiToBottom();
+    }
+
+    function removeThinking() {
+        const el = document.getElementById('ai-thinking');
+        if (el) el.remove();
+    }
+
+    function clearAiChat() {
+        aiMessages.innerHTML = '';
+        appendSystemMsg('Chat cleared.');
+    }
+
+    // ------------------------------------------------------------------
+    // WebSocket connection
+    // ------------------------------------------------------------------
+    function connectAiChat() {
+        if (!llmEnabled) return;
+
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${proto}//${location.host}/ws/llm-chat?token=${encodeURIComponent(authToken)}`;
+
+        const statusEl = document.getElementById('ai-status');
+
+        aiSocket = new WebSocket(wsUrl);
+
+        aiSocket.onopen = () => {
+            // Wait for the 'connected' message
+        };
+
+        aiSocket.onmessage = (event) => {
+            let data;
+            try { data = JSON.parse(event.data); } catch(e) { return; }
+
+            switch (data.type) {
+                case 'connected':
+                    statusEl.textContent = `Connected (${data.access})`;
+                    statusEl.className = 'tag is-success is-rounded';
+                    setInputEnabled(true);
+                    aiInput.focus();
+                    break;
+
+                case 'thinking':
+                    showThinking();
+                    break;
+
+                case 'tool_call':
+                    appendToolCall(data.name, data.args || {});
+                    showThinking();
+                    break;
+
+                case 'tool_result':
+                    // Handled implicitly via next thinking/response
+                    break;
+
+                case 'response':
+                    removeThinking();
+                    appendAssistantMsg(data.content);
+                    setInputEnabled(true);
+                    aiInput.focus();
+                    break;
+
+                case 'error':
+                    removeThinking();
+                    appendSystemMsg('❌ ' + data.content);
+                    setInputEnabled(true);
+                    break;
+            }
+        };
+
+        aiSocket.onclose = () => {
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = 'tag is-danger is-rounded';
+            setInputEnabled(false);
+            appendSystemMsg('Disconnected from AI service. Reconnecting in 5s...');
+            setTimeout(connectAiChat, 5000);
+        };
+
+        aiSocket.onerror = () => {
+            statusEl.textContent = 'Error';
+            statusEl.className = 'tag is-danger is-rounded';
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Sending
+    // ------------------------------------------------------------------
+    function sendAiMessage() {
+        if (!aiSocket || aiWaiting) return;
+        const text = aiInput.value.trim();
+        if (!text) return;
+
+        aiInput.value = '';
+        appendUserMsg(text);
+        setInputEnabled(false);
+
+        aiSocket.send(JSON.stringify({ message: text }));
+    }
+
+    aiInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendAiMessage();
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // Init
+    // ------------------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+        if (llmEnabled) {
+            connectAiChat();
+        }
+        scrollAiToBottom();
+    });
+</script>
+{% endblock %}

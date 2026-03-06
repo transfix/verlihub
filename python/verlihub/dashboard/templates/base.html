@@ -365,6 +365,11 @@
                 <a class="navbar-item" href="/dashboard/config">
                     <i class="fas fa-cog mr-2"></i> Config
                 </a>
+                {% if llm_enabled %}
+                <a class="navbar-item" href="/dashboard/ai-chat">
+                    <i class="fas fa-robot mr-2"></i> AI Chat
+                </a>
+                {% endif %}
                 <a class="navbar-item" href="/dashboard/logs">
                     <i class="fas fa-file-alt mr-2"></i> Logs
                 </a>

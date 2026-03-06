@@ -161,6 +161,19 @@ async def lifespan(app: FastAPI):
         except Exception as ws_err:
             logger.warning("WebSocket event wiring failed: %s", ws_err)
 
+    # Wire LLM bot chat handler (PM + main chat → security bot)
+    _bot_chat_handler = None
+    if ctx is not None:
+        try:
+            llm_cfg = cfg.llm if cfg else None
+            if llm_cfg and llm_cfg.enabled:
+                from verlihub.bot_chat import BotChatHandler
+                _bot_chat_handler = BotChatHandler(ctx, llm_cfg)
+                _bot_chat_handler.register(ctx.events)
+                logger.info("LLM bot chat handler enabled")
+        except Exception as bot_err:
+            logger.warning("Bot chat handler failed to start: %s", bot_err)
+
     # Start in-process MCP session manager (if enabled & SDK installed)
     _mcp_session_mgr = None
     _mcp_task = None
@@ -206,6 +219,16 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Thin Verlihub...")
+
+    # Stop bot chat handler
+    if _bot_chat_handler is not None:
+        try:
+            ctx_shutdown = get_hub_context()
+            if ctx_shutdown is not None:
+                _bot_chat_handler.unregister(ctx_shutdown.events)
+            _bot_chat_handler.shutdown()
+        except Exception:
+            pass
 
     # Stop in-process MCP session manager
     if _mcp_task is not None:

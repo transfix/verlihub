@@ -537,7 +537,18 @@ class HubContext:
     def send_to_user(self, nick: str, message: str) -> bool:
         """Send a message to a specific user."""
         return self._cpp.SendToUser(nick, message)
-    
+
+    def send_pm_as(self, from_nick: str, to_nick: str, message: str) -> bool:
+        """
+        Send a private message from *from_nick* to *to_nick*.
+
+        Constructs the raw NMDC PM protocol frame and delivers it via
+        ``SendToUser`` (→ ``SendToNick`` → ``SendToConn``).  The C++ layer
+        appends the trailing ``|`` terminator automatically.
+        """
+        raw = f"$To: {to_nick} From: {from_nick} $<{from_nick}> {message}"
+        return self._cpp.SendToUser(to_nick, raw)
+
     def send_to_all(self, message: str) -> bool:
         """Broadcast message to all users."""
         return self._cpp.SendToAll(message)

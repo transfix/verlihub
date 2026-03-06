@@ -312,6 +312,10 @@ api:
 # Enables AI assistant chat via a self-hosted LLM (Ollama sidecar).
 # When enabled, run_production.sh automatically starts an Ollama container
 # alongside the hub and pulls the configured model on first run.
+#
+# In "both" mode the hub security bot (Hub-Security) also becomes LLM-powered:
+#   - Users can PM Hub-Security for AI chat (tools based on user class)
+#   - Users can address Hub-Security in main chat (conversational only)
 # =============================================================================
 llm:
   enabled: false

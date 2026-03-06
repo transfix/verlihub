@@ -5,7 +5,8 @@
 Verlihub includes optional LLM (Large Language Model) integration that provides:
 
 1. **AI Chat Assistant** — A natural-language chatbot in the web dashboard that can query and manage the hub, available to admins and optionally regular users
-2. **MCP Server** — A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes the hub to LLM-powered tools in IDEs like VS Code and Claude Desktop
+2. **NMDC Bot Chat** — Hub users can chat with the `Hub-Security` bot via private messages or main chat, powered by the same LLM
+3. **MCP Server** — A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes the hub to LLM-powered tools in IDEs like VS Code and Claude Desktop
 
 Both features connect to any **OpenAI-compatible LLM backend** (Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, or any hosted API).
 
@@ -196,6 +197,118 @@ The AI chat enforces the same permission model as the REST API:
 | ≥ `admin_class` | Full admin | All above + kick, ban, config, console, broadcast |
 
 The LLM's system prompt is adjusted per user to prevent information leakage (e.g., regular users don't see IP addresses in responses).
+
+## NMDC Bot Chat (Hub-Security Bot)
+
+When LLM is enabled and the hub runs in `both` mode (NMDC + API), users can
+chat with the **Hub-Security** bot directly from their DC++ client — no web
+browser needed.
+
+### How It Works
+
+Two interaction modes are supported:
+
+| Mode | Trigger | Security Level |
+|------|---------|---------------|
+| **Private Message** | Send a PM to `Hub-Security` | Based on sender's user class |
+| **Main Chat** | `Hub-Security: your question` | Lowest (no tools, conversational only) |
+
+#### PM Security Levels
+
+| User Class | Tools Available | System Prompt |
+|-----------|----------------|---------------|
+| ≥ `admin_class` (default 5) | All tools (kick, config, console, etc.) | Admin |
+| ≥ `min_class` (default 3) | Read-only (user lists, stats, geo) | Operator |
+| < `min_class` | None | Conversational only |
+
+All users — including guests — can PM the bot and get a conversational
+response. Users below `min_class` simply don't get access to hub tools.
+
+#### Main Chat
+
+Addressing `Hub-Security` in main chat (e.g. `Hub-Security: what is this hub about?`)
+triggers a response at the **lowest** security level — no tools, no hub data
+access. This is safe for public chat because the bot cannot leak any internal
+information.
+
+### Architecture
+
+```
+DC++ Client                        Verlihub
+┌──────────┐                       ┌───────────────────────────────────┐
+│ User PMs │── $To: Hub-Security ──│ C++ OnPrivateMessage callback    │
+│ bot      │                       │         │                        │
+└──────────┘                       │         ▼                        │
+                                   │ Python BotChatHandler._on_pm()  │
+                                   │         │                        │
+                                   │         ▼ asyncio                │
+                                   │ BotChatSession.chat(msg)        │
+                                   │         │                        │
+                                   │    ┌────▼────┐                   │
+                                   │    │  Ollama  │ (tool calls)     │
+                                   │    └────┬────┘                   │
+                                   │         │                        │
+                                   │         ▼                        │
+                                   │ ctx.send_pm_as(bot, user, resp) │
+                                   │         │                        │
+                                   │         ▼                        │
+                                   │ $To: User From: Hub-Security    │
+                                   └───────────────────────────────────┘
+```
+
+### Configuration
+
+No extra configuration is needed — the bot chat feature activates
+automatically when `llm.enabled: true` and the hub runs in `both` mode.
+
+The bot nickname is controlled by the standard `bots.security.nick` setting:
+
+```yaml
+bots:
+  security:
+    nick: "Hub-Security"
+    description: "Hub security bot (LLM-powered)"
+
+llm:
+  enabled: true
+  base_url: "http://localhost:11434/v1"
+  model: "qwen2.5:7b"
+  min_class: 3
+  admin_class: 5
+```
+
+### Session Memory
+
+Each user gets a persistent conversation session per mode (PM and main-chat
+are separate). The session retains message history across multiple turns,
+so users can have multi-turn conversations with context.
+
+Sessions are held in memory and reset when the hub restarts.
+
+### Running Integration Tests
+
+The bot chat integration tests require Docker with Ollama:
+
+```bash
+# Run bot chat tests
+./docker_test_launcher.sh bot-chat
+
+# Or directly via Docker Compose
+docker compose -f docker/docker-compose.bot-chat-test.yml up \
+    --build --abort-on-container-exit bot-tests
+
+# Clean up
+docker compose -f docker/docker-compose.bot-chat-test.yml down -v
+```
+
+The tests use `verlihub.client.nmdc.NMDCClient` to simulate users at
+different permission levels (admin, operator, registered) and verify:
+
+- PM to bot → LLM response received
+- Different user classes get appropriate responses
+- Main chat mention → bot responds in main chat
+- Multi-turn conversation retains context
+- Non-bot PMs are not intercepted
 
 ## MCP Server & Client
 

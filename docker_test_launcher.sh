@@ -39,6 +39,7 @@ NC='\033[0m' # No Color
 COMPOSE_TEST="docker/docker-compose.test.yml"
 COMPOSE_DUAL="docker/docker-compose.dual-test.yml"
 COMPOSE_LLM="docker/docker-compose.llm-test.yml"
+COMPOSE_BOT_CHAT="docker/docker-compose.bot-chat-test.yml"
 
 show_help() {
     echo -e "${BLUE}============================================${NC}"
@@ -54,6 +55,7 @@ show_help() {
     echo "  py-postgres   Run verlihub-py tests against PostgreSQL"
     echo "  py-all-db     Run verlihub-py tests against all databases"
     echo "  llm           Run LLM integration tests (Ollama + qwen2.5:1.5b, CPU)"
+    echo "  bot-chat      Run NMDC bot chat LLM tests (PM + main chat via NMDC)"
     echo "  original      Run original verlihub tests (MySQL only)"
     echo "  dual          Run both original and verlihub-py tests"
     echo "  sql-semantics Compare SQL semantics across databases"
@@ -415,6 +417,36 @@ run_llm_tests() {
     return $exit_code
 }
 
+run_bot_chat_tests() {
+    log_info "Running NMDC bot chat LLM integration tests..."
+    log_info "This tests PM + main chat → Hub-Security bot → LLM pipeline"
+    cd "$PROJECT_DIR"
+
+    # Build images
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet
+    fi
+
+    # Run tests
+    local exit_code=0
+    docker compose -f "$COMPOSE_BOT_CHAT" up \
+        --build --abort-on-container-exit bot-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_BOT_CHAT" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "Bot chat integration tests completed"
+    else
+        log_error "Bot chat integration tests failed"
+    fi
+
+    return $exit_code
+}
+
 run_all_tests() {
     log_info "Running all test suites..."
     
@@ -524,6 +556,9 @@ case $COMMAND in
         ;;
     llm)
         run_llm_tests
+        ;;
+    bot-chat)
+        run_bot_chat_tests
         ;;
     original)
         run_original_tests

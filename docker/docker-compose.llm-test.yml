@@ -1,10 +1,10 @@
 # Docker Compose for LLM Integration Tests
 #
 # Validates the full LLM chat + tool-calling pipeline using Ollama
-# with the small qwen2.5:1.5b model (CPU-only, ~1.2 GB RAM).
+# with the small qwen2.5:0.5b model (CPU-only, ~400 MB RAM).
 #
 # Architecture:
-#   ollama          — Ollama inference server, pulls qwen2.5:1.5b on first run
+#   ollama          — Ollama inference server, pulls qwen2.5:0.5b on first run
 #   llm-hub         — verlihub-py with LLM + MCP enabled (SQLite in-memory)
 #   llm-tests       — Python test runner exercising /api/v1/llm/* endpoints
 #
@@ -38,7 +38,7 @@ services:
       - ollama-models:/root/.ollama
 
   # ==========================================================================
-  # Model puller — ensures qwen2.5:1.5b is available before tests start
+  # Model puller — ensures qwen2.5:0.5b is available before tests start
   # ==========================================================================
   ollama-pull:
     image: curlimages/curl:latest
@@ -49,8 +49,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        echo "Pulling qwen2.5:1.5b model..."
-        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:1.5b","stream":false}' \
+        echo "Pulling qwen2.5:0.5b model..."
+        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:0.5b","stream":false}' \
           --max-time 600 \
           -o /dev/null \
           && echo "Model pull complete" \
@@ -102,7 +102,7 @@ services:
         --api-url http://llm-hub:8000
         --admin-user admin
         --admin-pass admin123
-        --model qwen2.5:1.5b
+        --model qwen2.5:0.5b
         --ollama-url http://ollama:11434
     networks:
       - llm-test-network

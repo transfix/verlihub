@@ -6,7 +6,7 @@
 #   - Permission enforcement (admin vs operator vs guest)
 #
 # Architecture:
-#   ollama          — Ollama inference server, pulls qwen2.5:1.5b on first run
+#   ollama          — Ollama inference server, pulls qwen2.5:0.5b on first run
 #   bot-hub         — verlihub-py in "both" mode (NMDC hub + API) with LLM enabled
 #   bot-tests       — Python test runner connecting via NMDC to test bot responses
 #
@@ -37,7 +37,7 @@ services:
       - ollama-models:/root/.ollama
 
   # ==========================================================================
-  # Model puller — ensures qwen2.5:1.5b is available
+  # Model puller — ensures qwen2.5:0.5b is available
   # ==========================================================================
   ollama-pull:
     image: curlimages/curl:latest
@@ -48,8 +48,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        echo "Pulling qwen2.5:1.5b model..."
-        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:1.5b","stream":false}' \
+        echo "Pulling qwen2.5:0.5b model..."
+        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:0.5b","stream":false}' \
           --max-time 600 \
           -o /dev/null \
           && echo "Model pull complete" \

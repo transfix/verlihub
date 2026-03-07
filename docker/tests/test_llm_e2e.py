@@ -3,7 +3,7 @@
 LLM End-to-End Integration Tests
 
 Validates the full LLM chat + tool-calling pipeline against a live
-Ollama instance running qwen2.5:1.5b (or any OpenAI-compatible model).
+Ollama instance running qwen2.5:0.5b (or any OpenAI-compatible model).
 
 Tests cover:
   1. Ollama health + model availability
@@ -18,7 +18,7 @@ Usage:
     python test_llm_e2e.py \\
         --api-url http://llm-hub:8000 \\
         --admin-user admin --admin-pass admin123 \\
-        --model qwen2.5:1.5b --ollama-url http://ollama:11434
+        --model qwen2.5:0.5b --ollama-url http://ollama:11434
 """
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ class LlmE2ETests:
         try:
             r = _get(f"{self.ollama_url}/api/tags", timeout=10)
             models = [m["name"] for m in r.json().get("models", [])]
-            # Ollama stores as "qwen2.5:1.5b" — match by prefix
+            # Ollama stores as "qwen2.5:0.5b" — match by prefix
             found = any(self.model in m for m in models)
             self.results.record(name, found,
                                 f"looking for '{self.model}' in {models}")
@@ -340,7 +340,7 @@ def main():
                         help="Base URL of the verlihub-py API")
     parser.add_argument("--admin-user", default="admin")
     parser.add_argument("--admin-pass", default="admin123")
-    parser.add_argument("--model", default="qwen2.5:1.5b",
+    parser.add_argument("--model", default="qwen2.5:0.5b",
                         help="Expected Ollama model name")
     parser.add_argument("--ollama-url", default="http://ollama:11434",
                         help="Ollama API base URL")

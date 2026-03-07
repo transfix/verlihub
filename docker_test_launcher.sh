@@ -13,7 +13,7 @@
 #   py-mysql      Run verlihub-py tests against MySQL
 #   py-postgres   Run verlihub-py tests against PostgreSQL
 #   py-all-db     Run verlihub-py tests against all databases
-#   llm           Run LLM integration tests (Ollama + qwen2.5:1.5b)
+#   llm           Run LLM integration tests (Ollama + qwen2.5:0.5b)
 #   original      Run original verlihub tests (MySQL only)
 #   dual          Run both original and verlihub-py tests
 #   sql-semantics Compare SQL semantics across databases
@@ -55,7 +55,7 @@ show_help() {
     echo "  py-mysql      Run verlihub-py tests against MySQL"
     echo "  py-postgres   Run verlihub-py tests against PostgreSQL"
     echo "  py-all-db     Run verlihub-py tests against all databases"
-    echo "  llm           Run LLM integration tests (Ollama + qwen2.5:1.5b, CPU)"
+    echo "  llm           Run LLM integration tests (Ollama + qwen2.5:0.5b, CPU)"
     echo "  bot-chat      Run NMDC bot chat LLM tests (PM + main chat via NMDC)"
     echo "  vllm-remote   Run LLM tests against remote vLLM (Qwen3.5-35B, no GPU)"
     echo "  original      Run original verlihub tests (MySQL only)"
@@ -391,8 +391,8 @@ run_sql_semantics_tests() {
 }
 
 run_llm_tests() {
-    log_info "Running LLM integration tests (Ollama + qwen2.5:1.5b)..."
-    log_info "This pulls ~1.2 GB model on first run — subsequent runs use cache"
+    log_info "Running LLM integration tests (Ollama + qwen2.5:0.5b)..."
+    log_info "This pulls ~400 MB model on first run — subsequent runs use cache"
     cd "$PROJECT_DIR"
 
     # Build images

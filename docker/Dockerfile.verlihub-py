@@ -108,7 +108,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     httpx>=0.26.0 \
     jinja2>=3.1.0 \
     python-multipart>=0.0.6 \
-    bcrypt>=4.0.0
+    bcrypt>=4.0.0 \
+    openai>=1.12.0 \
+    "mcp[cli]>=1.0.0" \
+    click>=8.0.0
 
 # Install verlihub-py package (with ai extra for LLM + MCP support)
 RUN pip3 install --no-cache-dir --break-system-packages -e "/src/python[ai]"

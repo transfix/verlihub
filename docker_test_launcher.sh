@@ -40,6 +40,7 @@ COMPOSE_TEST="docker/docker-compose.test.yml"
 COMPOSE_DUAL="docker/docker-compose.dual-test.yml"
 COMPOSE_LLM="docker/docker-compose.llm-test.yml"
 COMPOSE_BOT_CHAT="docker/docker-compose.bot-chat-test.yml"
+COMPOSE_VLLM_REMOTE="docker/docker-compose.vllm-remote-test.yml"
 
 show_help() {
     echo -e "${BLUE}============================================${NC}"
@@ -56,6 +57,7 @@ show_help() {
     echo "  py-all-db     Run verlihub-py tests against all databases"
     echo "  llm           Run LLM integration tests (Ollama + qwen2.5:1.5b, CPU)"
     echo "  bot-chat      Run NMDC bot chat LLM tests (PM + main chat via NMDC)"
+    echo "  vllm-remote   Run LLM tests against remote vLLM (Qwen3.5-35B, no GPU)"
     echo "  original      Run original verlihub tests (MySQL only)"
     echo "  dual          Run both original and verlihub-py tests"
     echo "  sql-semantics Compare SQL semantics across databases"
@@ -156,6 +158,7 @@ cleanup_containers() {
     docker compose -f "$COMPOSE_TEST" down -v --remove-orphans 2>/dev/null || true
     docker compose -f "$COMPOSE_DUAL" down -v --remove-orphans 2>/dev/null || true
     docker compose -f "$COMPOSE_LLM" down -v --remove-orphans 2>/dev/null || true
+    docker compose -f "$COMPOSE_VLLM_REMOTE" down -v --remove-orphans 2>/dev/null || true
     
     # Remove any dangling test images
     docker image prune -f --filter "label=verlihub-test" 2>/dev/null || true
@@ -447,6 +450,43 @@ run_bot_chat_tests() {
     return $exit_code
 }
 
+run_vllm_remote_tests() {
+    log_info "Running remote vLLM integration tests (Qwen3.5-35B-A3B)..."
+    log_info "Using remote endpoint — no local GPU or model download needed"
+    cd "$PROJECT_DIR"
+
+    # Quick reachability check
+    if curl -sf --max-time 10 https://vllm-qwen35-35b.tinyhost.xyz/v1/models > /dev/null 2>&1; then
+        log_success "Remote vLLM endpoint is reachable"
+    else
+        log_warning "Remote vLLM endpoint may be unreachable — tests may fail"
+    fi
+
+    # Build images
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet
+    fi
+
+    # Run tests
+    local exit_code=0
+    docker compose -f "$COMPOSE_VLLM_REMOTE" up \
+        --build --abort-on-container-exit vllm-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_VLLM_REMOTE" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "Remote vLLM integration tests completed"
+    else
+        log_error "Remote vLLM integration tests failed"
+    fi
+
+    return $exit_code
+}
+
 run_all_tests() {
     log_info "Running all test suites..."
     
@@ -559,6 +599,9 @@ case $COMMAND in
         ;;
     bot-chat)
         run_bot_chat_tests
+        ;;
+    vllm-remote)
+        run_vllm_remote_tests
         ;;
     original)
         run_original_tests

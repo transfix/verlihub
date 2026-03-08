@@ -230,17 +230,46 @@
     .ai-msg.assistant-msg .bubble.box h2 { font-size: 1.05em; }
     .ai-msg.assistant-msg .bubble.box h3 { font-size: 0.98em; }
     .ai-msg.assistant-msg .bubble.box table {
-        border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 0.9em;
+        border-collapse: separate;
+        border-spacing: 0;
+        width: 100%;
+        margin: 0.6em 0;
+        font-size: 0.88em;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid var(--table-border, #e0e0e0);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box table {
+        --table-border: #333;
     }
     .ai-msg.assistant-msg .bubble.box th,
     .ai-msg.assistant-msg .bubble.box td {
-        border: 1px solid var(--asst-border, #ddd); padding: 0.35em 0.6em; text-align: left;
+        padding: 0.45em 0.75em;
+        text-align: left;
+        border-bottom: 1px solid var(--table-border, #e8e8e8);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box th,
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box td {
+        --table-border: #2a2a42;
     }
     .ai-msg.assistant-msg .bubble.box th {
-        background: rgba(0,0,0,0.04); font-weight: 600;
+        background: var(--th-bg, #f0f0f5);
+        font-weight: 600;
+        font-size: 0.92em;
+        color: var(--th-color, #444);
     }
     [data-theme="dark"] .ai-msg.assistant-msg .bubble.box th {
-        background: rgba(255,255,255,0.06);
+        --th-bg: rgba(108,92,231,0.12);
+        --th-color: #c8c8d8;
+    }
+    .ai-msg.assistant-msg .bubble.box tr:nth-child(even) td {
+        background: var(--tr-even, rgba(0,0,0,0.015));
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box tr:nth-child(even) td {
+        --tr-even: rgba(255,255,255,0.025);
+    }
+    .ai-msg.assistant-msg .bubble.box tr:last-child td {
+        border-bottom: none;
     }
     .ai-msg.assistant-msg .bubble.box blockquote {
         border-left: 3px solid var(--asst-border, #ddd); padding-left: 0.8em;
@@ -304,9 +333,9 @@
         background: var(--asst-bubble, #fff);
         border: 1px solid var(--asst-border, #eee);
         border-radius: 18px 18px 18px 4px;
-        padding: 0.75rem 1.4rem;
+        padding: 0.65rem 1.2rem;
         display: inline-flex;
-        gap: 0.4rem;
+        gap: 0.45rem;
         align-items: center;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
@@ -316,19 +345,43 @@
         --asst-border: #2a2a42;
     }
 
+    .thinking-label {
+        font-size: 0.82rem;
+        color: var(--thinking-text, #6c5ce7);
+        font-weight: 500;
+        margin-right: 0.25rem;
+        animation: thinkPulse 2s ease-in-out infinite;
+    }
+
+    [data-theme="dark"] .thinking-label { --thinking-text: #a29bfe; }
+
+    @keyframes thinkPulse {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+
     .thinking-dot {
-        width: 8px; height: 8px;
+        width: 7px; height: 7px;
         border-radius: 50%;
         background: var(--dot-color, #6c5ce7);
         animation: dotBounce 1.4s infinite;
     }
+
+    [data-theme="dark"] .thinking-dot { --dot-color: #a29bfe; }
 
     .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
     .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
 
     @keyframes dotBounce {
         0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-        40% { opacity: 1; transform: scale(1.1); }
+        40% { opacity: 1; transform: scale(1.15); }
+    }
+
+    .thinking-elapsed {
+        font-size: 0.68rem;
+        color: #aaa;
+        margin-left: 0.4rem;
+        font-variant-numeric: tabular-nums;
     }
 
     /* ---- Input bar ---- */
@@ -393,11 +446,30 @@
     }
     .ai-msg.assistant-msg .bubble.box ul,
     .ai-msg.assistant-msg .bubble.box ol {
-        margin: 0.4em 0; padding-left: 1.5rem;
+        margin: 0.5em 0; padding-left: 1.6rem;
     }
-    .ai-msg.assistant-msg .bubble.box li { margin-bottom: 0.15em; }
+    .ai-msg.assistant-msg .bubble.box li {
+        margin-bottom: 0.25em;
+        line-height: 1.55;
+    }
+    .ai-msg.assistant-msg .bubble.box li strong {
+        color: var(--li-strong, #2d3436);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box li strong {
+        --li-strong: #e8e8f0;
+    }
     .ai-msg.assistant-msg .bubble.box a { color: #6c5ce7; text-decoration: underline; }
     [data-theme="dark"] .ai-msg.assistant-msg .bubble.box a { color: #a29bfe; }
+    .ai-msg.assistant-msg .bubble.box strong {
+        font-weight: 700;
+    }
+    .ai-msg.assistant-msg .bubble.box em {
+        font-style: italic;
+        color: var(--em-color, #555);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box em {
+        --em-color: #bbb;
+    }
 
     /* Streaming cursor */
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
@@ -701,17 +773,42 @@
         scrollAiToBottom();
     }
 
+    function _stripThinkBlocks(s) {
+        // Remove <think>...</think> (Qwen-style reasoning)
+        s = s.replace(/<think>[\s\S]*?<\/think>/g, '');
+        // If still inside an unclosed <think>, hide everything after it
+        const idx = s.indexOf('<think>');
+        if (idx >= 0) s = s.substring(0, idx);
+        return s.trimStart();
+    }
+
     function streamDelta(content) {
-        if (!_streamBubble) streamStart();
         _streamBuf += content;
-        _streamBubble.innerHTML = fmt(_streamBuf) + '<span class="streaming-cursor"></span>';
+        const display = _stripThinkBlocks(_streamBuf);
+        // If nothing to show yet (still in think block or leading whitespace only)
+        if (!display) {
+            if (!document.getElementById('ai-thinking')) showThinking();
+            return;
+        }
+        // We have visible content — ensure thinking is removed and bubble exists
+        if (!_streamBubble) streamStart();
+        _streamBubble.innerHTML = fmt(display) + '<span class="streaming-cursor"></span>';
         scrollAiToBottom();
     }
 
     function streamEnd(fullContent) {
-        const text = fullContent || _streamBuf;
+        const raw = fullContent || _streamBuf;
+        const text = _stripThinkBlocks(raw);
         if (_streamBubble) {
             _streamBubble.innerHTML = fmt(text);
+        } else if (text) {
+            // No bubble was created (e.g. entire response was a think block)
+            appendAssistantBubble(text);
+            _streamBuf = '';
+            const marker = document.getElementById('ai-streaming-msg');
+            if (marker) marker.removeAttribute('id');
+            scrollAiToBottom();
+            return;
         }
         _streamBubble = null;
         _streamBuf = '';
@@ -742,6 +839,8 @@
         if (persist !== false) { _chatLog.push({role:'tool', name, args:args||{}, time:Date.now()}); }
     }
 
+    let _thinkTimer = null;
+
     function showThinking() {
         removeThinking();
         const div = document.createElement('div');
@@ -749,15 +848,26 @@
         div.id = 'ai-thinking';
         div.innerHTML =
             '<div class="thinking-bubble">' +
+              '<span class="thinking-label">Thinking</span>' +
               '<div class="thinking-dot"></div>' +
               '<div class="thinking-dot"></div>' +
               '<div class="thinking-dot"></div>' +
+              '<span class="thinking-elapsed" id="ai-think-time"></span>' +
             '</div>';
         aiMessages.appendChild(div);
         scrollAiToBottom();
+        // Elapsed timer so user knows it's alive
+        const t0 = Date.now();
+        _thinkTimer = setInterval(() => {
+            const el = document.getElementById('ai-think-time');
+            if (!el) { clearInterval(_thinkTimer); _thinkTimer = null; return; }
+            const s = Math.floor((Date.now() - t0) / 1000);
+            if (s >= 2) el.textContent = s + 's';
+        }, 1000);
     }
 
     function removeThinking() {
+        if (_thinkTimer) { clearInterval(_thinkTimer); _thinkTimer = null; }
         const el = document.getElementById('ai-thinking');
         if (el) el.remove();
     }

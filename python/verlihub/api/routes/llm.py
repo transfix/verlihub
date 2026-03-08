@@ -1227,9 +1227,17 @@ async def ws_llm_chat(
 
                     full_content = "".join(content_parts)
 
+                    # Strip <think>…</think> reasoning blocks (Qwen / DeepSeek models)
+                    import re as _re
+                    clean_content = _re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
+                    # If still inside an unclosed <think>, drop it
+                    think_idx = clean_content.find('<think>')
+                    if think_idx >= 0:
+                        clean_content = clean_content[:think_idx].rstrip()
+
                     # Finalise streamed text
                     if sent_stream_start:
-                        await ws.send_json({"type": "stream_end", "content": full_content})
+                        await ws.send_json({"type": "stream_end", "content": clean_content})
 
                     # Build message dict for conversation history
                     msg_dict: dict = {"role": "assistant", "content": full_content or None}

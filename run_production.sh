@@ -285,10 +285,43 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      - ${NETWORK}
+      ${NETWORK}:
+        aliases:
+          - ${DB_HOST}
     restart: ${RESTART_POLICY}
 
-  # Verlihub Hub
+# ── Compose generation — PostgreSQL service block ────────────────────────────
+
+_compose_postgres_service() {
+    cat << EOF
+  # PostgreSQL database
+  ${CONTAINER_PREFIX}-db:
+    image: postgres:16
+    container_name: ${CONTAINER_PREFIX}-db
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+    volumes:
+      - ${DB_VOLUME}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      ${NETWORK}:
+        aliases:
+          - ${DB_HOST}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Compose generation — legacy verlihub hub ─────────────────────────────────
+
+_compose_legacy_hub() {
+    cat << EOF
+  # Verlihub Legacy Hub (C++)
   ${CONTAINER_PREFIX}-hub:
     build:
       context: .
@@ -350,7 +383,8 @@ _compose_py_hub() {
     command: >
       python3 -m verlihub.server
         -c /config/production.yml
-        --mode api
+        --mode both
+        --host 0.0.0.0
     environment:
       PYTHONUNBUFFERED: "1"
     ports:
@@ -383,7 +417,8 @@ EOF
     command: >
       python3 -m verlihub.server
         -c /config/production.yml
-        --mode api
+        --mode both
+        --host 0.0.0.0
     environment:
       PYTHONUNBUFFERED: "1"
     ports:

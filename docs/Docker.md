@@ -24,7 +24,7 @@ This guide explains how to configure and run Verlihub using Docker for both deve
 sg docker ./run_integration_tests.sh
 
 # Or run with docker-compose directly
-sg docker docker compose up --build
+sg docker -c "docker compose up --build"
 ```
 
 ### Production
@@ -35,13 +35,13 @@ cp production.example.yml production.yml
 # Edit production.yml with your settings
 
 # 2. Start the hub
-sg docker ./run_production.sh --config production.yml
+sg docker -c "./run_production.sh --config production.yml"
 
 # 3. View logs
-sg docker ./run_production.sh --logs
+sg docker -c "./run_production.sh --logs"
 
 # 4. Stop the hub
-sg docker ./run_production.sh --stop
+sg docker -c "./run_production.sh --stop"
 ```
 
 ## Development Environment
@@ -59,16 +59,16 @@ The development setup uses `docker-compose.yml` for quick testing and developmen
 
 ```bash
 # Build and start
-sg docker docker compose up --build
+sg docker -c "docker compose up --build"
 
 # Run in background
-sg docker docker compose up -d --build
+sg docker -c "docker compose up -d --build"
 
 # View logs
-sg docker docker compose logs -f verlihub
+sg docker -c "docker compose logs -f verlihub"
 
 # Stop and remove
-sg docker docker compose down
+sg docker -c "docker compose down"
 ```
 
 ### Environment Variables
@@ -664,7 +664,7 @@ startup_commands:
 **Launch:**
 
 ```bash
-sg docker ./run_production.sh --config production.yml --edition py
+sg docker -c "./run_production.sh --config production.yml --edition py"
 ```
 
 ### Example: Local Ollama Sidecar (CPU, no GPU)
@@ -739,7 +739,7 @@ startup_commands:
 **Launch** (same command — the script detects the Ollama URL and starts the sidecar):
 
 ```bash
-sg docker ./run_production.sh --config production.yml --edition py
+sg docker -c "./run_production.sh --config production.yml --edition py"
 ```
 
 ### What You Get
@@ -755,10 +755,10 @@ sg docker ./run_production.sh --config production.yml --edition py
 ### Lifecycle Commands
 
 ```bash
-sg docker ./run_production.sh --logs       # tail logs
-sg docker ./run_production.sh --status     # container status
-sg docker ./run_production.sh --stop       # shut down
-sg docker ./run_production.sh --restart    # restart
+sg docker -c "./run_production.sh --logs"       # tail logs
+sg docker -c "./run_production.sh --status"     # container status
+sg docker -c "./run_production.sh --stop"       # shut down
+sg docker -c "./run_production.sh --restart"    # restart
 ```
 
 ### LLM Configuration Reference
@@ -799,7 +799,7 @@ sg docker ./run_production.sh --restart    # restart
 ./run_production.sh --logs
 
 # Development logs
-sg docker docker compose logs -f
+sg docker -c "docker compose logs -f"
 
 # Specific container
 docker logs vh-prod-hub -f

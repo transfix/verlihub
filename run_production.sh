@@ -3,11 +3,19 @@
 # Launches a production instance with configuration from a YAML file
 #
 # Usage:
-#   sg docker ./run_production.sh                    # Use default production.yml
-#   sg docker ./run_production.sh --config my.yml   # Use custom config
-#   sg docker ./run_production.sh --stop            # Stop production instance
-#   sg docker ./run_production.sh --logs            # Show logs
-#   sg docker ./run_production.sh --status          # Show status
+#   # Legacy verlihub with MySQL (default)
+#   sg docker -c "./run_production.sh --config production.yml"
+#
+#   # verlihub-py with PostgreSQL
+#   sg docker -c "./run_production.sh --config production.yml --edition py"
+#
+#   # Auto-detect edition and database from YAML
+#   sg docker -c "./run_production.sh --config production.yml"
+#
+#   # Lifecycle
+#   sg docker -c "./run_production.sh --stop"
+#   sg docker -c "./run_production.sh --logs"
+#   sg docker -c "./run_production.sh --status"
 
 set -e
 
@@ -80,10 +88,10 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help         Show this help message"
             echo ""
             echo "Examples:"
-            echo "  sg docker $0                          # Start with production.yml"
-            echo "  sg docker $0 --config my-hub.yml     # Start with custom config"
-            echo "  sg docker $0 --stop                   # Stop instance"
-            echo "  sg docker $0 --logs                   # View logs"
+            echo "  sg docker -c \"$0\"                                  # Default (legacy + MySQL)"
+            echo "  sg docker -c \"$0 --edition py\"                     # verlihub-py + auto DB"
+            echo "  sg docker -c \"$0 --edition py --config hub.yml\"    # verlihub-py + custom config"
+            echo "  sg docker -c \"$0 --stop\"                           # Stop instance"
             exit 0
             ;;
         *)

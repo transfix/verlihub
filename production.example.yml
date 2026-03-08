@@ -1,7 +1,17 @@
 # Verlihub Production Configuration Example
 # Copy to production.yml and customize for your deployment
 #
-# Usage: sg docker ./run_production.sh [--config production.yml]
+# Usage:
+#   # Legacy C++ hub (MySQL only)
+#   sg docker -c "./run_production.sh --config production.yml"
+#   sg docker -c "./run_production.sh --config production.yml --edition legacy"
+#
+#   # verlihub-py Python hub (MySQL or PostgreSQL)
+#   sg docker -c "./run_production.sh --config production.yml --edition py"
+#
+# Both editions share the same YAML format. Set "edition" below to auto-detect,
+# or pass --edition on the command line. If database.type is "postgresql",
+# the edition is automatically set to "py" since legacy doesn't support it.
 #
 # Most settings have sensible defaults - only configure what you need to change.
 # Settings not specified will use Verlihub's built-in defaults.

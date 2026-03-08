@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verlihub Integration Test Runner
-# Run with: sg docker ./run_integration_tests.sh [options]
+# Run with: sg docker -c "./run_integration_tests.sh [options]"
 #
 # Examples:
 #   ./run_integration_tests.sh              # Run all tests
@@ -79,9 +79,9 @@ while [[ $# -gt 0 ]]; do
             echo "If no test type is specified, all tests will be run."
             echo ""
             echo "Examples:"
-            echo "  sg docker $0              # Run all tests"
-            echo "  sg docker $0 --single     # Single interpreter only"
-            echo "  sg docker $0 --dispatcher # Quick dispatcher tests"
+            echo "  sg docker -c \"$0\"              # Run all tests"
+            echo "  sg docker -c \"$0 --single\"     # Single interpreter only"
+            echo "  sg docker -c \"$0 --dispatcher\" # Quick dispatcher tests"
             exit 0
             ;;
         *)

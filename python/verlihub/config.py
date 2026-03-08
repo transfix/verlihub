@@ -172,6 +172,8 @@ class ApiConfig:
     registration_enabled: bool = True
     registration_require_invite: bool = False
     registration_default_class: int = 1  # REGISTERED
+    registration_require_email: bool = True
+    registration_check_email_deliverability: bool = False
     
     def to_env(self) -> dict[str, str]:
         """Export as environment variables."""
@@ -184,6 +186,8 @@ class ApiConfig:
             "VH_REGISTRATION_ENABLED": "1" if self.registration_enabled else "0",
             "VH_REGISTRATION_REQUIRE_INVITE": "1" if self.registration_require_invite else "0",
             "VH_REGISTRATION_DEFAULT_CLASS": str(self.registration_default_class),
+            "VH_REGISTRATION_REQUIRE_EMAIL": "1" if self.registration_require_email else "0",
+            "VH_REGISTRATION_CHECK_EMAIL_DELIVERABILITY": "1" if self.registration_check_email_deliverability else "0",
         }
         if self.secret:
             env["VH_JWT_SECRET"] = self.secret
@@ -480,6 +484,8 @@ class VerlihubConfig:
                 registration_enabled=api.get("registration_enabled", config.api.registration_enabled),
                 registration_require_invite=api.get("registration_require_invite", config.api.registration_require_invite),
                 registration_default_class=api.get("registration_default_class", config.api.registration_default_class),
+                registration_require_email=api.get("registration_require_email", config.api.registration_require_email),
+                registration_check_email_deliverability=api.get("registration_check_email_deliverability", config.api.registration_check_email_deliverability),
             )
         
         # Hub
@@ -978,6 +984,7 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "hub.category": ("config", "hub_category"),
     "hub.encoding": ("config", "hub_encoding"),
     "hub.max_users": ("config", "max_users"),
+    "hub.motd": ("config", "hub_motd"),
     "bots.security.nick": ("config", "hub_security"),
     "bots.op_chat.nick": ("config", "opchat_name"),
 }

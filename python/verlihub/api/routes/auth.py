@@ -61,6 +61,32 @@ def _reg_default_class() -> int:
     return cfg.api.registration_default_class if cfg else UserClass.REGISTERED
 
 
+def _reg_require_email() -> bool:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_require_email if cfg else True
+
+
+def _reg_check_deliverability() -> bool:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_check_email_deliverability if cfg else False
+
+
+def _is_nick_online(nick: str) -> bool:
+    """Check if a nick is currently connected to the hub."""
+    try:
+        from verlihub.api.deps import get_hub_context
+        ctx = get_hub_context()
+        if ctx:
+            for u in ctx.get_user_list():
+                if u.get("nick") == nick:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 @router.post("/register", response_model=Token)
 async def register(
     request: RegisterRequest,
@@ -112,6 +138,41 @@ async def register(
             detail="Nick already registered",
         )
     
+    # Check if nick is currently online (live user)
+    if _is_nick_online(nick):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This nickname is currently in use by a connected user. "
+                   "Please choose a different nickname or disconnect first.",
+        )
+    
+    # Validate email
+    email = (request.email or "").strip().lower()
+    if _reg_require_email():
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email address is required",
+            )
+        from verlihub.email_validation import validate_email
+        ok, err = await validate_email(
+            email, check_deliverability=_reg_check_deliverability()
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=err,
+            )
+    elif email:
+        # Email provided but not required — still validate format
+        from verlihub.email_validation import validate_email
+        ok, err = await validate_email(email, check_deliverability=False)
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=err,
+            )
+    
     # Handle invite code
     user_class = _reg_default_class()
     invite = None
@@ -153,6 +214,7 @@ async def register(
     new_user = RegUser(
         nick=nick,
         login_pwd=hash_password(request.password),
+        email=email,
         user_class=user_class,
         authorised=True,
         reg_op="self-registration",

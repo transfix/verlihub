@@ -111,7 +111,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     bcrypt>=4.0.0 \
     openai>=1.12.0 \
     "mcp[cli]>=1.0.0" \
-    click>=8.0.0
+    click>=8.0.0 \
+    dnspython>=2.4.0
 
 # Install verlihub-py package (with ai extra for LLM + MCP support)
 RUN pip3 install --no-cache-dir --break-system-packages -e "/src/python[ai]"

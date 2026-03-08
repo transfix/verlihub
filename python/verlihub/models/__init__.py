@@ -61,6 +61,7 @@ class RegUserBase(SQLModel):
     """Base model for registered users."""
     nick: str = Field(index=True, max_length=64)
     login_pwd: str = Field(default="", max_length=128)  # Hashed password
+    email: str = Field(default="", max_length=256)  # User email address
     login_last_ip: str = Field(default="", max_length=45)  # IPv4/IPv6
     login_last: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     login_count: int = 0
@@ -98,6 +99,7 @@ class RegUserRead(RegUserBase):
 class RegUserUpdate(SQLModel):
     """Schema for updating a registered user."""
     login_pwd: Optional[str] = None
+    email: Optional[str] = None
     user_class: Optional[int] = None
     authorised: Optional[bool] = None
     note_op: Optional[str] = None
@@ -330,6 +332,7 @@ class RegisterRequest(SQLModel):
     """Schema for public self-registration."""
     nick: str = Field(max_length=64)
     password: str = Field(max_length=128)
+    email: Optional[str] = Field(default=None, max_length=256)
     invite_code: Optional[str] = Field(default=None, max_length=64)
 
 

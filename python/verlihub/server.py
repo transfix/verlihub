@@ -225,14 +225,22 @@ def _write_motd_file(config: "VerlihubConfig", config_dir: str) -> None:
     """Write the MOTD file to <config_dir>/motd so the C++ hub picks it up.
 
     Sources (in order):
-    1. ``hub.motd_file`` — copy referenced file
-    2. ``hub.motd`` — inline text from YAML
-    3. ``hub.description`` — fallback to hub description
+    1. Database (SetupList ``config.hub_motd``) — survives restarts
+    2. ``hub.motd_file`` — copy referenced file
+    3. ``hub.motd`` — inline text from YAML
+    4. ``hub.description`` — fallback to hub description
     """
     from pathlib import Path
     motd_path = Path(config_dir) / "motd"
 
-    # Explicit file reference
+    # 1. Check database for a persisted MOTD (set via LLM / admin)
+    db_motd = _read_motd_from_db()
+    if db_motd:
+        motd_path.write_text(db_motd + "\n", encoding="utf-8")
+        logger.info("Wrote MOTD from DB (%d chars) to %s", len(db_motd), motd_path)
+        return
+
+    # 2. Explicit file reference
     if config.hub.motd_file:
         src = Path(config.hub.motd_file)
         if src.exists():
@@ -243,11 +251,47 @@ def _write_motd_file(config: "VerlihubConfig", config_dir: str) -> None:
         else:
             logger.warning("motd_file %s not found, falling back", src)
 
-    # Inline MOTD text
+    # 3. Inline MOTD text or description
     motd_text = config.hub.motd or config.hub.description
     if motd_text:
         motd_path.write_text(motd_text + "\n", encoding="utf-8")
         logger.info("Wrote MOTD (%d chars) to %s", len(motd_text), motd_path)
+
+
+def _read_motd_from_db() -> str:
+    """Try to read the MOTD from the SetupList table. Returns '' on failure."""
+    try:
+        import asyncio
+        from sqlmodel import select
+        from verlihub.models import SetupList
+        from verlihub.models.database import get_database
+
+        db = get_database()
+
+        async def _query():
+            async with db._session_factory() as session:
+                result = await session.execute(
+                    select(SetupList).where(
+                        SetupList.file == "config",
+                        SetupList.var == "hub_motd",
+                    )
+                )
+                entry = result.scalar_one_or_none()
+                return entry.val if entry else ""
+
+        # We might be called from an already-running loop (run_both)
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in async context — run directly
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(_query(), loop)
+            return future.result(timeout=5)
+        except RuntimeError:
+            # No running loop — run synchronously
+            return asyncio.run(_query())
+    except Exception:
+        logger.debug("Could not read MOTD from DB (probably not initialized yet)")
+        return ""
 
 
 async def run_both(config: "VerlihubConfig", args: argparse.Namespace) -> None:
@@ -264,7 +308,30 @@ async def run_both(config: "VerlihubConfig", args: argparse.Namespace) -> None:
     config_dir = args.config_dir or os.getenv("VH_CONFIG_DIR", ".")
     hub_port = args.hub_port or config.hub.port
 
+    # --- Initialise database BEFORE the hub starts accepting connections ---
+    # This eliminates the race window where _sync_db_lookup would fail
+    # because the DB/event-loop wasn't ready yet.
+    try:
+        from verlihub.models.database import DatabaseConfig, init_database
+        db_url = config.database.get_url(config_dir)
+        db_config = DatabaseConfig(url=db_url)
+        await init_database(config=db_config)
+        logger.info("Database pre-initialised for hub auth callbacks")
+
+        # Seed users from YAML config
+        try:
+            from verlihub.config import apply_config_to_db
+            await apply_config_to_db(config)
+        except Exception as seed_err:
+            logger.warning("Config-to-DB seed (pre-hub): %s", seed_err)
+    except Exception as db_err:
+        logger.error("Database pre-init failed: %s — auth will reject until API starts", db_err)
+
     async with create_hub(config_dir) as ctx:
+        # Give the event handler the current loop so cross-thread DB
+        # lookups (OnValidateNick, OnCheckPassword) work immediately.
+        ctx.events.set_event_loop(asyncio.get_running_loop())
+
         # Feed YAML config through the director callback
         hub_section: dict[str, str] = {}
         if config.hub.name:

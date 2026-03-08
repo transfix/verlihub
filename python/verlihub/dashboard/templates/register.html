@@ -52,6 +52,20 @@
                 </div>
                 
                 <div class="field">
+                    <label class="label">Email{% if require_email %} <span class="tag is-warning is-light">Required</span>{% else %} <span class="tag is-info is-light">Optional</span>{% endif %}</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="email" name="email" 
+                               placeholder="your@email.com"
+                               {% if require_email %}required{% endif %}
+                               maxlength="256">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-envelope"></i>
+                        </span>
+                    </div>
+                    <p class="help">{% if require_email %}We'll use this for account recovery and notifications{% else %}Optional — used for account recovery and notifications{% endif %}</p>
+                </div>
+                
+                <div class="field">
                     <label class="label">Password</label>
                     <div class="control has-icons-left">
                         <input class="input" type="password" name="password" 

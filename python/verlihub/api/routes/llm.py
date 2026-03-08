@@ -614,7 +614,27 @@ async def _execute_tool(
                 return json.dumps({"error": "Hub not running"})
             motd = arguments.get("motd", "")
             try:
-                # Write MOTD file so it persists across restarts
+                # Persist MOTD to database so it survives restarts
+                try:
+                    from sqlmodel import select
+                    from verlihub.models import SetupList
+                    from verlihub.models.database import get_async_session
+                    async with get_async_session() as session:
+                        result = await session.execute(
+                            select(SetupList).where(
+                                SetupList.file == "config",
+                                SetupList.var == "hub_motd",
+                            )
+                        )
+                        entry = result.scalar_one_or_none()
+                        if entry is not None:
+                            entry.val = motd
+                            session.add(entry)
+                        else:
+                            session.add(SetupList(file="config", var="hub_motd", val=motd))
+                except Exception as db_err:
+                    log.warning("Could not persist MOTD to DB: %s", db_err)
+                # Write MOTD file for C++ fallback
                 from verlihub.config import get_config_optional as _gc
                 cfg = _gc()
                 config_dir = cfg._config_dir if cfg else "/etc/verlihub"
@@ -625,7 +645,7 @@ async def _execute_tool(
                     ctx._cpp.SetMOTD(motd)
                 except AttributeError:
                     pass  # SWIG wrapper may not expose SetMOTD yet
-                return json.dumps({"success": True, "motd": motd, "note": "MOTD written to file and pushed to live server"})
+                return json.dumps({"success": True, "motd": motd, "note": "MOTD persisted to database, written to file, and pushed to live server"})
             except Exception as e:
                 return json.dumps({"error": f"Set MOTD failed: {e}"})
         

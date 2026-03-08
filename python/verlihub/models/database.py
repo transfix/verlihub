@@ -303,10 +303,48 @@ class Database:
         async with self._engine.begin() as conn:
             # Create tables if they don't exist
             await conn.run_sync(SQLModel.metadata.create_all)
+            # Run lightweight migrations for schema changes
+            await self._run_migrations(conn)
     
     async def disconnect(self) -> None:
         """Close database connection."""
         await self._engine.dispose()
+
+    @staticmethod
+    async def _run_migrations(conn) -> None:
+        """Apply lightweight schema migrations (add missing columns)."""
+        import logging
+        _log = logging.getLogger(__name__)
+
+        # Each entry: (table, column, SQL type default)
+        _COLUMN_MIGRATIONS = [
+            ("reglist", "email", "VARCHAR(256) DEFAULT ''"),
+        ]
+
+        for table, column, col_def in _COLUMN_MIGRATIONS:
+            try:
+                # Check if column exists (works for PostgreSQL, SQLite, MySQL)
+                from sqlalchemy import text
+                result = await conn.execute(
+                    text(f"SELECT column_name FROM information_schema.columns "
+                         f"WHERE table_name = :tbl AND column_name = :col"),
+                    {"tbl": table, "col": column},
+                )
+                if result.first() is None:
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+                    )
+                    _log.info("Migration: added column %s.%s", table, column)
+            except Exception:
+                # SQLite doesn't support information_schema — try adding directly
+                try:
+                    from sqlalchemy import text
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+                    )
+                    _log.info("Migration: added column %s.%s (SQLite path)", table, column)
+                except Exception:
+                    pass  # Column likely already exists
     
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get an async database session."""

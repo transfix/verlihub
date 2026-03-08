@@ -226,6 +226,7 @@ async def register_page(
     cfg = get_config_optional()
     registration_enabled = cfg.api.registration_enabled if cfg else True
     require_invite = cfg.api.registration_require_invite if cfg else False
+    require_email = cfg.api.registration_require_email if cfg else True
     
     context = get_base_context(request)
     context["error"] = error
@@ -233,6 +234,7 @@ async def register_page(
     context["invite_code"] = invite or ""
     context["registration_enabled"] = registration_enabled
     context["require_invite"] = require_invite
+    context["require_email"] = require_email
     return templates.TemplateResponse(request, "register.html", context)
 
 
@@ -240,9 +242,12 @@ async def register_page(
 async def register_submit(request: Request):
     """Handle registration form submission."""
     import re
+    from urllib.parse import quote_plus
     cfg = get_config_optional()
     registration_enabled = cfg.api.registration_enabled if cfg else True
     require_invite = cfg.api.registration_require_invite if cfg else False
+    require_email = cfg.api.registration_require_email if cfg else True
+    check_deliverability = cfg.api.registration_check_email_deliverability if cfg else False
     
     if not registration_enabled:
         return RedirectResponse(
@@ -254,6 +259,7 @@ async def register_submit(request: Request):
     nick = (form.get("nick", "") or "").strip()
     password = form.get("password", "") or ""
     confirm_password = form.get("confirm_password", "") or ""
+    email = (form.get("email", "") or "").strip().lower()
     invite_code = (form.get("invite_code", "") or "").strip()
     
     # Validate
@@ -283,6 +289,21 @@ async def register_submit(request: Request):
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
+    # Validate email
+    if require_email and not email:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Email+address+is+required&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if email:
+        from verlihub.email_validation import validate_email
+        ok, err = await validate_email(email, check_deliverability=check_deliverability)
+        if not ok:
+            return RedirectResponse(
+                url=f"/dashboard/register?error={quote_plus(err)}&invite={invite_code}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    
     # Call the API registration endpoint
     from verlihub.api.auth import create_access_token, hash_password
     from verlihub.models import InviteCode as InviteCodeModel
@@ -300,6 +321,20 @@ async def register_submit(request: Request):
                     url=f"/dashboard/register?error=Nick+already+registered&invite={invite_code}",
                     status_code=status.HTTP_303_SEE_OTHER,
                 )
+            
+            # Check if nick is currently online (live user)
+            try:
+                from verlihub.api.deps import get_hub_context
+                ctx = get_hub_context()
+                if ctx:
+                    for u in ctx.get_user_list():
+                        if u.get("nick") == nick:
+                            return RedirectResponse(
+                                url=f"/dashboard/register?error=This+nickname+is+currently+in+use+by+a+connected+user&invite={invite_code}",
+                                status_code=status.HTTP_303_SEE_OTHER,
+                            )
+            except Exception:
+                pass
             
             # Handle invite code
             from verlihub.models import UserClass
@@ -333,6 +368,7 @@ async def register_submit(request: Request):
             new_user = RegUser(
                 nick=nick,
                 login_pwd=hash_password(password),
+                email=email,
                 user_class=user_class,
                 authorised=True,
                 reg_op="self-registration",

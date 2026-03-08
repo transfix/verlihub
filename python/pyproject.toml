@@ -43,6 +43,7 @@ dependencies = [
     "python-multipart>=0.0.6",  # For form parsing in FastAPI/Starlette
     "pyyaml>=6.0.0",  # For YAML configuration files
     "click>=8.0.0",  # For CLI tools
+    "dnspython>=2.4.0",  # For email deliverability checks (MX lookup)
 ]
 
 [project.optional-dependencies]

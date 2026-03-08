@@ -234,6 +234,15 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
             logger.exception("DB lookup failed for nick=%s", nick)
             return None
 
+    def _db_available(self) -> bool:
+        """Check if the database and event loop are ready for auth queries."""
+        try:
+            from verlihub.models.database import get_database
+            get_database()
+        except (RuntimeError, ImportError):
+            return False
+        return self._get_event_loop() is not None
+
     def _get_config_value(self, key: str, default: str = "") -> str:
         """Read a config value from the HubContext (thread-safe C++ call)."""
         try:
@@ -262,6 +271,15 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
                     return -1
                 # Registered user → require password
                 return max(user_class, 1)
+
+            if db_result is None and not self._db_available():
+                # DB lookup failed (no event loop / DB not ready).
+                # Reject the connection rather than allowing a
+                # potentially-registered user in as a guest.
+                logger.warning(
+                    "Rejecting nick %s — database unavailable for auth", nick
+                )
+                return -1
 
             # Nick not in DB → check allow_unregistered
             allow_unreg = self._get_config_value("allow_unregistered", "1")

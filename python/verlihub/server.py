@@ -203,6 +203,7 @@ async def run_hub(config: "VerlihubConfig", args: argparse.Namespace) -> None:
     hub_port = args.hub_port or config.hub.port
     
     logger.info("Starting hub on port %d", hub_port)
+    _write_motd_file(config, config_dir)
     
     try:
         await run_hub_server(
@@ -218,6 +219,35 @@ async def run_hub(config: "VerlihubConfig", args: argparse.Namespace) -> None:
     except Exception as e:
         logger.error("Hub error: %s", e)
         sys.exit(1)
+
+
+def _write_motd_file(config: "VerlihubConfig", config_dir: str) -> None:
+    """Write the MOTD file to <config_dir>/motd so the C++ hub picks it up.
+
+    Sources (in order):
+    1. ``hub.motd_file`` — copy referenced file
+    2. ``hub.motd`` — inline text from YAML
+    3. ``hub.description`` — fallback to hub description
+    """
+    from pathlib import Path
+    motd_path = Path(config_dir) / "motd"
+
+    # Explicit file reference
+    if config.hub.motd_file:
+        src = Path(config.hub.motd_file)
+        if src.exists():
+            import shutil
+            shutil.copy2(src, motd_path)
+            logger.info("Copied MOTD from %s → %s", src, motd_path)
+            return
+        else:
+            logger.warning("motd_file %s not found, falling back", src)
+
+    # Inline MOTD text
+    motd_text = config.hub.motd or config.hub.description
+    if motd_text:
+        motd_path.write_text(motd_text + "\n", encoding="utf-8")
+        logger.info("Wrote MOTD (%d chars) to %s", len(motd_text), motd_path)
 
 
 async def run_both(config: "VerlihubConfig", args: argparse.Namespace) -> None:
@@ -252,6 +282,9 @@ async def run_both(config: "VerlihubConfig", args: argparse.Namespace) -> None:
         if config.hub.listen_host:
             hub_section["listen_ip"] = config.hub.listen_host
         ctx.events.set_config({"hub": hub_section})
+
+        # Write MOTD file so C++ picks it up on Start()
+        _write_motd_file(config, config_dir)
 
         if not ctx.initialize():
             raise RuntimeError("HubContext.initialize() failed")

@@ -147,7 +147,11 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
                     motd.pop_back();
                 m_nmdc_server->SetMOTD(motd);
                 Log(0, vh::fmt("Loaded MOTD ({} chars)", motd.size()));
+            } else {
+                Log(0, vh::fmt("MOTD file exists but failed to open: {}", motd_path.string()));
             }
+        } else {
+            Log(1, vh::fmt("No MOTD file at: {}", motd_path.string()));
         }
     }
     

@@ -202,6 +202,7 @@ class HubConfig:
     topic: str = ""
     category: str = ""
     encoding: str = "CP1252"
+    motd: str = ""  # Inline MOTD text; written to <config_dir>/motd on startup
     motd_file: str = ""
     max_users: int = 1000
     logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
@@ -494,6 +495,7 @@ class VerlihubConfig:
                 topic=hub.get("topic", config.hub.topic),
                 category=hub.get("category", config.hub.category),
                 encoding=hub.get("encoding", config.hub.encoding),
+                motd=hub.get("motd", config.hub.motd),
                 motd_file=hub.get("motd_file", config.hub.motd_file),
                 max_users=hub.get("max_users", config.hub.max_users),
                 logo=hub.get("logo", config.hub.logo),

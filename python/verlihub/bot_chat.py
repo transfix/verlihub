@@ -330,6 +330,14 @@ class BotChatHandler:
         """Return the running asyncio event loop."""
         if self._loop is not None and self._loop.is_running():
             return self._loop
+        # Use the event loop stored by HubEventHandler.set_event_loop()
+        try:
+            ev_loop = self.ctx.events._event_loop
+            if ev_loop is not None and ev_loop.is_running():
+                self._loop = ev_loop
+                return ev_loop
+        except AttributeError:
+            pass
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():

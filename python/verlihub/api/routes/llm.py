@@ -576,6 +576,109 @@ def _format_bytes(b: int) -> str:
     return f"{b:.1f} EiB"
 
 
+def _build_hub_context_snapshot(is_admin: bool) -> str:
+    """
+    Build a text snapshot of live hub state for injection into the system prompt.
+
+    Used when the LLM endpoint doesn't support tool calling — we pre-fetch
+    all the data the tools would return and embed it directly.
+    """
+    ctx = get_hub_context()
+    if ctx is None:
+        return "\n[Hub is not running — no live data available.]\n"
+
+    parts: list[str] = ["\n--- LIVE HUB DATA (refreshed per message) ---\n"]
+
+    # Hub info
+    try:
+        from verlihub.config import get_config_optional as _gc
+        cfg = _gc()
+        parts.append(f"Hub name: {ctx.hub_name}")
+        parts.append(f"Topic: {ctx.hub_topic}")
+        if cfg:
+            parts.append(f"Host: {cfg.hub.host}")
+        parts.append(f"Running: {ctx.is_running}")
+        parts.append(f"Uptime: {ctx.uptime} seconds")
+        parts.append(f"Users online: {ctx.user_count}")
+        parts.append(f"Total share: {_format_bytes(ctx.total_share)}")
+    except Exception as exc:
+        parts.append(f"(Hub info error: {exc})")
+
+    # User list
+    try:
+        users = ctx.get_user_list() or []
+        parts.append(f"\n### Online Users ({len(users)} total)")
+        if users:
+            for u in users:
+                nick = u.get("nick", "?")
+                share = _format_bytes(u.get("share", 0))
+                uclass = u.get("user_class", 0)
+                client = u.get("client", "")
+                country = u.get("country", "") or u.get("country_code", "")
+                desc = u.get("description", "")
+                line = f"  - {nick} | class {uclass} | share {share} | client {client}"
+                if country:
+                    line += f" | country {country}"
+                if desc:
+                    line += f" | desc: {desc}"
+                if is_admin:
+                    ip = u.get("ip", "")
+                    if ip:
+                        line += f" | IP {ip}"
+                parts.append(line)
+        else:
+            parts.append("  (no users online)")
+    except Exception as exc:
+        parts.append(f"(User list error: {exc})")
+
+    # Operators
+    try:
+        users = ctx.get_user_list() or []
+        ops = [u for u in users if u.get("user_class", 0) >= 3]
+        if ops:
+            parts.append(f"\n### Operators ({len(ops)})")
+            for o in ops:
+                parts.append(f"  - {o.get('nick', '?')} (class {o.get('user_class', 0)})")
+    except Exception:
+        pass
+
+    # Share statistics
+    try:
+        users = ctx.get_user_list() or []
+        shares = [u.get("share", 0) for u in users]
+        if shares:
+            total = sum(shares)
+            avg = total // len(shares)
+            parts.append(f"\n### Share Statistics")
+            parts.append(f"  Total: {_format_bytes(total)}")
+            parts.append(f"  Average: {_format_bytes(avg)}")
+            top = sorted(users, key=lambda u: u.get("share", 0), reverse=True)[:5]
+            if top:
+                parts.append("  Top sharers:")
+                for t in top:
+                    parts.append(f"    - {t.get('nick', '?')}: {_format_bytes(t.get('share', 0))}")
+    except Exception:
+        pass
+
+    # Geo distribution
+    try:
+        users = ctx.get_user_list() or []
+        geo: dict[str, int] = {}
+        for u in users:
+            cc = u.get("country", "") or u.get("country_code", "??")
+            if cc:
+                geo[cc] = geo.get(cc, 0) + 1
+        if geo:
+            parts.append(f"\n### Geographic Distribution")
+            for cc, cnt in sorted(geo.items(), key=lambda x: x[1], reverse=True):
+                parts.append(f"  - {cc}: {cnt} user(s)")
+    except Exception:
+        pass
+
+    parts.append("\n--- END LIVE HUB DATA ---\n")
+    return "\n".join(parts)
+
+
 # =============================================================================
 # System prompts
 # =============================================================================
@@ -627,6 +730,68 @@ Guidelines:
 """
 
 
+# Context-injected prompts — used when the LLM endpoint doesn't support tools
+SYSTEM_PROMPT_ADMIN_CONTEXT = """\
+You are a Verlihub DC++ hub assistant with administrator access. You help hub \
+operators monitor and manage the hub through natural language.
+
+Below you will find a snapshot of the live hub state. Use ONLY this data to \
+answer questions — never invent or guess information that is not in the snapshot.
+
+Available information includes: hub info, online users (with IPs), operators, \
+share statistics, geographic distribution.
+
+Guidelines:
+- Answer using ONLY the hub data provided below — do not fabricate or hallucinate
+- Present user lists as clean tables when there are few users
+- Summarize when there are many users (20+)
+- Flag anything unusual: zero-share users, suspicious clients, connectivity issues
+- Be direct and professional — this is an ops tool
+- Format numbers readably (e.g. "1.23 TiB" not raw bytes)
+- For write operations (kick, ban, broadcast, config changes), explain that \
+tool calling is unavailable and suggest using the hub console directly
+"""
+
+SYSTEM_PROMPT_USER_CONTEXT = """\
+You are a Verlihub DC++ hub assistant. You help users learn about the hub \
+and see who's online.
+
+Below you will find a snapshot of the live hub state. Use ONLY this data to \
+answer questions — never invent or guess information that is not in the snapshot.
+
+You can see: hub info, online users (nicknames, countries, share sizes, classes), \
+operators, geographic distribution, and share statistics.
+
+You CANNOT: see IP addresses, kick users, ban users, change configuration, \
+execute console commands, or send messages on behalf of users.
+
+Guidelines:
+- Answer using ONLY the hub data provided below
+- Be friendly and helpful
+- Never fabricate data
+- If asked to do something beyond your access, explain politely
+"""
+
+
+def _inject_hub_context(messages: list[dict], user: "TokenData", is_admin: bool) -> None:
+    """
+    Replace the system prompt with a context-injected version containing live hub data.
+
+    Called when the LLM endpoint doesn't support tool calling, so the model
+    gets all data up-front in the system message instead of calling tools.
+    """
+    snapshot = _build_hub_context_snapshot(is_admin)
+    base_prompt = SYSTEM_PROMPT_ADMIN_CONTEXT if is_admin else SYSTEM_PROMPT_USER_CONTEXT
+    full_prompt = base_prompt + f"\n\nThe current operator is: {user.nick} (class {user.user_class})\n" + snapshot
+
+    # Update the system message (always first in the list)
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = full_prompt
+    else:
+        messages.insert(0, {"role": "system", "content": full_prompt})
+    log.info("Injected live hub context into system prompt (%d chars)", len(snapshot))
+
+
 # =============================================================================
 # Chat session manager
 # =============================================================================
@@ -639,6 +804,7 @@ class ChatSession:
         self.is_admin = is_admin
         self.llm_cfg = llm_cfg
         self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
+        self.tools_available = True  # Set to False if endpoint rejects tool_choice
         system_prompt = SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER
         # Personalize the system prompt
         system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
@@ -654,6 +820,19 @@ class ChatSession:
         client = _get_openai_client()
         self.messages.append({"role": "user", "content": user_message})
         tool_calls_made: list[dict] = []
+        
+        # If tools already known to be unsupported, skip straight to context-injection path
+        if not self.tools_available:
+            _inject_hub_context(self.messages, self.user, self.is_admin)
+            response = await client.chat.completions.create(
+                model=self.llm_cfg.model,
+                messages=self.messages,
+                temperature=self.llm_cfg.temperature,
+                max_tokens=self.llm_cfg.max_tokens,
+            )
+            msg = response.choices[0].message
+            self.messages.append(msg.model_dump())
+            return msg.content or "(no response)", tool_calls_made
         
         for round_num in range(self.llm_cfg.max_tool_rounds):
             log.debug(f"LLM round {round_num + 1} for {self.user.nick}")
@@ -671,6 +850,8 @@ class ChatSession:
                 # Endpoint does not support tool calling — retry without tools
                 if round_num == 0:
                     log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
+                    self.tools_available = False
+                    _inject_hub_context(self.messages, self.user, self.is_admin)
                     response = await client.chat.completions.create(
                         model=self.llm_cfg.model,
                         messages=self.messages,
@@ -943,43 +1124,71 @@ async def ws_llm_chat(
 
                 for round_num in range(llm_cfg.max_tool_rounds):
                     stream_mode = True
-                    try:
-                        stream = await client.chat.completions.create(
-                            model=llm_cfg.model,
-                            messages=session.messages,
-                            tools=session.tools if session.tools else None,
-                            tool_choice="auto",
-                            temperature=llm_cfg.temperature,
-                            max_tokens=llm_cfg.max_tokens,
-                            stream=True,
-                        )
-                    except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
-                        if round_num == 0:
-                            log.warning("Tool/stream not supported, falling back: %s", exc)
-                            try:
-                                stream = await client.chat.completions.create(
-                                    model=llm_cfg.model,
-                                    messages=session.messages,
-                                    temperature=llm_cfg.temperature,
-                                    max_tokens=llm_cfg.max_tokens,
-                                    stream=True,
-                                )
-                            except Exception:
-                                # Final fallback: non-streaming, no tools
-                                resp = await client.chat.completions.create(
-                                    model=llm_cfg.model,
-                                    messages=session.messages,
-                                    temperature=llm_cfg.temperature,
-                                    max_tokens=llm_cfg.max_tokens,
-                                )
-                                text = resp.choices[0].message.content or "(no response)"
-                                session.messages.append(resp.choices[0].message.model_dump())
-                                await ws.send_json({"type": "response", "content": text})
-                                stream_mode = False
-                                stream = None
-                                break
-                        else:
-                            raise
+
+                    # If tools already known to be unsupported, go straight to context-injection
+                    if not session.tools_available:
+                        _inject_hub_context(session.messages, user, is_admin)
+                        try:
+                            stream = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                                stream=True,
+                            )
+                        except Exception:
+                            resp = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                            )
+                            text = resp.choices[0].message.content or "(no response)"
+                            session.messages.append(resp.choices[0].message.model_dump())
+                            await ws.send_json({"type": "response", "content": text})
+                            stream_mode = False
+                            stream = None
+                            break
+                    else:
+                        try:
+                            stream = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=session.messages,
+                                tools=session.tools if session.tools else None,
+                                tool_choice="auto",
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                                stream=True,
+                            )
+                        except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                            if round_num == 0:
+                                log.warning("Tool/stream not supported, falling back: %s", exc)
+                                session.tools_available = False
+                                _inject_hub_context(session.messages, user, is_admin)
+                                try:
+                                    stream = await client.chat.completions.create(
+                                        model=llm_cfg.model,
+                                        messages=session.messages,
+                                        temperature=llm_cfg.temperature,
+                                        max_tokens=llm_cfg.max_tokens,
+                                        stream=True,
+                                    )
+                                except Exception:
+                                    # Final fallback: non-streaming, no tools
+                                    resp = await client.chat.completions.create(
+                                        model=llm_cfg.model,
+                                        messages=session.messages,
+                                        temperature=llm_cfg.temperature,
+                                        max_tokens=llm_cfg.max_tokens,
+                                    )
+                                    text = resp.choices[0].message.content or "(no response)"
+                                    session.messages.append(resp.choices[0].message.model_dump())
+                                    await ws.send_json({"type": "response", "content": text})
+                                    stream_mode = False
+                                    stream = None
+                                    break
+                            else:
+                                raise
 
                     if not stream_mode:
                         break

@@ -776,11 +776,12 @@
         if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
 
         aiSocket = new WebSocket(url);
-        aiSocket.onopen = () => {};
+        aiSocket.onopen = () => { console.log('[AI Chat] WS connected to', url.replace(/token=[^&]+/, 'token=***')); };
 
         aiSocket.onmessage = (event) => {
             let data;
             try { data = JSON.parse(event.data); } catch { return; }
+            console.log('[AI Chat] WS ←', data.type, data.type === 'stream_delta' ? data.content?.slice(0, 40) : '');
 
             switch (data.type) {
                 case 'connected':
@@ -841,14 +842,16 @@
             }
         };
 
-        aiSocket.onclose = () => {
+        aiSocket.onclose = (ev) => {
+            console.log('[AI Chat] WS closed', ev.code, ev.reason);
             statusEl.textContent = 'Disconnected';
             statusEl.className = 'tag is-danger is-rounded is-small';
             setInputEnabled(false);
             _reconTimer = setTimeout(() => connectAiChat(currentSessionId), 5000);
         };
 
-        aiSocket.onerror = () => {
+        aiSocket.onerror = (ev) => {
+            console.error('[AI Chat] WS error', ev);
             statusEl.textContent = 'Error';
             statusEl.className = 'tag is-danger is-rounded is-small';
         };

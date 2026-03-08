@@ -1807,3 +1807,170 @@ class TestInProcessMcpAuthMiddleware:
         with patch("verlihub.api.routes.mcp.get_config_optional", return_value=cfg):
             await mw(scope, receive_fn, send_fn)
         assert len(calls) == 1
+
+
+# =============================================================================
+# Hub context snapshot & injection tests
+# =============================================================================
+
+
+class TestHubContextSnapshot:
+    """Tests for _build_hub_context_snapshot and _inject_hub_context."""
+
+    def test_snapshot_with_context(self):
+        """snapshot includes user list, hub name, share stats."""
+        from verlihub.api.routes.llm import _build_hub_context_snapshot
+        ctx = _mock_hub_context()
+        with patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()):
+            snap = _build_hub_context_snapshot(is_admin=True)
+        assert "LIVE HUB DATA" in snap
+        assert "TestHub" in snap
+        assert "Alice" in snap
+        assert "Bob" in snap
+        assert "Charlie" in snap
+        assert "Users online: 3" in snap
+
+    def test_snapshot_without_context(self):
+        """snapshot gracefully handles missing hub context."""
+        from verlihub.api.routes.llm import _build_hub_context_snapshot
+        with patch("verlihub.api.routes.llm.get_hub_context", return_value=None):
+            snap = _build_hub_context_snapshot(is_admin=False)
+        assert "not running" in snap.lower()
+
+    def test_snapshot_admin_includes_ips(self):
+        """Admin snapshot should include IP addresses."""
+        from verlihub.api.routes.llm import _build_hub_context_snapshot
+        ctx = _mock_hub_context()
+        with patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()):
+            snap = _build_hub_context_snapshot(is_admin=True)
+        assert "10.0.0.1" in snap
+
+    def test_snapshot_user_excludes_ips(self):
+        """Non-admin snapshot should NOT include IP addresses."""
+        from verlihub.api.routes.llm import _build_hub_context_snapshot
+        ctx = _mock_hub_context()
+        with patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()):
+            snap = _build_hub_context_snapshot(is_admin=False)
+        assert "10.0.0.1" not in snap
+
+    def test_inject_hub_context_replaces_system_prompt(self):
+        """_inject_hub_context replaces the system message with context-injected version."""
+        from verlihub.api.routes.llm import _inject_hub_context, SYSTEM_PROMPT_ADMIN_CONTEXT
+        ctx = _mock_hub_context()
+        user = _make_token_data("op", 5)
+        messages = [{"role": "system", "content": "original prompt"}]
+        with patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx), \
+             patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()):
+            _inject_hub_context(messages, user, is_admin=True)
+        # System message should now contain the context-injected prompt
+        assert "LIVE HUB DATA" in messages[0]["content"]
+        assert "op" in messages[0]["content"]  # personalized with nick
+        # Should contain the context-aware prompt template
+        assert "snapshot" in messages[0]["content"].lower() or "ONLY this data" in messages[0]["content"]
+
+
+class TestChatSessionToolsAvailableFlag:
+    """Tests for the tools_available flag on ChatSession."""
+
+    def test_initial_tools_available(self):
+        """New ChatSession should have tools_available=True."""
+        from verlihub.api.routes.llm import ChatSession
+        user = _make_token_data("op", 5)
+        llm_cfg = _llm_enabled_config().llm
+        with patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()):
+            session = ChatSession(user, is_admin=True, llm_cfg=llm_cfg)
+        assert session.tools_available is True
+
+    @pytest.mark.anyio
+    async def test_tools_available_false_skips_tools(self):
+        """When tools_available=False, chat() should skip tool calls and inject context."""
+        from verlihub.api.routes.llm import ChatSession
+        user = _make_token_data("op", 5)
+        llm_cfg = _llm_enabled_config().llm
+        ctx = _mock_hub_context()
+
+        mock_msg = MagicMock()
+        mock_msg.content = "There is 1 user online based on the hub data."
+        mock_msg.tool_calls = None
+        mock_msg.model_dump = MagicMock(return_value={
+            "role": "assistant",
+            "content": mock_msg.content,
+            "tool_calls": None,
+        })
+        mock_choice = MagicMock()
+        mock_choice.message = mock_msg
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        mock_openai = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()), \
+             patch("verlihub.api.routes.llm._get_openai_client", return_value=mock_openai), \
+             patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx):
+            session = ChatSession(user, is_admin=True, llm_cfg=llm_cfg)
+            session.tools_available = False  # Simulate previous failure
+
+            resp_text, tool_calls = await session.chat("how many users?")
+
+        assert "1 user" in resp_text
+        assert tool_calls == []
+        # Should have been called WITHOUT tools or tool_choice
+        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        assert "tools" not in call_kwargs
+        assert "tool_choice" not in call_kwargs
+        # System message should contain live hub data
+        system_msg = session.messages[0]["content"]
+        assert "LIVE HUB DATA" in system_msg
+
+    @pytest.mark.anyio
+    async def test_bad_request_sets_tools_available_false(self):
+        """When endpoint returns BadRequestError, tools_available should be set to False."""
+        from verlihub.api.routes.llm import ChatSession
+        import openai as openai_mod
+        user = _make_token_data("op", 5)
+        llm_cfg = _llm_enabled_config().llm
+        ctx = _mock_hub_context()
+
+        mock_msg = MagicMock()
+        mock_msg.content = "Fallback response."
+        mock_msg.tool_calls = None
+        mock_msg.model_dump = MagicMock(return_value={
+            "role": "assistant", "content": "Fallback response.", "tool_calls": None,
+        })
+        mock_choice = MagicMock()
+        mock_choice.message = mock_msg
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        call_count = 0
+
+        async def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1 and "tools" in kwargs and kwargs["tools"]:
+                raise openai_mod.BadRequestError(
+                    message="tool_choice auto requires --enable-auto-tool-choice",
+                    response=MagicMock(status_code=400),
+                    body={"error": {"message": "bad"}},
+                )
+            return mock_response
+
+        mock_openai = MagicMock()
+        mock_openai.chat.completions.create = AsyncMock(side_effect=side_effect)
+
+        with patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()), \
+             patch("verlihub.api.routes.llm._get_openai_client", return_value=mock_openai), \
+             patch("verlihub.api.routes.llm.get_hub_context", return_value=ctx):
+            session = ChatSession(user, is_admin=True, llm_cfg=llm_cfg)
+            assert session.tools_available is True
+
+            resp_text, _ = await session.chat("who is online?")
+
+        assert session.tools_available is False
+        assert "Fallback" in resp_text
+        # System prompt should now contain hub data
+        assert "LIVE HUB DATA" in session.messages[0]["content"]

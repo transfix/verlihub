@@ -87,6 +87,7 @@ class SessionListResponse(BaseModel):
 # =============================================================================
 
 _openai_client = None
+_endpoint_supports_tools: bool | None = None  # None = unknown, probe once
 
 
 def _get_llm_config() -> LlmConfig:
@@ -999,7 +1000,8 @@ class ChatSession:
         self.is_admin = is_admin
         self.llm_cfg = llm_cfg
         self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
-        self.tools_available = True  # Set to False if endpoint rejects tool_choice
+        global _endpoint_supports_tools
+        self.tools_available = _endpoint_supports_tools is not False
         self.pending_request = False  # True while server is processing an LLM call
         system_prompt = SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER
         # Personalize the system prompt
@@ -1075,6 +1077,7 @@ class ChatSession:
                 if round_num == 0:
                     log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
                     self.tools_available = False
+                    _endpoint_supports_tools = False
                     _inject_hub_context(self.messages, self.user, self.is_admin)
                     response = await client.chat.completions.create(
                         model=self.llm_cfg.model,
@@ -1308,6 +1311,7 @@ async def ws_llm_chat(
                    {"type": "error", "content": "..."}
     """
     import uuid
+    global _endpoint_supports_tools
 
     await ws.accept()
 
@@ -1442,6 +1446,7 @@ async def ws_llm_chat(
                             if round_num == 0:
                                 log.warning("Tool/stream not supported, falling back: %s", exc)
                                 session.tools_available = False
+                                _endpoint_supports_tools = False
                                 _inject_hub_context(session.messages, user, is_admin)
                                 try:
                                     stream = await client.chat.completions.create(

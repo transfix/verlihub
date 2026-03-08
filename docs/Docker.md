@@ -12,6 +12,7 @@ This guide explains how to configure and run Verlihub using Docker for both deve
 - [User Management](#user-management)
 - [Matterbridge Integration](#matterbridge-integration)
 - [FastAPI Web Interface](#fastapi-web-interface)
+- [LLM Chat & MCP Integration](#llm-chat--mcp-integration)
 - [Troubleshooting](#troubleshooting)
 
 ## Quick Start
@@ -582,6 +583,212 @@ plugin_commands:
 ```
 
 Commands are executed as the first master user via NMDC protocol.
+
+## LLM Chat & MCP Integration
+
+Verlihub-py can integrate with any OpenAI-compatible LLM endpoint to provide
+AI-powered chat through the Hub-Security bot and an MCP (Model Context Protocol)
+server for external AI clients.
+
+When enabled:
+
+- Users can **PM Hub-Security** for tool-assisted AI chat (tools vary by user class)
+- Users can **mention Hub-Security in main chat** for conversational replies
+- The **MCP endpoint** at `/api/v1/mcp` exposes hub tools to external AI clients
+
+### Example: Remote vLLM Endpoint (no GPU required)
+
+Use a remote OpenAI-compatible server such as vLLM. No Ollama sidecar is
+started — the hub calls the remote API directly.
+
+**production.yml:**
+
+```yaml
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Local Hub"
+  description: "Local dev hub with LLM + dashboard"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30000
+
+llm:
+  enabled: true
+  base_url: "https://vllm-qwen35-35b.tinyhost.xyz/v1"
+  model: "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit"
+  api_key: "none"
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 8
+  min_class: 3
+  admin_class: 5
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+lua:
+  enabled: true
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files: ["ledokol.lua"]
+  autoload: ["ledokol.lua"]
+
+python:
+  enabled: true
+python_mode: single
+
+startup_commands:
+  - "!onplug python"
+  - "!onplug lua"
+  - "!api start 30000"
+```
+
+**Launch:**
+
+```bash
+sg docker ./run_production.sh --config production.yml --edition py
+```
+
+### Example: Local Ollama Sidecar (CPU, no GPU)
+
+When `llm.base_url` points to the default Ollama sidecar
+(`http://vh-prod-ollama:11434/v1`), `run_production.sh` automatically starts an
+Ollama container and pulls the configured model on first boot.
+
+**production.yml** — only the `llm:` section differs:
+
+```yaml
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Local Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30000
+
+llm:
+  enabled: true
+  # Default Ollama sidecar URL — run_production.sh starts Ollama for you
+  base_url: "http://vh-prod-ollama:11434/v1"
+  model: "qwen2.5:0.5b"         # ~400 MB, runs on CPU
+  # model: "qwen2.5:3b"          # ~2 GB,  better quality
+  # model: "qwen2.5:7b"          # ~4.5 GB, best quality (GPU recommended)
+  api_key: "ollama"              # Ollama ignores this but the client requires it
+  temperature: 0.3
+  max_tokens: 2048
+  min_class: 3
+  admin_class: 5
+  # Expose Ollama API on the host (optional, 0 = don't expose)
+  # ollama_port: 11434
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+lua:
+  enabled: true
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files: ["ledokol.lua"]
+  autoload: ["ledokol.lua"]
+
+python:
+  enabled: true
+python_mode: single
+
+startup_commands:
+  - "!onplug python"
+  - "!onplug lua"
+  - "!api start 30000"
+```
+
+**Launch** (same command — the script detects the Ollama URL and starts the sidecar):
+
+```bash
+sg docker ./run_production.sh --config production.yml --edition py
+```
+
+### What You Get
+
+| Component | Access |
+|-----------|--------|
+| DC++ hub (NMDC) | `dchub://localhost:4111` |
+| Dashboard / REST API | `http://localhost:30000` |
+| LLM chat | PM **Hub-Security** or mention it in main chat (class 3+) |
+| MCP endpoint | `http://localhost:30000/api/v1/mcp` |
+| PostgreSQL | Internal on `postgres:5432` |
+
+### Lifecycle Commands
+
+```bash
+sg docker ./run_production.sh --logs       # tail logs
+sg docker ./run_production.sh --status     # container status
+sg docker ./run_production.sh --stop       # shut down
+sg docker ./run_production.sh --restart    # restart
+```
+
+### LLM Configuration Reference
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `llm.enabled` | `false` | Enable LLM chat integration |
+| `llm.base_url` | `http://vh-prod-ollama:11434/v1` | OpenAI-compatible API base URL |
+| `llm.model` | `qwen2.5:7b` | Model name to use |
+| `llm.api_key` | `ollama` | API key (Ollama ignores this) |
+| `llm.temperature` | `0.3` | Generation temperature |
+| `llm.max_tokens` | `2048` | Maximum tokens per response |
+| `llm.max_tool_rounds` | `8` | Max tool-calling iterations per request |
+| `llm.min_class` | `3` (operator) | Minimum user class to access LLM chat |
+| `llm.admin_class` | `5` (master) | Minimum class for admin-level LLM tools |
+| `llm.ollama_port` | `0` | Expose Ollama API on this host port |
+| `mcp.enabled` | `false` | Enable MCP server endpoint |
+| `mcp.min_class` | `3` | Minimum class for MCP access |
+| `mcp.admin_class` | `5` | Minimum class for admin MCP tools |
+
+### Tips
+
+- **No GPU?** Use `qwen2.5:0.5b` (~400 MB) with the Ollama sidecar, or point
+  `base_url` at a remote endpoint.
+- **Remote endpoint:** Set `base_url` to any OpenAI-compatible URL
+  (vLLM, Together, OpenRouter, etc.) and `api_key` to the provider's key.
+  No Ollama container is started.
+- **Disable MCP:** Set `mcp.enabled: false` if you only want bot chat.
+- **Class permissions:** `min_class: 0` lets guests use LLM chat;
+  `min_class: 3` restricts it to operators and above.
 
 ## Troubleshooting
 

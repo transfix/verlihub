@@ -742,6 +742,22 @@ answer questions — never invent or guess information that is not in the snapsh
 Available information includes: hub info, online users (with IPs), operators, \
 share statistics, geographic distribution.
 
+## Performing actions
+
+You CAN perform write operations (kick, broadcast, set config, etc.) by \
+emitting one or more <action> blocks in your reply. Each block must contain \
+a single valid JSON object with "name" and "args" keys. The server will \
+execute every <action> it finds, feed results back, and ask you to write \
+a final user-facing summary.
+
+Example — setting the topic:
+<action>{"name": "set_hub_config", "args": {"section": "config", "key": "hub_topic", "value": "Welcome!"}}</action>
+
+Example — kicking a user:
+<action>{"name": "kick_user", "args": {"nick": "badguy", "reason": "Spam"}}</action>
+
+{action_catalog}
+
 Guidelines:
 - Answer using ONLY the hub data provided below — do not fabricate or hallucinate
 - Present user lists as clean tables when there are few users
@@ -749,9 +765,27 @@ Guidelines:
 - Flag anything unusual: zero-share users, suspicious clients, connectivity issues
 - Be direct and professional — this is an ops tool
 - Format numbers readably (e.g. "1.23 TiB" not raw bytes)
-- For write operations (kick, ban, broadcast, config changes), explain that \
-tool calling is unavailable and suggest using the hub console directly
+- When performing write operations, emit the <action> block AND provide a \
+brief description of what you are doing so the user can follow along
+- You may emit multiple <action> blocks in a single reply
 """
+
+
+def _build_action_catalog() -> str:
+    """Build a human-readable list of available actions for the context prompt."""
+    actions = [
+        ("kick_user", '{"nick": "...", "reason": "..."}', "Kick a user from the hub"),
+        ("send_broadcast", '{"message": "..."}', "Send a message to all users"),
+        ("send_message_to_user", '{"nick": "...", "message": "..."}', "PM a specific user"),
+        ("execute_hub_command", '{"command": "!..."}', "Run a hub console command"),
+        ("get_hub_config", '{"section": "config", "key": "..."}', "Read a config value"),
+        ("set_hub_config", '{"section": "config", "key": "...", "value": "..."}',
+         "Set a config value (hub_topic, motd, etc.)"),
+    ]
+    lines = ["Available actions:"]
+    for name, args, desc in actions:
+        lines.append(f"  - {name}: {desc}  args: {args}")
+    return "\n".join(lines)
 
 SYSTEM_PROMPT_USER_CONTEXT = """\
 You are a Verlihub DC++ hub assistant. You help users learn about the hub \
@@ -774,6 +808,88 @@ Guidelines:
 """
 
 
+# Regex to extract <action>{...}</action> blocks from LLM output
+_ACTION_RE = re.compile(r'<action>\s*(\{.*?\})\s*</action>', re.DOTALL)
+
+
+async def _extract_and_execute_actions(
+    text: str, user: "TokenData", is_admin: bool,
+) -> list[dict]:
+    """Parse <action> blocks from LLM output and execute each one.
+
+    Returns a list of ``{"name": ..., "args": ..., "result": ...}`` dicts.
+    """
+    results: list[dict] = []
+    for m in _ACTION_RE.finditer(text):
+        try:
+            payload = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            results.append({"name": "?", "args": {}, "result": "Invalid JSON in <action> block"})
+            continue
+        name = payload.get("name", "")
+        args = payload.get("args", {})
+        result = await _execute_tool(name, args, user, is_admin)
+        results.append({"name": name, "args": args, "result": result})
+    return results
+
+
+def _strip_action_blocks(text: str) -> str:
+    """Remove <action>...</action> blocks from visible output."""
+    return _ACTION_RE.sub('', text).strip()
+
+
+async def _handle_actions_in_text(
+    text: str,
+    session: "ChatSession",
+    client,
+    llm_cfg: "LlmConfig",
+    user: "TokenData",
+    is_admin: bool,
+    ws_send,
+    ws_alive: bool,
+) -> str:
+    """Detect and execute <action> blocks in a non-streaming LLM response.
+
+    If actions are found, execute them, re-prompt the LLM for a summary,
+    and return that summary. Otherwise return the original text (with
+    think/action blocks stripped).
+    """
+    if not _ACTION_RE.search(text):
+        return _strip_action_blocks(text)
+
+    action_results = await _extract_and_execute_actions(text, user, is_admin)
+    if not action_results:
+        return _strip_action_blocks(text)
+
+    # Notify frontend
+    for ar in action_results:
+        await ws_send({"type": "tool_call", "name": ar["name"], "args": ar["args"]})
+        await ws_send({"type": "tool_result", "name": ar["name"], "success": "error" not in ar["result"]})
+
+    # Ask for a summary
+    results_msg = "Action results:\n"
+    for ar in action_results:
+        results_msg += f"- {ar['name']}: {ar['result']}\n"
+    results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
+    session.messages.append({"role": "user", "content": results_msg})
+    _inject_hub_context(session.messages, user, is_admin)
+
+    try:
+        resp = await client.chat.completions.create(
+            model=llm_cfg.model,
+            messages=session.messages,
+            temperature=llm_cfg.temperature,
+            max_tokens=llm_cfg.max_tokens,
+        )
+        summary = resp.choices[0].message.content or "Done."
+        summary = _strip_action_blocks(summary)
+        session.messages.append(resp.choices[0].message.model_dump())
+        return summary
+    except Exception as exc:
+        log.warning("Summary re-prompt failed: %s", exc)
+        return _strip_action_blocks(text) or "Actions executed."
+
+
 def _inject_hub_context(messages: list[dict], user: "TokenData", is_admin: bool) -> None:
     """
     Replace the system prompt with a context-injected version containing live hub data.
@@ -783,6 +899,9 @@ def _inject_hub_context(messages: list[dict], user: "TokenData", is_admin: bool)
     """
     snapshot = _build_hub_context_snapshot(is_admin)
     base_prompt = SYSTEM_PROMPT_ADMIN_CONTEXT if is_admin else SYSTEM_PROMPT_USER_CONTEXT
+    # Inject the action catalog for admins
+    if is_admin:
+        base_prompt = base_prompt.replace("{action_catalog}", _build_action_catalog())
     full_prompt = base_prompt + f"\n\nThe current operator is: {user.nick} (class {user.user_class})\n" + snapshot
 
     # Update the system message (always first in the list)
@@ -834,7 +953,35 @@ class ChatSession:
             )
             msg = response.choices[0].message
             self.messages.append(msg.model_dump())
-            return msg.content or "(no response)", tool_calls_made
+            text = msg.content or "(no response)"
+
+            # Handle <action> blocks for admin write operations
+            if self.is_admin and _ACTION_RE.search(text):
+                action_results = await _extract_and_execute_actions(text, self.user, self.is_admin)
+                if action_results:
+                    for ar in action_results:
+                        tool_calls_made.append({"name": ar["name"], "args": ar["args"], "result": ar["result"]})
+                    results_msg = "Action results:\n"
+                    for ar in action_results:
+                        results_msg += f"- {ar['name']}: {ar['result']}\n"
+                    results_msg += "\nPlease write a short user-facing summary. Do NOT emit <action> blocks."
+                    self.messages.append({"role": "user", "content": results_msg})
+                    _inject_hub_context(self.messages, self.user, self.is_admin)
+                    try:
+                        resp2 = await client.chat.completions.create(
+                            model=self.llm_cfg.model,
+                            messages=self.messages,
+                            temperature=self.llm_cfg.temperature,
+                            max_tokens=self.llm_cfg.max_tokens,
+                        )
+                        text = _strip_action_blocks(resp2.choices[0].message.content or "Done.")
+                        self.messages.append(resp2.choices[0].message.model_dump())
+                    except Exception:
+                        text = _strip_action_blocks(text) or "Actions executed."
+                else:
+                    text = _strip_action_blocks(text)
+
+            return text, tool_calls_made
         
         for round_num in range(self.llm_cfg.max_tool_rounds):
             log.debug(f"LLM round {round_num + 1} for {self.user.nick}")
@@ -1196,6 +1343,11 @@ async def ws_llm_chat(
                             )
                             text = resp.choices[0].message.content or "(no response)"
                             session.messages.append(resp.choices[0].message.model_dump())
+                            # Handle <action> blocks in non-streaming fallback
+                            text = await _handle_actions_in_text(
+                                text, session, client, llm_cfg,
+                                user, is_admin, _ws_send, _ws_alive,
+                            )
                             await _ws_send({"type": "response", "content": text})
                             stream_mode = False
                             stream = None
@@ -1234,6 +1386,11 @@ async def ws_llm_chat(
                                     )
                                     text = resp.choices[0].message.content or "(no response)"
                                     session.messages.append(resp.choices[0].message.model_dump())
+                                    # Handle <action> blocks in non-streaming fallback
+                                    text = await _handle_actions_in_text(
+                                        text, session, client, llm_cfg,
+                                        user, is_admin, _ws_send, _ws_alive,
+                                    )
                                     await _ws_send({"type": "response", "content": text})
                                     stream_mode = False
                                     stream = None
@@ -1289,9 +1446,13 @@ async def ws_llm_chat(
                     if think_idx >= 0:
                         clean_content = clean_content[:think_idx].rstrip()
 
+                    # Strip <action> blocks from displayed content (they are
+                    # parsed and executed separately below).
+                    visible_content = _strip_action_blocks(clean_content)
+
                     # Finalise streamed text
                     if sent_stream_start:
-                        await _ws_send({"type": "stream_end", "content": clean_content})
+                        await _ws_send({"type": "stream_end", "content": visible_content})
 
                     # Build message dict for conversation history
                     msg_dict: dict = {"role": "assistant", "content": full_content or None}
@@ -1309,12 +1470,87 @@ async def ws_llm_chat(
                     if not _ws_alive:
                         break
 
-                    # -- No tool calls → done --
+                    # ----------------------------------------------------------
+                    # <action> block extraction (context-injection fallback)
+                    # When native tool calling is unavailable, the LLM embeds
+                    # <action>{...}</action> blocks in its text output.  We
+                    # parse them, execute the requested operations, and ask the
+                    # model for a short summary of the results.
+                    # ----------------------------------------------------------
+                    if not session.tools_available and _ACTION_RE.search(clean_content):
+                        action_results = await _extract_and_execute_actions(
+                            clean_content, user, is_admin,
+                        )
+                        if action_results and _ws_alive:
+                            # Notify frontend about the actions
+                            for ar in action_results:
+                                await _ws_send({
+                                    "type": "tool_call",
+                                    "name": ar["name"],
+                                    "args": ar["args"],
+                                })
+                                await _ws_send({
+                                    "type": "tool_result",
+                                    "name": ar["name"],
+                                    "success": "error" not in ar["result"],
+                                })
+
+                            # Feed results back and ask for a user-facing summary
+                            results_msg = "Action results:\n"
+                            for ar in action_results:
+                                results_msg += f"- {ar['name']}: {ar['result']}\n"
+                            results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
+                            session.messages.append({"role": "user", "content": results_msg})
+
+                            await _ws_send({"type": "thinking"})
+                            # Re-prompt for the summary (one more streaming call)
+                            _inject_hub_context(session.messages, user, is_admin)
+                            try:
+                                summary_stream = await client.chat.completions.create(
+                                    model=llm_cfg.model,
+                                    messages=session.messages,
+                                    temperature=llm_cfg.temperature,
+                                    max_tokens=llm_cfg.max_tokens,
+                                    stream=True,
+                                )
+                                summary_parts: list[str] = []
+                                sent_summary_start = False
+                                async for chunk in summary_stream:
+                                    if not _ws_alive:
+                                        break
+                                    if not chunk.choices:
+                                        continue
+                                    delta = chunk.choices[0].delta
+                                    if delta.content:
+                                        if not sent_summary_start:
+                                            await _ws_send({"type": "stream_start"})
+                                            sent_summary_start = True
+                                        summary_parts.append(delta.content)
+                                        await _ws_send({"type": "stream_delta", "content": delta.content})
+                                summary_text = "".join(summary_parts)
+                                summary_clean = re.sub(r'<think>[\s\S]*?</think>', '', summary_text).lstrip()
+                                summary_clean = _strip_action_blocks(summary_clean)
+                                think_idx2 = summary_clean.find('<think>')
+                                if think_idx2 >= 0:
+                                    summary_clean = summary_clean[:think_idx2].rstrip()
+                                if sent_summary_start:
+                                    await _ws_send({"type": "stream_end", "content": summary_clean})
+                                else:
+                                    await _ws_send({"type": "response", "content": summary_clean or "Done."})
+                                session.messages.append({"role": "assistant", "content": summary_text})
+                            except Exception as exc:
+                                log.warning("Summary re-prompt failed: %s", exc)
+                                # Show the original response without action blocks
+                                visible = _strip_action_blocks(clean_content) or "Actions executed."
+                                await _ws_send({"type": "response", "content": visible})
+                            break
+
+                    # -- No tool calls -> done --
                     if not tool_calls_acc:
                         if not sent_stream_start:
                             await _ws_send({
                                 "type": "response",
-                                "content": clean_content or "(no response)",
+                                "content": visible_content or "(no response)",
                             })
                         break
 

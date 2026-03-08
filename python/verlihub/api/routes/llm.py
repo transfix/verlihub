@@ -1680,7 +1680,12 @@ async def ws_llm_chat(
             except Exception as e:
                 session.pending_request = False
                 log.exception("LLM WebSocket error")
-                await _ws_send({"type": "error", "content": f"LLM error: {e}"})
+                err_msg = str(e).lower()
+                if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
+                    user_msg = "The AI backend is temporarily unreachable. Please try again in a moment."
+                else:
+                    user_msg = "Something went wrong — please try sending your message again."
+                await _ws_send({"type": "error", "content": user_msg})
 
     except WebSocketDisconnect:
         log.info("LLM WS disconnected: %s (session %s)", user.nick, sid)

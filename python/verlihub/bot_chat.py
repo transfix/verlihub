@@ -171,16 +171,36 @@ class BotChatSession:
 
         Returns ``(response_text, tool_calls_made)``.
         """
-        from verlihub.api.routes.llm import _execute_tool, _get_openai_client
+        import json as _json
+        import openai
+        from datetime import datetime, timedelta, timezone
+        from verlihub.api.routes.llm import (
+            _execute_tool, _get_openai_client,
+            _endpoint_supports_tools, _inject_hub_context,
+            _ACTION_RE, _extract_and_execute_actions,
+        )
         from verlihub.api.auth import TokenData
 
+        global _endpoint_supports_tools_bot
         client = _get_openai_client()
         self.messages.append({"role": "user", "content": user_message})
         tool_calls_made: list[dict] = []
 
-        fake_user = TokenData(nick=self.nick, user_class=self.user_class)
+        # TokenData requires an ``exp`` field — use a far-future expiry
+        fake_user = TokenData(
+            nick=self.nick,
+            user_class=self.user_class,
+            exp=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
 
+        is_admin = (
+            self.llm_cfg
+            and self.user_class >= self.llm_cfg.admin_class
+        )
         max_rounds = self.llm_cfg.max_tool_rounds if self.llm_cfg else 5
+
+        # Check if tools are known to be unsupported by the endpoint
+        use_tools = bool(self.tools) and _endpoint_supports_tools is not False
 
         for _round in range(max_rounds):
             kwargs: dict[str, Any] = dict(
@@ -189,27 +209,57 @@ class BotChatSession:
                 temperature=self.llm_cfg.temperature if self.llm_cfg else 0.3,
                 max_tokens=self.llm_cfg.max_tokens if self.llm_cfg else 2048,
             )
-            if self.tools:
+            if use_tools:
                 kwargs["tools"] = self.tools
                 kwargs["tool_choice"] = "auto"
 
-            response = await client.chat.completions.create(**kwargs)
+            try:
+                response = await client.chat.completions.create(**kwargs)
+            except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                if _round == 0 and use_tools:
+                    # Endpoint rejects tool_choice — fall back to context injection
+                    log.warning("Bot: tool calling not supported, falling back: %s", exc)
+                    use_tools = False
+                    # Update module-level flag so dashboard also knows
+                    import verlihub.api.routes.llm as _llm_mod
+                    _llm_mod._endpoint_supports_tools = False
+                    _inject_hub_context(self.messages, fake_user, is_admin)
+                    response = await client.chat.completions.create(
+                        model=kwargs["model"],
+                        messages=self.messages,
+                        temperature=kwargs["temperature"],
+                        max_tokens=kwargs["max_tokens"],
+                    )
+                else:
+                    raise
+
             choice = response.choices[0]
             msg = choice.message
             self.messages.append(msg.model_dump())
 
+            # If not using native tools, check for <action> blocks
+            if not use_tools:
+                text = msg.content or "(no response)"
+                if _ACTION_RE.search(text):
+                    action_results = await _extract_and_execute_actions(
+                        text, fake_user, is_admin,
+                    )
+                    if action_results:
+                        for ar in action_results:
+                            tool_calls_made.append({"name": ar["name"], "args": ar["args"]})
+                        # Strip action blocks from visible text
+                        clean = _ACTION_RE.sub("", text).strip()
+                        return clean or "Done.", tool_calls_made
+                return text, tool_calls_made
+
             if not msg.tool_calls:
                 return msg.content or "(no response)", tool_calls_made
 
-            is_admin = (
-                self.llm_cfg
-                and self.user_class >= self.llm_cfg.admin_class
-            )
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
                 try:
                     fn_args = (
-                        __import__("json").loads(tc.function.arguments)
+                        _json.loads(tc.function.arguments)
                         if tc.function.arguments
                         else {}
                     )

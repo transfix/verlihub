@@ -355,7 +355,10 @@ bool HubContext::SetHubTopic(std::string_view topic) {
         m_hub_config.hub_topic = topic;
     }
     
-    // TODO: Broadcast topic change to users
+    // Push to NMDC server so all connected clients see the change immediately
+    if (m_nmdc_server) {
+        m_nmdc_server->SetHubTopic(std::string(topic));
+    }
     return true;
 }
 

@@ -239,7 +239,7 @@ class TestToolDefinitions:
     def test_admin_tools_count(self):
         from verlihub.api.routes.llm import _build_admin_tools
         tools = _build_admin_tools()
-        assert len(tools) == 6
+        assert len(tools) == 8
         names = {t["function"]["name"] for t in tools}
         assert "kick_user" in names
         assert "send_broadcast" in names
@@ -1124,7 +1124,7 @@ class TestChatSession:
         assert session.messages[0]["role"] == "system"
         assert "administrator" in session.messages[0]["content"].lower()
         # Admin gets readonly + admin tools
-        assert len(session.tools) == 15  # 9 readonly + 6 admin
+        assert len(session.tools) == 17  # 9 readonly + 8 admin
 
     def test_session_init_user(self):
         from verlihub.api.routes.llm import ChatSession

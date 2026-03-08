@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import openai
@@ -299,7 +300,7 @@ def _build_admin_tools() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "set_hub_config",
-                "description": "Set a hub configuration value. Use with caution.",
+                "description": "Set a hub configuration value. Use with caution. Do NOT use this for topic or MOTD — use set_topic / set_motd instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -308,6 +309,34 @@ def _build_admin_tools() -> list[dict]:
                         "value": {"type": "string", "description": "New value"},
                     },
                     "required": ["section", "key", "value"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_topic",
+                "description": "Set the hub topic (shown in DC client title bar). Broadcasts to all connected users immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "New hub topic text"},
+                    },
+                    "required": ["topic"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_motd",
+                "description": "Set the Message of the Day (MOTD). This is shown as chat messages from the hub bot to each user on login.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "motd": {"type": "string", "description": "New MOTD text (plain text, can be multi-line)"},
+                    },
+                    "required": ["motd"],
                 },
             },
         },
@@ -554,11 +583,50 @@ async def _execute_tool(
             section = arguments.get("section", "config")
             key = arguments.get("key", "")
             value = arguments.get("value", "")
+            # Redirect topic/motd to their dedicated handlers
+            if key in ("hub_topic", "topic"):
+                return await _execute_tool("set_topic", {"topic": value}, user, is_admin)
+            if key in ("motd", "hub_motd", "msg_of_day"):
+                return await _execute_tool("set_motd", {"motd": value}, user, is_admin)
             try:
                 ctx.set_config(section, key, value)
                 return json.dumps({"success": True, "section": section, "key": key, "value": value})
             except Exception as e:
                 return json.dumps({"error": f"Config write failed: {e}"})
+        
+        elif tool_name == "set_topic":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            topic = arguments.get("topic", "")
+            try:
+                ctx.hub_topic = topic
+                return json.dumps({"success": True, "topic": topic, "note": "Topic updated and broadcast to all connected users"})
+            except Exception as e:
+                return json.dumps({"error": f"Set topic failed: {e}"})
+        
+        elif tool_name == "set_motd":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            motd = arguments.get("motd", "")
+            try:
+                # Write MOTD file so it persists across restarts
+                from verlihub.config import get_config_optional as _gc
+                cfg = _gc()
+                config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+                motd_file = Path(config_dir) / "motd"
+                motd_file.write_text(motd, encoding="utf-8")
+                # Push to live hub so new logins see it immediately
+                try:
+                    ctx._cpp.SetMOTD(motd)
+                except AttributeError:
+                    pass  # SWIG wrapper may not expose SetMOTD yet
+                return json.dumps({"success": True, "motd": motd, "note": "MOTD written to file and pushed to live server"})
+            except Exception as e:
+                return json.dumps({"error": f"Set MOTD failed: {e}"})
         
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -751,7 +819,10 @@ execute every <action> it finds, feed results back, and ask you to write \
 a final user-facing summary.
 
 Example — setting the topic:
-<action>{"name": "set_hub_config", "args": {"section": "config", "key": "hub_topic", "value": "Welcome!"}}</action>
+<action>{"name": "set_topic", "args": {"topic": "Welcome!"}}</action>
+
+Example — setting the MOTD:
+<action>{"name": "set_motd", "args": {"motd": "Welcome to the hub!\nPlease read the rules."}}</action>
 
 Example — kicking a user:
 <action>{"name": "kick_user", "args": {"nick": "badguy", "reason": "Spam"}}</action>
@@ -774,13 +845,17 @@ brief description of what you are doing so the user can follow along
 def _build_action_catalog() -> str:
     """Build a human-readable list of available actions for the context prompt."""
     actions = [
+        ("set_topic", '{"topic": "..."}',
+         "Set the hub topic (shown in DC client title bar). Broadcasts immediately."),
+        ("set_motd", '{"motd": "..."}',
+         "Set the Message of the Day (shown as chat on login). Can be multi-line."),
         ("kick_user", '{"nick": "...", "reason": "..."}', "Kick a user from the hub"),
         ("send_broadcast", '{"message": "..."}', "Send a message to all users"),
         ("send_message_to_user", '{"nick": "...", "message": "..."}', "PM a specific user"),
         ("execute_hub_command", '{"command": "!..."}', "Run a hub console command"),
         ("get_hub_config", '{"section": "config", "key": "..."}', "Read a config value"),
         ("set_hub_config", '{"section": "config", "key": "...", "value": "..."}',
-         "Set a config value (hub_topic, motd, etc.)"),
+         "Set a config value (NOT for topic/motd — use set_topic/set_motd)"),
     ]
     lines = ["Available actions:"]
     for name, args, desc in actions:

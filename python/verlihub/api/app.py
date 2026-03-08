@@ -9,6 +9,7 @@ This module sets up the FastAPI application with:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -86,6 +87,10 @@ async def lifespan(app: FastAPI):
 
     if existing_ctx is not None:
         logger.info("Re-using existing hub context (started externally)")
+        # Give the event handler a reference to *this* event loop so that
+        # cross-thread DB lookups (OnValidateNick etc.) schedule coroutines
+        # on the loop that owns the async DB engine.
+        existing_ctx.events.set_event_loop(asyncio.get_running_loop())
     else:
         try:
             from verlihub.core import HubContext
@@ -96,6 +101,7 @@ async def lifespan(app: FastAPI):
             ctx = HubContext.create(config_dir)
             if ctx is not None:
                 set_hub_context(ctx)
+                ctx.events.set_event_loop(asyncio.get_running_loop())
 
                 # Feed YAML config to the C++ director callback so
                 # Initialize() → LoadConfiguration() sees the right values.
@@ -183,7 +189,6 @@ async def lifespan(app: FastAPI):
             from verlihub.api.routes.mcp import create_mcp_mount
             mcp_app, _mcp_session_mgr = create_mcp_mount()
             if _mcp_session_mgr is not None:
-                import asyncio
                 _mcp_task = asyncio.create_task(_mcp_session_mgr.run())
                 logger.info("In-process MCP session manager started")
     except Exception as mcp_err:

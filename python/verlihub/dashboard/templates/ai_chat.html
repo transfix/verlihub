@@ -18,6 +18,7 @@
         border: 1px solid var(--ai-border, #dbdbdb);
         border-radius: 6px;
         padding: 1rem;
+        scroll-behavior: smooth;
     }
 
     [data-theme="dark"] .ai-messages {
@@ -26,9 +27,39 @@
     }
 
     .ai-msg {
-        margin-bottom: 0.75rem;
+        margin-bottom: 1rem;
         line-height: 1.6;
         word-wrap: break-word;
+    }
+
+    /* Role label above each bubble */
+    .ai-msg .role-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.2rem;
+        display: block;
+    }
+
+    .ai-msg.user-msg .role-label {
+        text-align: right;
+        color: var(--vh-primary, #00a896);
+    }
+
+    .ai-msg.assistant-msg .role-label {
+        text-align: left;
+        color: var(--asst-label, #6c5ce7);
+    }
+
+    [data-theme="dark"] .ai-msg.assistant-msg .role-label {
+        --asst-label: #a29bfe;
+    }
+
+    .ai-msg .timestamp {
+        font-size: 0.7rem;
+        color: #999;
+        margin-left: 0.5rem;
     }
 
     .ai-msg.user-msg {
@@ -39,26 +70,43 @@
         display: inline-block;
         background: var(--vh-primary, #00d1b2);
         color: #fff;
-        padding: 0.5rem 1rem;
+        padding: 0.6rem 1rem;
         border-radius: 1rem 1rem 0.25rem 1rem;
         max-width: 75%;
         text-align: left;
+    }
+
+    .ai-msg.assistant-msg {
+        padding-left: 0;
     }
 
     .ai-msg.assistant-msg .bubble {
         display: inline-block;
         background: var(--asst-bg, #f0f0f0);
         color: var(--asst-text, #363636);
-        padding: 0.5rem 1rem;
+        padding: 0.75rem 1rem;
         border-radius: 1rem 1rem 1rem 0.25rem;
         max-width: 85%;
         text-align: left;
         white-space: pre-wrap;
+        border-left: 3px solid var(--asst-accent, #6c5ce7);
     }
 
     [data-theme="dark"] .ai-msg.assistant-msg .bubble {
         --asst-bg: #16213e;
         --asst-text: #e4e4e4;
+        --asst-accent: #a29bfe;
+    }
+
+    /* Separator between conversation turns */
+    .ai-turn-separator {
+        border: none;
+        border-top: 1px solid var(--sep-color, #e8e8e8);
+        margin: 0.75rem 2rem;
+    }
+
+    [data-theme="dark"] .ai-turn-separator {
+        --sep-color: #2a2a4a;
     }
 
     .ai-msg.system-msg {
@@ -123,6 +171,29 @@
 
     [data-theme="dark"] .ai-msg.assistant-msg .bubble code {
         background: rgba(255,255,255,0.08);
+    }
+
+    /* Markdown-like rendering in assistant bubbles */
+    .ai-msg.assistant-msg .bubble h2 {
+        font-size: 1.05em;
+        font-weight: 700;
+        margin: 0.6rem 0 0.3rem 0;
+        padding-bottom: 0.2rem;
+        border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble h2 {
+        border-bottom-color: rgba(255,255,255,0.1);
+    }
+
+    .ai-msg.assistant-msg .bubble ul,
+    .ai-msg.assistant-msg .bubble ol {
+        margin: 0.3rem 0;
+        padding-left: 1.5rem;
+    }
+
+    .ai-msg.assistant-msg .bubble li {
+        margin-bottom: 0.15rem;
     }
 </style>
 {% endblock %}
@@ -221,16 +292,31 @@
     }
 
     function formatResponse(text) {
-        // Light markdown formatting
+        // Richer markdown formatting
         let html = escapeHtml(text);
+        // Headings: ## Title
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        // Bold
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Inline code
         html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+        // Unordered list items: - item  (with optional bold prefix)
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+        // Wrap adjacent <li> runs in <ul>
+        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+        // Remaining newlines → <br>
         html = html.replace(/\n/g, '<br>');
+        // Clean up <br> right after block elements
+        html = html.replace(/(<\/h2>)<br>/g, '$1');
+        html = html.replace(/(<\/ul>)<br>/g, '$1');
+        html = html.replace(/(<ul>)<br>/g, '$1');
         return html;
     }
 
-    function isNearBottom() {
-        return aiMessages.scrollHeight - aiMessages.scrollTop - aiMessages.clientHeight < 80;
+    function timeStr() {
+        const d = new Date();
+        return d.getHours().toString().padStart(2,'0') + ':' +
+               d.getMinutes().toString().padStart(2,'0');
     }
 
     function scrollAiToBottom() {
@@ -246,44 +332,55 @@
     // ------------------------------------------------------------------
     // Rendering
     // ------------------------------------------------------------------
+    // Track whether the user is actively in a send→response cycle
+    let _userInitiated = false;
+
     function appendUserMsg(text) {
-        const wasNear = isNearBottom();
+        // Add separator before user message (unless chat is empty)
+        const existing = aiMessages.querySelectorAll('.ai-msg:not(.system-msg)');
+        if (existing.length > 0) {
+            const sep = document.createElement('hr');
+            sep.className = 'ai-turn-separator';
+            aiMessages.appendChild(sep);
+        }
         const div = document.createElement('div');
         div.className = 'ai-msg user-msg';
-        div.innerHTML = `<span class="bubble">${escapeHtml(text)}</span>`;
+        div.innerHTML = `<span class="role-label">You <span class="timestamp">${timeStr()}</span></span>` +
+                         `<span class="bubble">${escapeHtml(text)}</span>`;
         aiMessages.appendChild(div);
-        if (wasNear) scrollAiToBottom();
+        _userInitiated = true;
+        scrollAiToBottom();
     }
 
     function appendAssistantMsg(text) {
-        const wasNear = isNearBottom();
         // Remove thinking indicator if present
         removeThinking();
         const div = document.createElement('div');
         div.className = 'ai-msg assistant-msg';
-        div.innerHTML = `<span class="bubble">${formatResponse(text)}</span>`;
+        div.innerHTML = `<span class="role-label"><i class="fas fa-robot" style="margin-right:0.3rem"></i>Assistant <span class="timestamp">${timeStr()}</span></span>` +
+                         `<span class="bubble">${formatResponse(text)}</span>`;
         aiMessages.appendChild(div);
-        if (wasNear) scrollAiToBottom();
+        // Always scroll after a response — user is actively chatting
+        scrollAiToBottom();
+        _userInitiated = false;
     }
 
     function appendSystemMsg(text) {
-        const wasNear = isNearBottom();
         const div = document.createElement('div');
         div.className = 'ai-msg system-msg';
         div.textContent = text;
         aiMessages.appendChild(div);
-        if (wasNear) scrollAiToBottom();
+        scrollAiToBottom();
     }
 
     function appendToolCall(name, args) {
-        const wasNear = isNearBottom();
         removeThinking();
         const div = document.createElement('div');
         div.className = 'ai-msg system-msg';
         const argsStr = Object.keys(args).length > 0 ? JSON.stringify(args) : '';
         div.innerHTML = `<span class="ai-tool-badge">🔧 ${escapeHtml(name)}${argsStr ? '(' + escapeHtml(argsStr) + ')' : '()'}</span>`;
         aiMessages.appendChild(div);
-        if (wasNear) scrollAiToBottom();
+        scrollAiToBottom();
     }
 
     function showThinking() {

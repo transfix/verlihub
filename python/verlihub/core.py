@@ -78,6 +78,9 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
         # Back-reference to HubContext (set by HubContext.__init__)
         # Used by OnValidateNick/OnCheckPassword to read config values.
         self._hub_context_ref: Optional["HubContext"] = None
+        # Explicit event loop reference for cross-thread DB access.
+        # Set by set_event_loop() after the async engine is created.
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
     
     # ------------------------------------------------------------------
     # Config bridge
@@ -171,12 +174,25 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
     # We bridge to the async DB via run_coroutine_threadsafe().
     # ------------------------------------------------------------------
 
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store the running event loop for cross-thread DB calls.
+
+        Must be called from the async context that owns the DB engine
+        (e.g. during API lifespan startup) so that ``_sync_db_lookup``
+        can safely schedule coroutines on the correct loop.
+        """
+        self._event_loop = loop
+
     def _get_event_loop(self) -> Optional[asyncio.AbstractEventLoop]:
-        """Return the running asyncio event loop, or None."""
+        """Return the stored event loop if still running, else probe."""
+        # Prefer the explicitly stored loop (set by API lifespan)
+        if self._event_loop is not None and self._event_loop.is_running():
+            return self._event_loop
+        # Fallback: try the current thread's loop (works when called from
+        # within the same async context, e.g. hub-only mode)
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                return loop
+            loop = asyncio.get_running_loop()
+            return loop
         except RuntimeError:
             pass
         return None
@@ -208,8 +224,12 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
                 future = asyncio.run_coroutine_threadsafe(_query(), loop)
                 return future.result(timeout=5)
             else:
-                # No event loop available; try creating one in this thread
-                return asyncio.run(_query())
+                logger.warning(
+                    "No running event loop for DB lookup (nick=%s) — "
+                    "call set_event_loop() during startup",
+                    nick,
+                )
+                return None
         except Exception:
             logger.exception("DB lookup failed for nick=%s", nick)
             return None

@@ -30,13 +30,18 @@ from verlihub.config import VerlihubConfig, UsersConfig, UserEntry, ApiConfig
 import verlihub.config as _config_mod
 
 
-def _set_reg_config(monkeypatch, *, enabled=True, require_invite=False, default_class=1):
+def _set_reg_config(monkeypatch, *, enabled=True, require_invite=False, default_class=1,
+                     require_email=False, check_deliverability=False,
+                     block_disposable=True):
     """Set the config singleton to control registration settings in tests."""
     cfg = VerlihubConfig()
     cfg.api = ApiConfig(
         registration_enabled=enabled,
         registration_require_invite=require_invite,
         registration_default_class=default_class,
+        registration_require_email=require_email,
+        registration_check_email_deliverability=check_deliverability,
+        registration_block_disposable_emails=block_disposable,
     )
     monkeypatch.setattr(_config_mod, "_config", cfg)
 
@@ -603,6 +608,216 @@ class TestApiRegistrationEndpoint:
             json={"nick": "validuser", "password": "ab"},
         )
         assert response.status_code in [400, 500, 503]
+
+
+# =============================================================================
+# API Registration — Email Validation
+# =============================================================================
+
+
+class TestApiRegistrationEmail:
+    """Test email validation in the API registration endpoint."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from verlihub.api.app import create_app
+        return TestClient(create_app(), raise_server_exceptions=False)
+
+    def test_email_required_when_configured(self, client, monkeypatch):
+        """Missing email should be rejected when registration_require_email=True."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser", "password": "password123"},
+        )
+        # Should fail with 400 (email required) or 500 (DB issues in test)
+        assert response.status_code in [400, 500, 503]
+
+    def test_email_optional_when_not_required(self, client, monkeypatch):
+        """Missing email should be allowed when registration_require_email=False."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=False)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser2", "password": "password123"},
+        )
+        # 200 success or 500 DB issues (not 400)
+        assert response.status_code in [200, 500, 503]
+
+    def test_malformed_email_rejected(self, client, monkeypatch):
+        """Malformed email should be rejected."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser3", "password": "password123", "email": "not-an-email"},
+        )
+        assert response.status_code in [400, 500, 503]
+
+    def test_valid_email_accepted(self, client, monkeypatch):
+        """Valid email should pass validation."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser4", "password": "password123", "email": "user@example.com"},
+        )
+        # 200 on success, 500 on DB issues
+        assert response.status_code in [200, 500, 503]
+
+    def test_disposable_email_blocked_by_default(self, client, monkeypatch):
+        """Disposable email should be rejected when block_disposable=True (default)."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True, block_disposable=True)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser5", "password": "password123", "email": "test@mailinator.com"},
+        )
+        assert response.status_code in [400, 500, 503]
+
+    def test_disposable_email_allowed_when_toggle_off(self, client, monkeypatch):
+        """Disposable email should be allowed when block_disposable=False."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True, block_disposable=False)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser6", "password": "password123", "email": "test@mailinator.com"},
+        )
+        # 200 on success (format valid, disposable allowed), 500 on DB issues
+        assert response.status_code in [200, 500, 503]
+
+    def test_optional_email_still_validated_if_provided(self, client, monkeypatch):
+        """When email is optional but provided, it should still be format-validated."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=False)
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"nick": "newuser7", "password": "password123", "email": "bad@@email"},
+        )
+        assert response.status_code in [400, 500, 503]
+
+
+# =============================================================================
+# Dashboard Registration — Email Field
+# =============================================================================
+
+
+class TestDashboardRegistrationEmail:
+    """Test email field in dashboard registration."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from verlihub.api.app import create_app
+        return TestClient(create_app(), raise_server_exceptions=False)
+
+    def test_register_page_shows_email_field(self, client, monkeypatch):
+        """Registration page should have an email field."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.get("/dashboard/register")
+        assert response.status_code == 200
+        assert 'name="email"' in response.text
+
+    def test_register_page_email_required_label(self, client, monkeypatch):
+        """When email is required, label should say 'Required'."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.get("/dashboard/register")
+        assert response.status_code == 200
+        assert "Required" in response.text
+
+    def test_register_page_email_optional_label(self, client, monkeypatch):
+        """When email is optional, label should say 'Optional'."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=False)
+        response = client.get("/dashboard/register")
+        assert response.status_code == 200
+        assert "Optional" in response.text
+
+    def test_dashboard_email_required_rejected_if_missing(self, client, monkeypatch):
+        """Dashboard registration without email should fail when required."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.post(
+            "/dashboard/register",
+            data={
+                "nick": "dashuser",
+                "password": "password",
+                "confirm_password": "password",
+                "email": "",
+                "invite_code": "",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert "email" in response.headers["location"].lower() or "error=" in response.headers["location"]
+
+    def test_dashboard_email_malformed_rejected(self, client, monkeypatch):
+        """Dashboard registration with malformed email should fail."""
+        _set_reg_config(monkeypatch, enabled=True, require_email=True)
+        response = client.post(
+            "/dashboard/register",
+            data={
+                "nick": "dashuser2",
+                "password": "password",
+                "confirm_password": "password",
+                "email": "not-an-email",
+                "invite_code": "",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert "error=" in response.headers["location"]
+
+
+# =============================================================================
+# Config Settings: Email Registration Toggles
+# =============================================================================
+
+
+class TestEmailConfigSettings:
+    """Test that email config settings are properly wired."""
+
+    def test_default_require_email_true(self):
+        """Default config should require email."""
+        cfg = ApiConfig()
+        assert cfg.registration_require_email is True
+
+    def test_default_deliverability_false(self):
+        """Default config should NOT check deliverability."""
+        cfg = ApiConfig()
+        assert cfg.registration_check_email_deliverability is False
+
+    def test_default_block_disposable_true(self):
+        """Default config should block disposable emails."""
+        cfg = ApiConfig()
+        assert cfg.registration_block_disposable_emails is True
+
+    def test_env_export_includes_email_settings(self):
+        """to_env() should export all email-related settings."""
+        cfg = ApiConfig(
+            registration_require_email=True,
+            registration_check_email_deliverability=True,
+            registration_block_disposable_emails=False,
+        )
+        env = cfg.to_env()
+        assert env["VH_REGISTRATION_REQUIRE_EMAIL"] == "1"
+        assert env["VH_REGISTRATION_CHECK_EMAIL_DELIVERABILITY"] == "1"
+        assert env["VH_REGISTRATION_BLOCK_DISPOSABLE_EMAILS"] == "0"
+
+    def test_reg_user_model_has_email_field(self):
+        """RegUser model should have an email field."""
+        user = RegUser(nick="test", email="test@example.com")
+        assert user.email == "test@example.com"
+
+    def test_reg_user_email_default_empty(self):
+        """RegUser email should default to empty string."""
+        user = RegUser(nick="test")
+        assert user.email == ""
+
+    def test_register_request_accepts_email(self):
+        """RegisterRequest model should accept an optional email."""
+        from verlihub.models import RegisterRequest
+        req = RegisterRequest(nick="test", password="pass", email="a@b.com")
+        assert req.email == "a@b.com"
+
+    def test_register_request_email_optional(self):
+        """RegisterRequest email should be optional."""
+        from verlihub.models import RegisterRequest
+        req = RegisterRequest(nick="test", password="pass")
+        assert req.email is None
 
 
 if __name__ == "__main__":

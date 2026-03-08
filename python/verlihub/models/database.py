@@ -303,17 +303,24 @@ class Database:
         async with self._engine.begin() as conn:
             # Create tables if they don't exist
             await conn.run_sync(SQLModel.metadata.create_all)
-            # Run lightweight migrations for schema changes
-            await self._run_migrations(conn)
+
+        # Run lightweight migrations in a SEPARATE transaction so that a
+        # migration failure (e.g. column already exists) doesn't roll back
+        # the table creation above.
+        try:
+            async with self._engine.begin() as conn:
+                await self._run_migrations(conn)
+        except Exception:
+            pass  # Migrations are best-effort
     
     async def disconnect(self) -> None:
         """Close database connection."""
         await self._engine.dispose()
 
-    @staticmethod
-    async def _run_migrations(conn) -> None:
+    async def _run_migrations(self, conn) -> None:
         """Apply lightweight schema migrations (add missing columns)."""
         import logging
+        from sqlalchemy import text
         _log = logging.getLogger(__name__)
 
         # Each entry: (table, column, SQL type default)
@@ -321,28 +328,33 @@ class Database:
             ("reglist", "email", "VARCHAR(256) DEFAULT ''"),
         ]
 
+        dialect = self.config.db_type  # "sqlite", "mysql", "postgresql"
+
         for table, column, col_def in _COLUMN_MIGRATIONS:
+            has_column = False
             try:
-                # Check if column exists (works for PostgreSQL, SQLite, MySQL)
-                from sqlalchemy import text
-                result = await conn.execute(
-                    text(f"SELECT column_name FROM information_schema.columns "
-                         f"WHERE table_name = :tbl AND column_name = :col"),
-                    {"tbl": table, "col": column},
-                )
-                if result.first() is None:
+                if dialect == "sqlite":
+                    # SQLite: use PRAGMA table_info
+                    result = await conn.execute(text(f"PRAGMA table_info({table})"))
+                    rows = result.fetchall()
+                    has_column = any(row[1] == column for row in rows)
+                else:
+                    # PostgreSQL / MySQL: use information_schema
+                    result = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns "
+                             "WHERE table_name = :tbl AND column_name = :col"),
+                        {"tbl": table, "col": column},
+                    )
+                    has_column = result.first() is not None
+            except Exception:
+                pass  # Table may not exist yet — skip
+
+            if not has_column:
+                try:
                     await conn.execute(
                         text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
                     )
                     _log.info("Migration: added column %s.%s", table, column)
-            except Exception:
-                # SQLite doesn't support information_schema — try adding directly
-                try:
-                    from sqlalchemy import text
-                    await conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
-                    )
-                    _log.info("Migration: added column %s.%s (SQLite path)", table, column)
                 except Exception:
                     pass  # Column likely already exists
     

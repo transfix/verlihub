@@ -663,6 +663,7 @@ class TestAuthRegisterDB:
         resp = await client.post("/api/v1/auth/register", json={
             "nick": "newreg",
             "password": "testpassword",
+            "email": "newreg@gmail.com",
         })
         assert resp.status_code == 200
         data = resp.json()
@@ -705,6 +706,7 @@ class TestAuthRegisterDB:
             "nick": "invited_user",
             "password": "testpass123",
             "invite_code": "VALID123",
+            "email": "invited@gmail.com",
         })
         assert resp.status_code == 200
 

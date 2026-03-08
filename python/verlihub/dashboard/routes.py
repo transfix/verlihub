@@ -248,6 +248,7 @@ async def register_submit(request: Request):
     require_invite = cfg.api.registration_require_invite if cfg else False
     require_email = cfg.api.registration_require_email if cfg else True
     check_deliverability = cfg.api.registration_check_email_deliverability if cfg else False
+    block_disposable = cfg.api.registration_block_disposable_emails if cfg else True
     
     if not registration_enabled:
         return RedirectResponse(
@@ -297,7 +298,8 @@ async def register_submit(request: Request):
         )
     if email:
         from verlihub.email_validation import validate_email
-        ok, err = await validate_email(email, check_deliverability=check_deliverability)
+        ok, err = await validate_email(email, check_deliverability=check_deliverability,
+                                        block_disposable=block_disposable)
         if not ok:
             return RedirectResponse(
                 url=f"/dashboard/register?error={quote_plus(err)}&invite={invite_code}",

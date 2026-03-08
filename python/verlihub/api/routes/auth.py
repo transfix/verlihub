@@ -73,6 +73,12 @@ def _reg_check_deliverability() -> bool:
     return cfg.api.registration_check_email_deliverability if cfg else False
 
 
+def _reg_block_disposable() -> bool:
+    from verlihub.config import get_config_optional
+    cfg = get_config_optional()
+    return cfg.api.registration_block_disposable_emails if cfg else True
+
+
 def _is_nick_online(nick: str) -> bool:
     """Check if a nick is currently connected to the hub."""
     try:
@@ -156,7 +162,8 @@ async def register(
             )
         from verlihub.email_validation import validate_email
         ok, err = await validate_email(
-            email, check_deliverability=_reg_check_deliverability()
+            email, check_deliverability=_reg_check_deliverability(),
+            block_disposable=_reg_block_disposable(),
         )
         if not ok:
             raise HTTPException(
@@ -166,7 +173,10 @@ async def register(
     elif email:
         # Email provided but not required — still validate format
         from verlihub.email_validation import validate_email
-        ok, err = await validate_email(email, check_deliverability=False)
+        ok, err = await validate_email(
+            email, check_deliverability=False,
+            block_disposable=_reg_block_disposable(),
+        )
         if not ok:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

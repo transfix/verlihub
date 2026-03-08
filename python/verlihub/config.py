@@ -174,6 +174,7 @@ class ApiConfig:
     registration_default_class: int = 1  # REGISTERED
     registration_require_email: bool = True
     registration_check_email_deliverability: bool = False
+    registration_block_disposable_emails: bool = True
     
     def to_env(self) -> dict[str, str]:
         """Export as environment variables."""
@@ -188,6 +189,7 @@ class ApiConfig:
             "VH_REGISTRATION_DEFAULT_CLASS": str(self.registration_default_class),
             "VH_REGISTRATION_REQUIRE_EMAIL": "1" if self.registration_require_email else "0",
             "VH_REGISTRATION_CHECK_EMAIL_DELIVERABILITY": "1" if self.registration_check_email_deliverability else "0",
+            "VH_REGISTRATION_BLOCK_DISPOSABLE_EMAILS": "1" if self.registration_block_disposable_emails else "0",
         }
         if self.secret:
             env["VH_JWT_SECRET"] = self.secret
@@ -486,6 +488,7 @@ class VerlihubConfig:
                 registration_default_class=api.get("registration_default_class", config.api.registration_default_class),
                 registration_require_email=api.get("registration_require_email", config.api.registration_require_email),
                 registration_check_email_deliverability=api.get("registration_check_email_deliverability", config.api.registration_check_email_deliverability),
+                registration_block_disposable_emails=api.get("registration_block_disposable_emails", config.api.registration_block_disposable_emails),
             )
         
         # Hub

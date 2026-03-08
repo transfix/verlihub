@@ -45,6 +45,18 @@ import verlihub.models.database as _db_module
 
 
 # =============================================================================
+# Helper: run a handler method from a worker thread so the event loop
+# stays free to process the DB coroutine scheduled by _sync_db_lookup.
+# =============================================================================
+
+
+async def _call_from_thread(fn, *args):
+    """Call fn(*args) in a worker thread; the running loop stays free."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, fn, *args)
+
+
+# =============================================================================
 # Fixtures
 # =============================================================================
 
@@ -271,63 +283,74 @@ def core_module():
 class TestOnValidateNick:
     """Test HubEventHandler.OnValidateNick — NMDC nick validation callback."""
 
-    def test_registered_user_returns_user_class(self, core_module, registered_user):
+    @pytest.mark.asyncio
+    async def test_registered_user_returns_user_class(self, core_module, registered_user):
         """Registered user → return user_class (password required)."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
-        # handler._hub_context_ref is set by HubContext.__init__, so set it manually
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnValidateNick("TestUser", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "TestUser", "10.0.0.1")
         assert result >= 1
         assert result == registered_user.user_class
 
-    def test_admin_user_returns_admin_class(self, core_module, admin_user):
+    @pytest.mark.asyncio
+    async def test_admin_user_returns_admin_class(self, core_module, admin_user):
         """Admin user → return admin class level."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnValidateNick("AdminUser", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "AdminUser", "10.0.0.1")
         assert result == UserClass.ADMIN
 
-    def test_disabled_user_rejected(self, core_module, disabled_user):
+    @pytest.mark.asyncio
+    async def test_disabled_user_rejected(self, core_module, disabled_user):
         """Disabled (unauthorised) user → return -1."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnValidateNick("DisabledUser", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "DisabledUser", "10.0.0.1")
         assert result == -1
 
-    def test_unregistered_allowed_when_config_on(self, core_module, db):
+    @pytest.mark.asyncio
+    async def test_unregistered_allowed_when_config_on(self, core_module, db):
         """Unknown nick with allow_unregistered=1 → return 0 (guest)."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
         ctx.cpp._config["config.allow_unregistered"] = "1"
 
-        result = handler.OnValidateNick("UnknownGuest", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "UnknownGuest", "10.0.0.1")
         assert result == 0
 
-    def test_unregistered_rejected_when_config_off(self, core_module, db):
+    @pytest.mark.asyncio
+    async def test_unregistered_rejected_when_config_off(self, core_module, db):
         """Unknown nick with allow_unregistered=0 → return -1."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
         ctx.cpp._config["config.allow_unregistered"] = "0"
 
-        result = handler.OnValidateNick("UnknownGuest", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "UnknownGuest", "10.0.0.1")
         assert result == -1
 
-    def test_unregistered_default_allows_guests(self, core_module, db):
+    @pytest.mark.asyncio
+    async def test_unregistered_default_allows_guests(self, core_module, db):
         """Default config (no allow_unregistered set) → guests allowed."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
         # Don't set allow_unregistered — default should be "1"
 
-        result = handler.OnValidateNick("DefaultGuest", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "DefaultGuest", "10.0.0.1")
         assert result == 0
 
     def test_db_error_rejects_safely(self, core_module):
@@ -341,29 +364,26 @@ class TestOnValidateNick:
             result = handler.OnValidateNick("AnyUser", "10.0.0.1")
         assert result == -1
 
-    def test_user_class_zero_gets_bumped_to_one(self, core_module, db, db_session):
+    @pytest.mark.asyncio
+    async def test_user_class_zero_gets_bumped_to_one(self, core_module, db, db_session):
         """User with class 0 in DB gets bumped to 1 (require password)."""
-        import asyncio
-
-        async def _create():
-            user = RegUser(
-                nick="ClassZeroUser",
-                login_pwd=hash_password("pw"),
-                user_class=0,
-                reg_date=datetime.now(timezone.utc),
-                reg_op="test",
-                authorised=True,
-            )
-            db_session.add(user)
-            await db_session.commit()
-
-        asyncio.get_event_loop().run_until_complete(_create())
+        user = RegUser(
+            nick="ClassZeroUser",
+            login_pwd=hash_password("pw"),
+            user_class=0,
+            reg_date=datetime.now(timezone.utc),
+            reg_op="test",
+            authorised=True,
+        )
+        db_session.add(user)
+        await db_session.commit()
 
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnValidateNick("ClassZeroUser", "10.0.0.1")
+        result = await _call_from_thread(handler.OnValidateNick, "ClassZeroUser", "10.0.0.1")
         assert result >= 1  # max(0, 1) = 1
 
 
@@ -375,69 +395,83 @@ class TestOnValidateNick:
 class TestOnCheckPassword:
     """Test HubEventHandler.OnCheckPassword — NMDC password validation callback."""
 
-    def test_correct_password_returns_class(self, core_module, registered_user):
+    @pytest.mark.asyncio
+    async def test_correct_password_returns_class(self, core_module, registered_user):
         """Correct password → return user_class."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("TestUser", "correct_password")
+        result = await _call_from_thread(handler.OnCheckPassword, "TestUser", "correct_password")
         assert result == registered_user.user_class
 
-    def test_wrong_password_returns_negative(self, core_module, registered_user):
+    @pytest.mark.asyncio
+    async def test_wrong_password_returns_negative(self, core_module, registered_user):
         """Wrong password → return -1."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("TestUser", "wrong_password")
+        result = await _call_from_thread(handler.OnCheckPassword, "TestUser", "wrong_password")
         assert result == -1
 
-    def test_admin_correct_password(self, core_module, admin_user):
+    @pytest.mark.asyncio
+    async def test_admin_correct_password(self, core_module, admin_user):
         """Admin with correct password → return admin class."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("AdminUser", "admin_pass")
+        result = await _call_from_thread(handler.OnCheckPassword, "AdminUser", "admin_pass")
         assert result == UserClass.ADMIN
 
-    def test_disabled_user_rejected(self, core_module, disabled_user):
+    @pytest.mark.asyncio
+    async def test_disabled_user_rejected(self, core_module, disabled_user):
         """Disabled user → always return -1 even with correct password."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("DisabledUser", "disabled_pass")
+        result = await _call_from_thread(handler.OnCheckPassword, "DisabledUser", "disabled_pass")
         assert result == -1
 
-    def test_unknown_user_rejected(self, core_module, db):
+    @pytest.mark.asyncio
+    async def test_unknown_user_rejected(self, core_module, db):
         """User not in DB → return -1."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("NonExistentUser", "any_password")
+        result = await _call_from_thread(handler.OnCheckPassword, "NonExistentUser", "any_password")
         assert result == -1
 
-    def test_empty_password_in_db_require_password_on(self, core_module, no_password_user):
+    @pytest.mark.asyncio
+    async def test_empty_password_in_db_require_password_on(self, core_module, no_password_user):
         """No password hash in DB + require_password=1 → reject."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
         ctx.cpp._config["config.require_password"] = "1"
 
-        result = handler.OnCheckPassword("NoPwdUser", "")
+        result = await _call_from_thread(handler.OnCheckPassword, "NoPwdUser", "")
         assert result == -1
 
-    def test_empty_password_in_db_require_password_off(self, core_module, no_password_user):
+    @pytest.mark.asyncio
+    async def test_empty_password_in_db_require_password_off(self, core_module, no_password_user):
         """No password hash in DB + require_password=0 → allow with user_class."""
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
         ctx.cpp._config["config.require_password"] = "0"
 
-        result = handler.OnCheckPassword("NoPwdUser", "")
+        result = await _call_from_thread(handler.OnCheckPassword, "NoPwdUser", "")
         assert result == no_password_user.user_class
 
     def test_db_error_rejects_safely(self, core_module):
@@ -450,29 +484,26 @@ class TestOnCheckPassword:
             result = handler.OnCheckPassword("AnyUser", "any_pw")
         assert result == -1
 
-    def test_corrupt_hash_rejects_safely(self, core_module, db, db_session):
+    @pytest.mark.asyncio
+    async def test_corrupt_hash_rejects_safely(self, core_module, db, db_session):
         """Corrupt password hash in DB → reject safely (no crash)."""
-        import asyncio
-
-        async def _create():
-            user = RegUser(
-                nick="CorruptHashUser",
-                login_pwd="not_a_valid_bcrypt_hash",
-                user_class=UserClass.REGISTERED,
-                reg_date=datetime.now(timezone.utc),
-                reg_op="test",
-                authorised=True,
-            )
-            db_session.add(user)
-            await db_session.commit()
-
-        asyncio.get_event_loop().run_until_complete(_create())
+        user = RegUser(
+            nick="CorruptHashUser",
+            login_pwd="not_a_valid_bcrypt_hash",
+            user_class=UserClass.REGISTERED,
+            reg_date=datetime.now(timezone.utc),
+            reg_op="test",
+            authorised=True,
+        )
+        db_session.add(user)
+        await db_session.commit()
 
         handler = core_module.HubEventHandler()
         ctx = core_module.HubContext.create("/tmp/test")
         handler._hub_context_ref = ctx
+        handler.set_event_loop(asyncio.get_running_loop())
 
-        result = handler.OnCheckPassword("CorruptHashUser", "any_password")
+        result = await _call_from_thread(handler.OnCheckPassword, "CorruptHashUser", "any_password")
         assert result == -1
 
 

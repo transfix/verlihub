@@ -29,8 +29,12 @@ _DISPOSABLE_DOMAINS = frozenset({
 })
 
 
-def validate_email_format(email: str) -> tuple[bool, str]:
+def validate_email_format(email: str, *, block_disposable: bool = True) -> tuple[bool, str]:
     """Validate email format.
+
+    Args:
+        email: The email address to validate.
+        block_disposable: If True, reject known disposable email domains.
 
     Returns:
         (is_valid, error_message)
@@ -53,7 +57,7 @@ def validate_email_format(email: str) -> tuple[bool, str]:
     if len(local) > 64:
         return False, "Email local part is too long"
 
-    if domain in _DISPOSABLE_DOMAINS:
+    if block_disposable and domain in _DISPOSABLE_DOMAINS:
         return False, "Disposable email addresses are not allowed"
 
     return True, ""
@@ -114,17 +118,19 @@ async def validate_email(
     email: str,
     *,
     check_deliverability: bool = False,
+    block_disposable: bool = True,
 ) -> tuple[bool, str]:
     """Full email validation (async-safe).
 
     Args:
         email: The email address to validate.
         check_deliverability: If True, also check DNS MX records.
+        block_disposable: If True, reject known disposable email domains.
 
     Returns:
         (is_valid, error_message)
     """
-    ok, err = validate_email_format(email)
+    ok, err = validate_email_format(email, block_disposable=block_disposable)
     if not ok:
         return False, err
 

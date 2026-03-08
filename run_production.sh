@@ -214,10 +214,15 @@ print(f"MATTERBRIDGE_CHANNEL={q(mb.get('channel', '#general'))}")
 
 # LLM (Ollama sidecar)
 llm = config.get("llm", {})
-print(f"LLM_ENABLED={q(str(llm.get('enabled', False)).lower())}")
+llm_enabled = str(llm.get('enabled', False)).lower() == 'true'
+llm_base_url = llm.get('base_url', 'http://ollama:11434/v1')
+# Only spin up the Ollama container when the base_url points at the local sidecar
+needs_ollama = llm_enabled and ('ollama' in llm_base_url and ('localhost' in llm_base_url or '127.0.0.1' in llm_base_url or 'vh-prod-ollama' in llm_base_url or llm_base_url == 'http://ollama:11434/v1'))
+print(f"LLM_ENABLED={q(str(llm_enabled).lower())}")
 print(f"LLM_MODEL={q(llm.get('model', 'qwen2.5:7b'))}")
-print(f"LLM_BASE_URL={q(llm.get('base_url', 'http://ollama:11434/v1'))}")
+print(f"LLM_BASE_URL={q(llm_base_url)}")
 print(f"LLM_PORT={q(llm.get('ollama_port', 11434))}")
+print(f"NEEDS_OLLAMA={q(str(needs_ollama).lower())}")
 
 # Startup commands
 startup_cmds = config.get("startup_commands", [])
@@ -461,8 +466,8 @@ EOF
         _compose_legacy_hub >> "$compose_file"
     fi
 
-    # Ollama LLM sidecar (verlihub-py only)
-    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+    # Ollama LLM sidecar (only when base_url points at the local sidecar)
+    if [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ]; then
         echo "" >> "$compose_file"
         _compose_ollama_service >> "$compose_file"
     fi
@@ -471,7 +476,7 @@ EOF
     if [ "$DB_TYPE" = "sqlite" ]; then
         local sqlite_vol="${CONFIG_VOLUME}-sqlite"
         local ollama_vol_line=""
-        [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ] && \
+        [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
             ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
         cat >> "$compose_file" << EOF
 
@@ -485,7 +490,7 @@ networks:
 EOF
     else
         local ollama_vol_line=""
-        [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ] && \
+        [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
             ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
         cat >> "$compose_file" << EOF
 
@@ -841,8 +846,8 @@ start_production() {
     # Give hub a moment to fully initialize
     sleep 5
 
-    # Pull LLM model if Ollama sidecar is enabled
-    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+    # Pull LLM model if local Ollama sidecar is running
+    if [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ]; then
         log_info "Pulling LLM model '${LLM_MODEL}' via Ollama (this may take a while on first run)..."
         local ollama_container="${CONTAINER_PREFIX}-ollama"
         docker exec "$ollama_container" ollama pull "$LLM_MODEL" 2>&1 | tail -5
@@ -851,6 +856,9 @@ start_production() {
         else
             log_warn "Failed to pull model '$LLM_MODEL' — LLM chat may not work"
         fi
+    elif [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        log_info "LLM enabled with remote endpoint: ${LLM_BASE_URL}"
+        log_info "Skipping Ollama sidecar (not needed for remote providers)"
     fi
 
     # Post-start steps (legacy only — verlihub-py handles all of this from YAML)

@@ -67,6 +67,19 @@ class ChatResponse(BaseModel):
     model: str = ""
 
 
+class SessionInfo(BaseModel):
+    """Summary of a chat session."""
+    session_id: str
+    title: str
+    created_at: float
+    message_count: int
+
+
+class SessionListResponse(BaseModel):
+    """List of user sessions."""
+    sessions: list[SessionInfo] = []
+
+
 # =============================================================================
 # LLM client — lazy singleton
 # =============================================================================
@@ -706,8 +719,45 @@ class ChatSession:
         return response.choices[0].message.content or "(no response)", tool_calls_made
 
 
-# Active sessions keyed by (nick, session_id)
+# Active sessions keyed by "nick:session_id"
 _sessions: dict[str, ChatSession] = {}
+# Session metadata: titles, timestamps per "nick:session_id"
+_session_meta: dict[str, dict] = {}
+
+
+def _session_key(nick: str, session_id: str) -> str:
+    return f"{nick}:{session_id}"
+
+
+def _ensure_session(
+    nick: str, session_id: str, user: TokenData, is_admin: bool, llm_cfg: LlmConfig
+) -> ChatSession:
+    """Get or create a ChatSession and its metadata entry."""
+    key = _session_key(nick, session_id)
+    session = _sessions.get(key)
+    if session is None:
+        session = ChatSession(user, is_admin, llm_cfg)
+        _sessions[key] = session
+        _session_meta[key] = {
+            "session_id": session_id,
+            "title": "New chat",
+            "created_at": session.created_at,
+            "message_count": 0,
+        }
+    return session
+
+
+def _update_session_title(key: str, user_message: str) -> None:
+    """Set the session title from the first user message (truncated)."""
+    meta = _session_meta.get(key)
+    if meta and meta["title"] == "New chat":
+        meta["title"] = user_message[:80].strip() or "New chat"
+
+
+def _bump_session_count(key: str) -> None:
+    meta = _session_meta.get(key)
+    if meta:
+        meta["message_count"] += 1
 
 
 # =============================================================================
@@ -758,12 +808,12 @@ async def llm_chat(
     is_admin = user.user_class >= llm_cfg.admin_class
     
     # Get or create session
-    session_key = f"{user.nick}:{request.conversation_id or 'default'}"
-    session = _sessions.get(session_key)
-    if session is None:
-        session = ChatSession(user, is_admin, llm_cfg)
-        _sessions[session_key] = session
-    
+    sid = request.conversation_id or "default"
+    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
+    key = _session_key(user.nick, sid)
+    _update_session_title(key, request.message)
+    _bump_session_count(key)
+
     try:
         response_text, tool_calls = await session.chat(request.message)
     except Exception as e:
@@ -777,34 +827,69 @@ async def llm_chat(
     )
 
 
+@router.get("/sessions", response_model=SessionListResponse)
+async def list_sessions(
+    user: TokenData = Depends(get_current_user),
+):
+    """List the caller's active chat sessions."""
+    prefix = f"{user.nick}:"
+    sessions = [
+        SessionInfo(**meta)
+        for key, meta in _session_meta.items()
+        if key.startswith(prefix)
+    ]
+    sessions.sort(key=lambda s: s.created_at, reverse=True)
+    return SessionListResponse(sessions=sessions)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    user: TokenData = Depends(get_current_user),
+):
+    """Delete a chat session."""
+    key = _session_key(user.nick, session_id)
+    _sessions.pop(key, None)
+    _session_meta.pop(key, None)
+    return {"ok": True}
+
+
 # =============================================================================
 # WebSocket endpoint — streaming chat with tool-call progress
 # =============================================================================
 
 
-async def ws_llm_chat(ws: WebSocket, token: Optional[str] = Query(None)):
+async def ws_llm_chat(
+    ws: WebSocket,
+    token: Optional[str] = None,
+    session_id: Optional[str] = None,
+):
     """
     WebSocket chat endpoint with tool-call progress.
-    
+
     Auth: pass JWT as ?token= query param (dashboard sends cookie-derived token).
-    
+    Optional: ?session_id= to resume a named session.
+
     Client sends:  {"message": "who is online?"}
-    Server sends:  {"type": "connected", "access": "admin", "model": "llama3.1"}
+    Server sends:  {"type": "connected", "access": "admin", "model": "llama3.1",
+                    "session_id": "abc123"}
                    {"type": "thinking"}
                    {"type": "tool_call", "name": "list_online_users", "args": {}}
                    {"type": "tool_result", "name": "list_online_users", "success": true}
                    {"type": "response", "content": "There are 5 users online..."}
                    {"type": "error", "content": "..."}
     """
+    import uuid
+
     await ws.accept()
-    
+
     llm_cfg = _get_llm_config()
-    
+
     if not llm_cfg.enabled:
         await ws.send_json({"type": "error", "content": "LLM integration is not enabled"})
         await ws.close()
         return
-    
+
     # Authenticate
     user = None
     if token:
@@ -812,96 +897,105 @@ async def ws_llm_chat(ws: WebSocket, token: Optional[str] = Query(None)):
             user = decode_token(token)
         except Exception:
             pass
-    
+
     if user is None:
         await ws.send_json({"type": "error", "content": "Authentication required"})
         await ws.close()
         return
-    
+
     if user.user_class < llm_cfg.min_class:
         await ws.send_json({"type": "error", "content": "Insufficient permissions for AI chat"})
         await ws.close()
         return
-    
+
     is_admin = user.user_class >= llm_cfg.admin_class
-    tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
-    system_prompt = (SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER)
-    system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
-    
     access = "admin" if is_admin else "user"
-    log.info(f"LLM WebSocket session for {user.nick} ({access})")
-    await ws.send_json({"type": "connected", "access": access, "model": llm_cfg.model})
-    
+
+    # Resolve / create session
+    sid = session_id or str(uuid.uuid4())[:8]
+    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
+    key = _session_key(user.nick, sid)
+
+    log.info("LLM WS session %s for %s (%s)", sid, user.nick, access)
+    await ws.send_json({
+        "type": "connected",
+        "access": access,
+        "model": llm_cfg.model,
+        "session_id": sid,
+    })
+
     try:
-        client = _get_openai_client()
-        
         while True:
             data = await ws.receive_json()
             user_msg = data.get("message", "").strip()
             if not user_msg:
                 continue
-            
-            messages.append({"role": "user", "content": user_msg})
-            await ws.send_json({"type": "thinking"})
-            
+
+            _update_session_title(key, user_msg)
+            _bump_session_count(key)
+
             try:
+                # Use session.chat() for full tool-loop orchestration
+                # We need to stream progress, so we duplicate the inner loop here
+                # but with WS progress messages.
+                client = _get_openai_client()
+                session.messages.append({"role": "user", "content": user_msg})
+                await ws.send_json({"type": "thinking"})
+
                 for round_num in range(llm_cfg.max_tool_rounds):
                     try:
                         response = await client.chat.completions.create(
                             model=llm_cfg.model,
-                            messages=messages,
-                            tools=tools,
+                            messages=session.messages,
+                            tools=session.tools if session.tools else None,
                             tool_choice="auto",
                             temperature=llm_cfg.temperature,
                             max_tokens=llm_cfg.max_tokens,
                         )
                     except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
-                        # Endpoint does not support tool calling — plain chat
                         if round_num == 0:
-                            log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
+                            log.warning("Tool calling not supported, falling back: %s", exc)
                             response = await client.chat.completions.create(
                                 model=llm_cfg.model,
-                                messages=messages,
+                                messages=session.messages,
                                 temperature=llm_cfg.temperature,
                                 max_tokens=llm_cfg.max_tokens,
                             )
                         else:
                             raise
-                    
+
                     choice = response.choices[0]
                     msg = choice.message
-                    messages.append(msg.model_dump())
-                    
+                    session.messages.append(msg.model_dump())
+
                     if not msg.tool_calls:
                         await ws.send_json({
                             "type": "response",
                             "content": msg.content or "(no response)",
                         })
                         break
-                    
-                    # Execute tool calls
+
                     for tc in msg.tool_calls:
                         fn_name = tc.function.name
                         try:
                             fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
                         except json.JSONDecodeError:
                             fn_args = {}
-                        
+
                         await ws.send_json({
                             "type": "tool_call",
                             "name": fn_name,
                             "args": fn_args,
                         })
-                        
+
                         result = await _execute_tool(fn_name, fn_args, user, is_admin)
-                        
-                        messages.append({
+
+                        session.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
                             "content": result,
                         })
-                        
+
                         await ws.send_json({
                             "type": "tool_result",
                             "name": fn_name,
@@ -912,10 +1006,10 @@ async def ws_llm_chat(ws: WebSocket, token: Optional[str] = Query(None)):
                         "type": "response",
                         "content": "(Reached tool call limit — here is what I found so far.)",
                     })
-            
+
             except Exception as e:
                 log.exception("LLM WebSocket error")
                 await ws.send_json({"type": "error", "content": f"LLM error: {e}"})
-    
+
     except WebSocketDisconnect:
-        log.info(f"LLM WebSocket disconnected: {user.nick}")
+        log.info("LLM WS disconnected: %s (session %s)", user.nick, sid)

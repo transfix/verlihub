@@ -120,7 +120,8 @@ async def websocket_llm_chat(websocket: WebSocket):
     """LLM chat WebSocket — delegates to the llm route module."""
     from verlihub.api.routes.llm import ws_llm_chat
     token = websocket.query_params.get("token")
-    await ws_llm_chat(websocket, token=token)
+    session_id = websocket.query_params.get("session_id")
+    await ws_llm_chat(websocket, token=token, session_id=session_id)
 
 
 @ws_router.websocket("/hub")

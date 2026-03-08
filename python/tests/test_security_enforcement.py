@@ -41,6 +41,7 @@ from verlihub.api.auth import (
 )
 from verlihub.models import RegUser, UserClass
 from verlihub.models.database import Database, init_database, close_database
+import verlihub.models.database as _db_module
 
 
 # =============================================================================
@@ -50,13 +51,20 @@ from verlihub.models.database import Database, init_database, close_database
 
 @pytest_asyncio.fixture(scope="function")
 async def db():
-    """Create an in-memory SQLite database for testing."""
+    """
+    Create an in-memory SQLite database for testing.
+    
+    Saves and restores the global _database reference so that the
+    session-scoped conftest ``db`` fixture is not clobbered.
+    """
     from verlihub.models.database import DatabaseConfig
 
+    saved = _db_module._database
     config = DatabaseConfig(use_sqlite=True)
     database = await init_database(config=config)
     yield database
     await close_database()
+    _db_module._database = saved
 
 
 @pytest_asyncio.fixture(scope="function")

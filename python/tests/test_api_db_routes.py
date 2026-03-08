@@ -63,12 +63,15 @@ async def _get_test_session():
 
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Create tables before each test, drop after."""
+    """Create tables once per module, delete data between tests."""
+    # Ensure tables exist (fast no-op if already created)
     async with _test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-    yield
+    # Clean data from previous test
     async with _test_engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
+        for table in reversed(SQLModel.metadata.sorted_tables):
+            await conn.execute(table.delete())
+    yield
 
 
 @pytest.fixture

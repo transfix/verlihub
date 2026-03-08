@@ -24,6 +24,7 @@ from typing import AsyncGenerator, Generator, Optional
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
@@ -41,6 +42,8 @@ from verlihub.models.database import (
     close_database,
     get_database,
 )
+
+import verlihub.models.database as _db_module  # for restoring global _database
 
 
 # =============================================================================
@@ -109,13 +112,13 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 # Database Configuration Fixtures
 # =============================================================================
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def sqlite_config() -> DatabaseConfig:
     """Create SQLite in-memory database config."""
     return DatabaseConfig(use_sqlite=True, sqlite_path=None)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def mysql_config() -> DatabaseConfig:
     """Create MySQL database config from environment."""
     cfg = get_mysql_config()
@@ -129,7 +132,7 @@ def mysql_config() -> DatabaseConfig:
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def postgres_config() -> DatabaseConfig:
     """Create PostgreSQL database config from environment."""
     cfg = get_postgres_config()
@@ -143,7 +146,7 @@ def postgres_config() -> DatabaseConfig:
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def db_config(sqlite_config, mysql_config, postgres_config) -> DatabaseConfig:
     """
     Get database config based on VH_DB_BACKEND environment variable.
@@ -160,13 +163,17 @@ def db_config(sqlite_config, mysql_config, postgres_config) -> DatabaseConfig:
         return sqlite_config
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture(scope="session")
 async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
     """
-    Create a test database using configured backend.
+    Session-scoped test database.
     
-    Creates all tables and yields the database instance.
-    Tables are dropped after each test.
+    Creates the engine and tables ONCE for the entire test session.
+    Per-test isolation is provided by the db_session fixture which uses
+    transaction savepoints that are rolled back after each test.
+    
+    This avoids expensive DDL (DROP/CREATE) per test, which is the main
+    bottleneck when running against MySQL/PostgreSQL over the network.
     
     Backend is controlled by VH_DB_BACKEND environment variable:
     - "sqlite" (default): SQLite in-memory database
@@ -176,8 +183,7 @@ async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
     database = await init_database(config=db_config)
     
     # For persistent backends (MySQL/PostgreSQL), drop and recreate tables
-    # to ensure test isolation even if a previous run left stale data.
-    # SQLite in-memory databases are always fresh, so this is not needed.
+    # once at session start to ensure a clean schema.
     if not db_config.use_sqlite:
         async with database._engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.drop_all)
@@ -185,21 +191,79 @@ async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
     
     yield database
     
-    # Drop all tables during teardown for persistent backends to
-    # prevent data from leaking into the next test.
+    # Drop tables once at session end.
     if not db_config.use_sqlite and database._engine is not None:
         async with database._engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.drop_all)
     
-    # Cleanup engine
     await close_database()
+
+
+@pytest_asyncio.fixture(autouse=True, scope="function")
+async def _clean_db_between_tests() -> AsyncGenerator[None, None]:
+    """
+    Autouse fixture: DELETE all rows from all tables between tests.
+    
+    Checks if a global database is initialized (via init_database()).  If so,
+    deletes all row data — fast even for MySQL because no DDL is involved.
+    
+    On teardown, restores the global ``_database`` reference if a test cleared
+    it by calling ``close_database()`` directly (e.g. test_database_config.py).
+    """
+    saved_db = _db_module._database
+    if saved_db is not None and saved_db._engine is not None:
+        try:
+            async with saved_db._engine.begin() as conn:
+                for table in reversed(SQLModel.metadata.sorted_tables):
+                    await conn.execute(table.delete())
+        except Exception:
+            pass  # engine may be disposed; skip cleanup
+    yield
+    # Restore the global _database if a test cleared it.  The session-scoped
+    # ``db`` fixture's Database instance is still alive, so just reassign.
+    if saved_db is not None and _db_module._database is None:
+        _db_module._database = saved_db
 
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session(db: Database) -> AsyncGenerator[AsyncSession, None]:
-    """Get a database session for testing."""
-    async with db._session_factory() as session:
+    """
+    Per-test database session with isolation.
+    
+    Strategy varies by backend:
+    
+    - **SQLite** (in-memory, StaticPool): Simple session from the factory.
+      Data cleanup is handled by the autouse ``_clean_db_between_tests``
+      fixture, so every test starts with empty tables.
+    
+    - **MySQL / PostgreSQL**: Uses a savepoint (SAVEPOINT / ROLLBACK TO)
+      pattern so that each test can call session.commit() freely, but all
+      changes are rolled back when the fixture tears down.  The autouse
+      cleanup catches anything committed through separate sessions.
+    """
+    if db.config.use_sqlite:
+        # ----- SQLite path: simple session (cleanup already done) -----
+        async with db._session_factory() as session:
+            yield session
+    else:
+        # ----- MySQL / PostgreSQL path: savepoint rollback -----
+        connection = await db._engine.connect()
+        transaction = await connection.begin()
+
+        await connection.begin_nested()
+
+        session = AsyncSession(bind=connection, expire_on_commit=False)
+
+        @event.listens_for(session.sync_session, "after_transaction_end")
+        def _restart_savepoint(sess, trans):
+            if trans.nested and not trans._parent.nested:
+                sess.begin_nested()
+
         yield session
+
+        await session.close()
+        await transaction.rollback()
+        await connection.close()
 
 
 # =============================================================================

@@ -218,65 +218,59 @@
         --asst-border: #2a2a42;
     }
 
-    /* Rendered markdown inside assistant bubbles */
-    .ai-msg.assistant-msg .bubble.box p { margin-bottom: 0.5em; }
-    .ai-msg.assistant-msg .bubble.box p:last-child { margin-bottom: 0; }
-    .ai-msg.assistant-msg .bubble.box h1,
-    .ai-msg.assistant-msg .bubble.box h2,
-    .ai-msg.assistant-msg .bubble.box h3 {
-        font-weight: 700; margin: 0.6em 0 0.3em 0;
+    /* Rendered markdown inside assistant bubbles — use Bulma .content */
+    .ai-msg.assistant-msg .bubble.box .content {
+        font-size: 0.92rem;
+        line-height: 1.6;
     }
-    .ai-msg.assistant-msg .bubble.box h1 { font-size: 1.15em; }
-    .ai-msg.assistant-msg .bubble.box h2 { font-size: 1.05em; }
-    .ai-msg.assistant-msg .bubble.box h3 { font-size: 0.98em; }
-    .ai-msg.assistant-msg .bubble.box table {
-        border-collapse: separate;
-        border-spacing: 0;
-        width: 100%;
-        margin: 0.6em 0;
+    .ai-msg.assistant-msg .bubble.box .content p:last-child { margin-bottom: 0; }
+    .ai-msg.assistant-msg .bubble.box .content h1 { font-size: 1.15em; }
+    .ai-msg.assistant-msg .bubble.box .content h2 { font-size: 1.05em; }
+    .ai-msg.assistant-msg .bubble.box .content h3 { font-size: 0.98em; }
+
+    /* Bulma .table inside chat bubbles */
+    .ai-msg.assistant-msg .bubble.box .table {
         font-size: 0.88em;
-        border-radius: 8px;
+        border-radius: 6px;
         overflow: hidden;
-        border: 1px solid var(--table-border, #e0e0e0);
     }
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box table {
-        --table-border: #333;
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table {
+        background: transparent;
+        color: #e4e4e4;
     }
-    .ai-msg.assistant-msg .bubble.box th,
-    .ai-msg.assistant-msg .bubble.box td {
-        padding: 0.45em 0.75em;
-        text-align: left;
-        border-bottom: 1px solid var(--table-border, #e8e8e8);
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table th {
+        background: rgba(108,92,231,0.12);
+        color: #c8c8d8;
+        border-color: #2a2a42;
     }
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box th,
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box td {
-        --table-border: #2a2a42;
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table td {
+        border-color: #2a2a42;
     }
-    .ai-msg.assistant-msg .bubble.box th {
-        background: var(--th-bg, #f0f0f5);
-        font-weight: 600;
-        font-size: 0.92em;
-        color: var(--th-color, #444);
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table tr:nth-child(even) td {
+        background: rgba(255,255,255,0.025);
     }
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box th {
-        --th-bg: rgba(108,92,231,0.12);
-        --th-color: #c8c8d8;
+    /* Bulma .content handles blockquote, hr, lists, etc. — dark overrides only */
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content blockquote,
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content .notification {
+        background: rgba(255,255,255,0.04);
+        border-left-color: #444;
+        color: #aaa;
     }
-    .ai-msg.assistant-msg .bubble.box tr:nth-child(even) td {
-        background: var(--tr-even, rgba(0,0,0,0.015));
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content hr {
+        background-color: #333;
     }
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box tr:nth-child(even) td {
-        --tr-even: rgba(255,255,255,0.025);
+    /* Code blocks inside chat */
+    .ai-msg.assistant-msg .bubble.box .content pre {
+        border-radius: 6px;
+        font-size: 0.86em;
     }
-    .ai-msg.assistant-msg .bubble.box tr:last-child td {
-        border-bottom: none;
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content pre {
+        background: #0d0d1a;
+        color: #e0e0e0;
     }
-    .ai-msg.assistant-msg .bubble.box blockquote {
-        border-left: 3px solid var(--asst-border, #ddd); padding-left: 0.8em;
-        margin: 0.5em 0; color: #666;
-    }
-    .ai-msg.assistant-msg .bubble.box hr {
-        border: none; border-top: 1px solid var(--asst-border, #eee); margin: 0.6em 0;
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content code {
+        background: rgba(255,255,255,0.06);
+        color: #e0e0e0;
     }
 
     /* Role + time label */
@@ -690,16 +684,41 @@
     }
 
     /* ---- Markdown rendering via marked + DOMPurify ---- */
+    /**
+     * Post-process rendered HTML to add Bulma CSS classes to elements.
+     * Tables get Bulma .table classes; other elements are styled by the
+     * wrapping .content div that Bulma provides.
+     */
+    function _bulmaPostProcess(html) {
+        return html
+            /* Add Bulma classes to bare <table> tags */
+            .replace(/<table(?![^>]*class=)/g,
+                '<table class="table is-bordered is-striped is-hoverable is-fullwidth"')
+            /* Add Bulma notification class to blockquotes for nicer styling */
+            .replace(/<blockquote(?![^>]*class=)/g,
+                '<blockquote class="notification"');
+    }
+
     const _markedOpts = { gfm: true, breaks: true };
-    if (typeof marked !== 'undefined' && marked.setOptions) marked.setOptions(_markedOpts);
+    if (typeof marked !== 'undefined') {
+        if (marked.use) {
+            marked.use(_markedOpts);
+        } else if (marked.setOptions) {
+            marked.setOptions(_markedOpts);
+        }
+    }
 
     function fmt(text) {
         if (typeof marked !== 'undefined') {
-            const raw = typeof marked.parse === 'function' ? marked.parse(text) : marked(text);
-            return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
+            let raw = typeof marked.parse === 'function' ? marked.parse(text) : marked(text);
+            raw = _bulmaPostProcess(raw);
+            const clean = typeof DOMPurify !== 'undefined'
+                ? DOMPurify.sanitize(raw, { ADD_ATTR: ['class'] })
+                : raw;
+            return '<div class="content">' + clean + '</div>';
         }
         // Fallback if CDN failed to load
-        return esc(text).replace(/\n/g, '<br>');
+        return '<div class="content">' + esc(text).replace(/\n/g, '<br>') + '</div>';
     }
 
     function ts(t) {

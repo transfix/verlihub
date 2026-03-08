@@ -725,25 +725,37 @@ class TestLlmWebSocket:
                     assert data["access"] == "user"
 
     def test_ws_sends_thinking_on_message(self, app):
-        """After sending a message, the WS should respond with 'thinking' then 'response'."""
+        """After sending a message, the WS should respond with thinking → stream → response."""
         from starlette.testclient import TestClient
 
-        # Mock LLM: simple response, no tool calls
-        mock_msg = MagicMock()
-        mock_msg.content = "Hello! The hub is running."
-        mock_msg.tool_calls = None
-        mock_msg.model_dump = MagicMock(return_value={
-            "role": "assistant", "content": "Hello! The hub is running.",
-        })
-        mock_choice = MagicMock()
-        mock_choice.message = mock_msg
-        mock_resp = MagicMock()
-        mock_resp.choices = [mock_choice]
+        # Mock streaming LLM response: yields text tokens then stops
+        async def _fake_stream(*args, **kwargs):
+            """Async generator simulating OpenAI streaming chunks."""
+            for token in ["Hello!", " The hub", " is running."]:
+                chunk = MagicMock()
+                delta = MagicMock()
+                delta.content = token
+                delta.tool_calls = None
+                choice = MagicMock()
+                choice.delta = delta
+                choice.finish_reason = None
+                chunk.choices = [choice]
+                yield chunk
+            # Final chunk with finish_reason
+            final = MagicMock()
+            fd = MagicMock()
+            fd.content = None
+            fd.tool_calls = None
+            fc = MagicMock()
+            fc.delta = fd
+            fc.finish_reason = "stop"
+            final.choices = [fc]
+            yield final
 
         mock_openai = MagicMock()
         mock_openai.chat = MagicMock()
         mock_openai.chat.completions = MagicMock()
-        mock_openai.chat.completions.create = AsyncMock(return_value=mock_resp)
+        mock_openai.chat.completions.create = AsyncMock(return_value=_fake_stream())
 
         with patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()), \
              patch("verlihub.api.routes.llm._get_openai_client", return_value=mock_openai):
@@ -761,51 +773,100 @@ class TestLlmWebSocket:
                     thinking = ws.receive_json()
                     assert thinking["type"] == "thinking"
 
-                    # Should get 'response'
-                    response = ws.receive_json()
-                    assert response["type"] == "response"
-                    assert "hub is running" in response["content"]
+                    # Should get 'stream_start'
+                    msg = ws.receive_json()
+                    assert msg["type"] == "stream_start"
+
+                    # Collect stream_delta messages
+                    parts = []
+                    while True:
+                        msg = ws.receive_json()
+                        if msg["type"] == "stream_delta":
+                            parts.append(msg["content"])
+                        elif msg["type"] == "stream_end":
+                            break
+
+                    assert "hub is running" in "".join(parts)
 
     def test_ws_tool_call_progress(self, app):
         """WebSocket should stream tool_call and tool_result messages."""
         from starlette.testclient import TestClient
 
-        # First LLM response: tool call
-        mock_tc = MagicMock()
-        mock_tc.id = "call_abc"
-        mock_tc.function = MagicMock()
-        mock_tc.function.name = "get_hub_info"
-        mock_tc.function.arguments = "{}"
+        # First LLM stream: yields a tool call (no text content)
+        async def _tool_stream(*args, **kwargs):
+            # Tool call delta: id + function name
+            c1 = MagicMock()
+            d1 = MagicMock()
+            d1.content = None
+            tc1 = MagicMock()
+            tc1.index = 0
+            tc1.id = "call_abc"
+            tc1.function = MagicMock()
+            tc1.function.name = "get_hub_info"
+            tc1.function.arguments = None
+            d1.tool_calls = [tc1]
+            ch1 = MagicMock()
+            ch1.delta = d1
+            ch1.finish_reason = None
+            c1.choices = [ch1]
+            yield c1
 
-        mock_msg1 = MagicMock()
-        mock_msg1.content = None
-        mock_msg1.tool_calls = [mock_tc]
-        mock_msg1.model_dump = MagicMock(return_value={
-            "role": "assistant", "content": None,
-            "tool_calls": [{"id": "call_abc", "function": {"name": "get_hub_info", "arguments": "{}"}}],
-        })
+            # Tool call delta: arguments
+            c2 = MagicMock()
+            d2 = MagicMock()
+            d2.content = None
+            tc2 = MagicMock()
+            tc2.index = 0
+            tc2.id = None
+            tc2.function = MagicMock()
+            tc2.function.name = None
+            tc2.function.arguments = "{}"
+            d2.tool_calls = [tc2]
+            ch2 = MagicMock()
+            ch2.delta = d2
+            ch2.finish_reason = None
+            c2.choices = [ch2]
+            yield c2
 
-        # Second LLM response: text
-        mock_msg2 = MagicMock()
-        mock_msg2.content = "The hub name is TestHub."
-        mock_msg2.tool_calls = None
-        mock_msg2.model_dump = MagicMock(return_value={
-            "role": "assistant", "content": "The hub name is TestHub.",
-        })
+            # Final: finish_reason=tool_calls
+            cf = MagicMock()
+            df = MagicMock()
+            df.content = None
+            df.tool_calls = None
+            chf = MagicMock()
+            chf.delta = df
+            chf.finish_reason = "tool_calls"
+            cf.choices = [chf]
+            yield cf
 
-        mock_choice1 = MagicMock()
-        mock_choice1.message = mock_msg1
-        mock_choice2 = MagicMock()
-        mock_choice2.message = mock_msg2
-        mock_resp1 = MagicMock()
-        mock_resp1.choices = [mock_choice1]
-        mock_resp2 = MagicMock()
-        mock_resp2.choices = [mock_choice2]
+        # Second LLM stream: yields text response
+        async def _text_stream(*args, **kwargs):
+            for tok in ["The hub name", " is TestHub."]:
+                c = MagicMock()
+                d = MagicMock()
+                d.content = tok
+                d.tool_calls = None
+                ch = MagicMock()
+                ch.delta = d
+                ch.finish_reason = None
+                c.choices = [ch]
+                yield c
+            cf = MagicMock()
+            df = MagicMock()
+            df.content = None
+            df.tool_calls = None
+            chf = MagicMock()
+            chf.delta = df
+            chf.finish_reason = "stop"
+            cf.choices = [chf]
+            yield cf
+
+        _calls = iter([_tool_stream(), _text_stream()])
 
         mock_openai = MagicMock()
         mock_openai.chat = MagicMock()
         mock_openai.chat.completions = MagicMock()
-        mock_openai.chat.completions.create = AsyncMock(side_effect=[mock_resp1, mock_resp2])
+        mock_openai.chat.completions.create = AsyncMock(side_effect=lambda *a, **kw: next(_calls))
 
         with patch("verlihub.api.routes.llm.get_config_optional", return_value=_llm_enabled_config()), \
              patch("verlihub.api.routes.llm._get_openai_client", return_value=mock_openai):
@@ -830,10 +891,23 @@ class TestLlmWebSocket:
                     assert msg["type"] == "tool_result"
                     assert msg["name"] == "get_hub_info"
 
-                    # response
+                    # thinking (before 2nd round)
                     msg = ws.receive_json()
-                    assert msg["type"] == "response"
-                    assert "TestHub" in msg["content"]
+                    assert msg["type"] == "thinking"
+
+                    # stream_start
+                    msg = ws.receive_json()
+                    assert msg["type"] == "stream_start"
+
+                    # Collect stream deltas until stream_end
+                    parts = []
+                    while True:
+                        msg = ws.receive_json()
+                        if msg["type"] == "stream_delta":
+                            parts.append(msg["content"])
+                        elif msg["type"] == "stream_end":
+                            break
+                    assert "TestHub" in "".join(parts)
 
 
 # ======================================================================

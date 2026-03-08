@@ -935,50 +935,120 @@ async def ws_llm_chat(
             _bump_session_count(key)
 
             try:
-                # Use session.chat() for full tool-loop orchestration
-                # We need to stream progress, so we duplicate the inner loop here
-                # but with WS progress messages.
+                # Streaming chat with tool-call support.
+                # We stream tokens over the WebSocket for a responsive UX.
                 client = _get_openai_client()
                 session.messages.append({"role": "user", "content": user_msg})
                 await ws.send_json({"type": "thinking"})
 
                 for round_num in range(llm_cfg.max_tool_rounds):
+                    stream_mode = True
                     try:
-                        response = await client.chat.completions.create(
+                        stream = await client.chat.completions.create(
                             model=llm_cfg.model,
                             messages=session.messages,
                             tools=session.tools if session.tools else None,
                             tool_choice="auto",
                             temperature=llm_cfg.temperature,
                             max_tokens=llm_cfg.max_tokens,
+                            stream=True,
                         )
                     except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
                         if round_num == 0:
-                            log.warning("Tool calling not supported, falling back: %s", exc)
-                            response = await client.chat.completions.create(
-                                model=llm_cfg.model,
-                                messages=session.messages,
-                                temperature=llm_cfg.temperature,
-                                max_tokens=llm_cfg.max_tokens,
-                            )
+                            log.warning("Tool/stream not supported, falling back: %s", exc)
+                            try:
+                                stream = await client.chat.completions.create(
+                                    model=llm_cfg.model,
+                                    messages=session.messages,
+                                    temperature=llm_cfg.temperature,
+                                    max_tokens=llm_cfg.max_tokens,
+                                    stream=True,
+                                )
+                            except Exception:
+                                # Final fallback: non-streaming, no tools
+                                resp = await client.chat.completions.create(
+                                    model=llm_cfg.model,
+                                    messages=session.messages,
+                                    temperature=llm_cfg.temperature,
+                                    max_tokens=llm_cfg.max_tokens,
+                                )
+                                text = resp.choices[0].message.content or "(no response)"
+                                session.messages.append(resp.choices[0].message.model_dump())
+                                await ws.send_json({"type": "response", "content": text})
+                                stream_mode = False
+                                stream = None
+                                break
                         else:
                             raise
 
-                    choice = response.choices[0]
-                    msg = choice.message
-                    session.messages.append(msg.model_dump())
-
-                    if not msg.tool_calls:
-                        await ws.send_json({
-                            "type": "response",
-                            "content": msg.content or "(no response)",
-                        })
+                    if not stream_mode:
                         break
 
-                    for tc in msg.tool_calls:
-                        fn_name = tc.function.name
+                    # -- Consume the async stream --
+                    content_parts: list[str] = []
+                    tool_calls_acc: dict[int, dict] = {}  # index -> {id, name, arguments}
+                    sent_stream_start = False
+
+                    async for chunk in stream:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+
+                        # Text content tokens
+                        if delta.content:
+                            if not sent_stream_start:
+                                await ws.send_json({"type": "stream_start"})
+                                sent_stream_start = True
+                            content_parts.append(delta.content)
+                            await ws.send_json({"type": "stream_delta", "content": delta.content})
+
+                        # Tool call deltas
+                        if delta.tool_calls:
+                            for tc_d in delta.tool_calls:
+                                idx = tc_d.index
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                                if tc_d.id:
+                                    tool_calls_acc[idx]["id"] = tc_d.id
+                                if tc_d.function:
+                                    if tc_d.function.name:
+                                        tool_calls_acc[idx]["name"] += tc_d.function.name
+                                    if tc_d.function.arguments:
+                                        tool_calls_acc[idx]["arguments"] += tc_d.function.arguments
+
+                    full_content = "".join(content_parts)
+
+                    # Finalise streamed text
+                    if sent_stream_start:
+                        await ws.send_json({"type": "stream_end", "content": full_content})
+
+                    # Build message dict for conversation history
+                    msg_dict: dict = {"role": "assistant", "content": full_content or None}
+                    if tool_calls_acc:
+                        msg_dict["tool_calls"] = [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                            }
+                            for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+                        ]
+                    session.messages.append(msg_dict)
+
+                    # -- No tool calls → done --
+                    if not tool_calls_acc:
+                        if not sent_stream_start:
+                            await ws.send_json({
+                                "type": "response",
+                                "content": full_content or "(no response)",
+                            })
+                        break
+
+                    # -- Execute tool calls --
+                    for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]:
+                        fn_name = tc["name"]
                         try:
-                            fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                            fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
                         except json.JSONDecodeError:
                             fn_args = {}
 
@@ -992,7 +1062,7 @@ async def ws_llm_chat(
 
                         session.messages.append({
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc["id"],
                             "content": result,
                         })
 
@@ -1001,6 +1071,9 @@ async def ws_llm_chat(
                             "name": fn_name,
                             "success": "error" not in result,
                         })
+
+                    # Show thinking before next round
+                    await ws.send_json({"type": "thinking"})
                 else:
                     await ws.send_json({
                         "type": "response",

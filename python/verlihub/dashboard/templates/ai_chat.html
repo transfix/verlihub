@@ -179,42 +179,75 @@
     /* User */
     .ai-msg.user-msg { align-items: flex-end; }
 
-    .ai-msg.user-msg .bubble {
+    .ai-msg.user-msg .bubble.box {
         background: var(--user-bubble, #6c5ce7);
         color: #fff;
-        padding: 0.65rem 1rem;
+        padding: 0.75rem 1.1rem;
         border-radius: 18px 18px 4px 18px;
         max-width: 72%;
         line-height: 1.55;
         word-wrap: break-word;
         font-size: 0.92rem;
+        box-shadow: 0 2px 6px rgba(108,92,231,0.18);
+        border: none;
     }
 
-    [data-theme="dark"] .ai-msg.user-msg .bubble {
+    [data-theme="dark"] .ai-msg.user-msg .bubble.box {
         --user-bubble: #5b4cdb;
+        box-shadow: 0 2px 6px rgba(91,76,219,0.25);
     }
 
     /* Assistant */
     .ai-msg.assistant-msg { align-items: flex-start; }
 
-    .ai-msg.assistant-msg .bubble {
+    .ai-msg.assistant-msg .bubble.box {
         background: var(--asst-bubble, #fff);
         color: var(--asst-text, #2d3436);
-        padding: 0.75rem 1rem;
+        padding: 0.85rem 1.1rem;
         border-radius: 18px 18px 18px 4px;
         max-width: 82%;
         line-height: 1.6;
         word-wrap: break-word;
         font-size: 0.92rem;
-        white-space: pre-wrap;
         border: 1px solid var(--asst-border, #eee);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
 
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble {
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box {
         --asst-bubble: #1c1c32;
         --asst-text: #e4e4e4;
         --asst-border: #2a2a42;
+    }
+
+    /* Rendered markdown inside assistant bubbles */
+    .ai-msg.assistant-msg .bubble.box p { margin-bottom: 0.5em; }
+    .ai-msg.assistant-msg .bubble.box p:last-child { margin-bottom: 0; }
+    .ai-msg.assistant-msg .bubble.box h1,
+    .ai-msg.assistant-msg .bubble.box h2,
+    .ai-msg.assistant-msg .bubble.box h3 {
+        font-weight: 700; margin: 0.6em 0 0.3em 0;
+    }
+    .ai-msg.assistant-msg .bubble.box h1 { font-size: 1.15em; }
+    .ai-msg.assistant-msg .bubble.box h2 { font-size: 1.05em; }
+    .ai-msg.assistant-msg .bubble.box h3 { font-size: 0.98em; }
+    .ai-msg.assistant-msg .bubble.box table {
+        border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 0.9em;
+    }
+    .ai-msg.assistant-msg .bubble.box th,
+    .ai-msg.assistant-msg .bubble.box td {
+        border: 1px solid var(--asst-border, #ddd); padding: 0.35em 0.6em; text-align: left;
+    }
+    .ai-msg.assistant-msg .bubble.box th {
+        background: rgba(0,0,0,0.04); font-weight: 600;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box th {
+        background: rgba(255,255,255,0.06);
+    }
+    .ai-msg.assistant-msg .bubble.box blockquote {
+        border-left: 3px solid var(--asst-border, #ddd); padding-left: 0.8em;
+        margin: 0.5em 0; color: #666;
+    }
+    .ai-msg.assistant-msg .bubble.box hr {
+        border: none; border-top: 1px solid var(--asst-border, #eee); margin: 0.6em 0;
     }
 
     /* Role + time label */
@@ -271,11 +304,11 @@
         background: var(--asst-bubble, #fff);
         border: 1px solid var(--asst-border, #eee);
         border-radius: 18px 18px 18px 4px;
-        padding: 0.65rem 1.2rem;
+        padding: 0.75rem 1.4rem;
         display: inline-flex;
-        gap: 0.35rem;
+        gap: 0.4rem;
         align-items: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
 
     [data-theme="dark"] .thinking-bubble {
@@ -329,44 +362,52 @@
         flex-shrink: 0;
     }
 
-    /* ---- Markdown inside assistant bubbles ---- */
-    .ai-msg.assistant-msg .bubble strong { font-weight: 700; }
-
-    .ai-msg.assistant-msg .bubble code {
+    /* ---- Code styling inside assistant bubbles ---- */
+    .ai-msg.assistant-msg .bubble.box code {
         background: rgba(0,0,0,0.06);
-        padding: 0.1rem 0.3rem;
-        border-radius: 3px;
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
         font-size: 0.88em;
+        font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
     }
-
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble code {
-        background: rgba(255,255,255,0.08);
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box code {
+        background: rgba(255,255,255,0.1);
     }
-
-    .ai-msg.assistant-msg .bubble h2 {
-        font-size: 1.02em; font-weight: 700;
-        margin: 0.5rem 0 0.25rem 0;
-    }
-
-    .ai-msg.assistant-msg .bubble ul,
-    .ai-msg.assistant-msg .bubble ol {
-        margin: 0.3rem 0; padding-left: 1.4rem;
-    }
-
-    .ai-msg.assistant-msg .bubble li { margin-bottom: 0.1rem; }
-
-    .ai-msg.assistant-msg .bubble pre {
-        background: var(--pre-bg, rgba(0,0,0,0.04));
-        padding: 0.5rem 0.8rem;
+    .ai-msg.assistant-msg .bubble.box pre {
+        background: var(--pre-bg, #f5f5f5);
+        padding: 0.75rem 1rem;
         border-radius: 8px;
         overflow-x: auto;
-        font-size: 0.88em;
-        margin: 0.4rem 0;
-        white-space: pre-wrap;
+        font-size: 0.86em;
+        margin: 0.5rem 0;
+        line-height: 1.5;
     }
-
-    [data-theme="dark"] .ai-msg.assistant-msg .bubble pre {
+    .ai-msg.assistant-msg .bubble.box pre code {
+        background: none;
+        padding: 0;
+        border-radius: 0;
+        font-size: inherit;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box pre {
         --pre-bg: rgba(255,255,255,0.06);
+    }
+    .ai-msg.assistant-msg .bubble.box ul,
+    .ai-msg.assistant-msg .bubble.box ol {
+        margin: 0.4em 0; padding-left: 1.5rem;
+    }
+    .ai-msg.assistant-msg .bubble.box li { margin-bottom: 0.15em; }
+    .ai-msg.assistant-msg .bubble.box a { color: #6c5ce7; text-decoration: underline; }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box a { color: #a29bfe; }
+
+    /* Streaming cursor */
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .streaming-cursor {
+        display: inline-block;
+        width: 2px; height: 1em;
+        background: var(--asst-text, #2d3436);
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        animation: blink 0.8s step-end infinite;
     }
 
     /* ---- Responsive: hide sidebar on small screens ---- */
@@ -442,6 +483,9 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<!-- Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
 <script>
 (function() {
     /* ---- DOM refs ---- */
@@ -573,19 +617,17 @@
         return d.innerHTML;
     }
 
+    /* ---- Markdown rendering via marked + DOMPurify ---- */
+    const _markedOpts = { gfm: true, breaks: true };
+    if (typeof marked !== 'undefined' && marked.setOptions) marked.setOptions(_markedOpts);
+
     function fmt(text) {
-        let h = esc(text);
-        h = h.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-        h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        h = h.replace(/`(.+?)`/g, '<code>$1</code>');
-        h = h.replace(/^- (.+)$/gm, '<li>$1</li>');
-        h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-        h = h.replace(/\n/g, '<br>');
-        h = h.replace(/(<\/h2>)<br>/g, '$1');
-        h = h.replace(/(<\/?ul>)<br>/g, '$1');
-        h = h.replace(/(<\/?pre>)<br>/g, '$1');
-        return h;
+        if (typeof marked !== 'undefined') {
+            const raw = typeof marked.parse === 'function' ? marked.parse(text) : marked(text);
+            return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
+        }
+        // Fallback if CDN failed to load
+        return esc(text).replace(/\n/g, '<br>');
     }
 
     function ts(t) {
@@ -623,7 +665,7 @@
         div.className = 'ai-msg user-msg';
         div.innerHTML =
             `<div class="meta">You &middot; ${ts(time)}</div>` +
-            `<div class="bubble">${esc(text)}</div>`;
+            `<div class="bubble box">${esc(text)}</div>`;
         aiMessages.appendChild(div);
         scrollAiToBottom();
         if (persist !== false) { _chatLog.push({role:'user', text, time:Date.now()}); persistLog(); }
@@ -635,10 +677,49 @@
         div.className = 'ai-msg assistant-msg';
         div.innerHTML =
             `<div class="meta"><i class="fas fa-robot" style="font-size:0.65rem;margin-right:0.2rem"></i>Assistant &middot; ${ts(time)}</div>` +
-            `<div class="bubble">${fmt(text)}</div>`;
+            `<div class="bubble box">${fmt(text)}</div>`;
         aiMessages.appendChild(div);
         scrollAiToBottom();
         if (persist !== false) { _chatLog.push({role:'assistant', text, time:Date.now()}); persistLog(); }
+    }
+
+    /* ---- Streaming support ---- */
+    let _streamBubble = null;   // the .bubble.box element being streamed into
+    let _streamBuf = '';        // raw markdown accumulated so far
+
+    function streamStart() {
+        removeThinking();
+        _streamBuf = '';
+        const div = document.createElement('div');
+        div.className = 'ai-msg assistant-msg';
+        div.id = 'ai-streaming-msg';
+        div.innerHTML =
+            `<div class="meta"><i class="fas fa-robot" style="font-size:0.65rem;margin-right:0.2rem"></i>Assistant &middot; ${ts()}</div>` +
+            `<div class="bubble box"><span class="streaming-cursor"></span></div>`;
+        aiMessages.appendChild(div);
+        _streamBubble = div.querySelector('.bubble.box');
+        scrollAiToBottom();
+    }
+
+    function streamDelta(content) {
+        if (!_streamBubble) streamStart();
+        _streamBuf += content;
+        _streamBubble.innerHTML = fmt(_streamBuf) + '<span class="streaming-cursor"></span>';
+        scrollAiToBottom();
+    }
+
+    function streamEnd(fullContent) {
+        const text = fullContent || _streamBuf;
+        if (_streamBubble) {
+            _streamBubble.innerHTML = fmt(text);
+        }
+        _streamBubble = null;
+        _streamBuf = '';
+        const marker = document.getElementById('ai-streaming-msg');
+        if (marker) marker.removeAttribute('id');
+        scrollAiToBottom();
+        _chatLog.push({role:'assistant', text, time:Date.now()});
+        persistLog();
     }
 
     function appendSystemMsg(text, persist) {
@@ -729,6 +810,20 @@
                     break;
 
                 case 'tool_result':
+                    break;
+
+                case 'stream_start':
+                    streamStart();
+                    break;
+
+                case 'stream_delta':
+                    streamDelta(data.content);
+                    break;
+
+                case 'stream_end':
+                    streamEnd(data.content);
+                    setInputEnabled(true);
+                    aiInput.focus();
                     break;
 
                 case 'response':

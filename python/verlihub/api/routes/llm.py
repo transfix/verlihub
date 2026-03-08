@@ -20,6 +20,7 @@ import logging
 import time
 from typing import Any, Optional
 
+import openai
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
 
@@ -96,7 +97,11 @@ def _get_openai_client():
         )
     
     llm_cfg = _get_llm_config()
-    _openai_client = AsyncOpenAI(base_url=llm_cfg.base_url, api_key=llm_cfg.api_key)
+    _openai_client = AsyncOpenAI(
+        base_url=llm_cfg.base_url,
+        api_key=llm_cfg.api_key,
+        default_headers={"User-Agent": "verlihub/1.0"},
+    )
     return _openai_client
 
 
@@ -640,14 +645,27 @@ class ChatSession:
         for round_num in range(self.llm_cfg.max_tool_rounds):
             log.debug(f"LLM round {round_num + 1} for {self.user.nick}")
             
-            response = await client.chat.completions.create(
-                model=self.llm_cfg.model,
-                messages=self.messages,
-                tools=self.tools if self.tools else None,
-                tool_choice="auto",
-                temperature=self.llm_cfg.temperature,
-                max_tokens=self.llm_cfg.max_tokens,
-            )
+            try:
+                response = await client.chat.completions.create(
+                    model=self.llm_cfg.model,
+                    messages=self.messages,
+                    tools=self.tools if self.tools else None,
+                    tool_choice="auto",
+                    temperature=self.llm_cfg.temperature,
+                    max_tokens=self.llm_cfg.max_tokens,
+                )
+            except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                # Endpoint does not support tool calling — retry without tools
+                if round_num == 0:
+                    log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
+                    response = await client.chat.completions.create(
+                        model=self.llm_cfg.model,
+                        messages=self.messages,
+                        temperature=self.llm_cfg.temperature,
+                        max_tokens=self.llm_cfg.max_tokens,
+                    )
+                else:
+                    raise
             
             choice = response.choices[0]
             msg = choice.message
@@ -829,14 +847,27 @@ async def ws_llm_chat(ws: WebSocket, token: Optional[str] = Query(None)):
             
             try:
                 for round_num in range(llm_cfg.max_tool_rounds):
-                    response = await client.chat.completions.create(
-                        model=llm_cfg.model,
-                        messages=messages,
-                        tools=tools,
-                        tool_choice="auto",
-                        temperature=llm_cfg.temperature,
-                        max_tokens=llm_cfg.max_tokens,
-                    )
+                    try:
+                        response = await client.chat.completions.create(
+                            model=llm_cfg.model,
+                            messages=messages,
+                            tools=tools,
+                            tool_choice="auto",
+                            temperature=llm_cfg.temperature,
+                            max_tokens=llm_cfg.max_tokens,
+                        )
+                    except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                        # Endpoint does not support tool calling — plain chat
+                        if round_num == 0:
+                            log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
+                            response = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                            )
+                        else:
+                            raise
                     
                     choice = response.choices[0]
                     msg = choice.message

@@ -907,6 +907,21 @@
                         _chatLog = (all[currentSessionId] && all[currentSessionId].messages) || [];
                         renderSidebar();
                     }
+                    /* If the server was mid-LLM-call when we disconnected,
+                       the dangling user turn has been cleaned up server-side.
+                       Remove the unanswered local user bubble + show notice. */
+                    if (data.pending) {
+                        // Remove last user bubble that has no assistant response
+                        if (_chatLog.length && _chatLog[_chatLog.length - 1].role === 'user') {
+                            _chatLog.pop();
+                            _persistChat();
+                            // Remove the last .user-msg element from DOM
+                            const userBubbles = aiMessages.querySelectorAll('.user-msg');
+                            if (userBubbles.length) userBubbles[userBubbles.length - 1].remove();
+                        }
+                        removeThinking();
+                        appendSystemMsg('\u26a0\ufe0f Your previous request was interrupted — please resend.');
+                    }
                     setInputEnabled(true);
                     aiInput.focus();
                     break;

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -805,6 +806,7 @@ class ChatSession:
         self.llm_cfg = llm_cfg
         self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
         self.tools_available = True  # Set to False if endpoint rejects tool_choice
+        self.pending_request = False  # True while server is processing an LLM call
         system_prompt = SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER
         # Personalize the system prompt
         system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
@@ -908,6 +910,29 @@ _session_meta: dict[str, dict] = {}
 
 def _session_key(nick: str, session_id: str) -> str:
     return f"{nick}:{session_id}"
+
+
+def _clean_dangling_turn(session: ChatSession) -> None:
+    """Remove a trailing unanswered user message + any incomplete assistant turn.
+
+    When the client disconnects mid-stream the server may have already appended
+    the user message (and possibly a partial assistant reply) to
+    ``session.messages``.  Leaving them there would confuse the LLM on the next
+    request because the conversation ends with an unanswered user turn or a
+    partial assistant reply.
+    """
+    msgs = session.messages
+    # Walk backwards past tool / assistant messages until we hit the dangling user msg
+    while len(msgs) > 1:
+        last_role = msgs[-1].get("role", "")
+        if last_role in ("assistant", "tool"):
+            msgs.pop()
+        elif last_role == "user":
+            msgs.pop()
+            break
+        else:
+            break
+    log.debug("Cleaned dangling turn, session now has %d messages", len(msgs))
 
 
 def _ensure_session(
@@ -1097,13 +1122,37 @@ async def ws_llm_chat(
     session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
     key = _session_key(user.nick, sid)
 
+    # Helper: send on WS only if still open.  Returns False if disconnected.
+    _ws_alive = True
+
+    async def _ws_send(payload: dict) -> bool:
+        nonlocal _ws_alive
+        if not _ws_alive:
+            return False
+        try:
+            await ws.send_json(payload)
+            return True
+        except (WebSocketDisconnect, RuntimeError, Exception) as exc:
+            # Client gone — stop sending; the outer loop will clean up.
+            _ws_alive = False
+            log.debug("WS send failed (client gone): %s", exc)
+            return False
+
     log.info("LLM WS session %s for %s (%s)", sid, user.nick, access)
-    await ws.send_json({
+    await _ws_send({
         "type": "connected",
         "access": access,
         "model": llm_cfg.model,
         "session_id": sid,
+        "pending": session.pending_request,
     })
+
+    # If the session has a dangling user message from a previous disconnected
+    # request (server was mid-stream when client left), remove it so the
+    # conversation isn't polluted with an unanswered turn.
+    if session.pending_request:
+        _clean_dangling_turn(session)
+        session.pending_request = False
 
     try:
         while True:
@@ -1120,7 +1169,9 @@ async def ws_llm_chat(
                 # We stream tokens over the WebSocket for a responsive UX.
                 client = _get_openai_client()
                 session.messages.append({"role": "user", "content": user_msg})
-                await ws.send_json({"type": "thinking"})
+                session.pending_request = True
+                if not await _ws_send({"type": "thinking"}):
+                    break
 
                 for round_num in range(llm_cfg.max_tool_rounds):
                     stream_mode = True
@@ -1145,7 +1196,7 @@ async def ws_llm_chat(
                             )
                             text = resp.choices[0].message.content or "(no response)"
                             session.messages.append(resp.choices[0].message.model_dump())
-                            await ws.send_json({"type": "response", "content": text})
+                            await _ws_send({"type": "response", "content": text})
                             stream_mode = False
                             stream = None
                             break
@@ -1183,7 +1234,7 @@ async def ws_llm_chat(
                                     )
                                     text = resp.choices[0].message.content or "(no response)"
                                     session.messages.append(resp.choices[0].message.model_dump())
-                                    await ws.send_json({"type": "response", "content": text})
+                                    await _ws_send({"type": "response", "content": text})
                                     stream_mode = False
                                     stream = None
                                     break
@@ -1199,6 +1250,10 @@ async def ws_llm_chat(
                     sent_stream_start = False
 
                     async for chunk in stream:
+                        if not _ws_alive:
+                            # Client disconnected mid-stream; stop consuming.
+                            log.info("Client disconnected mid-stream, aborting")
+                            break
                         if not chunk.choices:
                             continue
                         delta = chunk.choices[0].delta
@@ -1206,10 +1261,10 @@ async def ws_llm_chat(
                         # Text content tokens
                         if delta.content:
                             if not sent_stream_start:
-                                await ws.send_json({"type": "stream_start"})
+                                await _ws_send({"type": "stream_start"})
                                 sent_stream_start = True
                             content_parts.append(delta.content)
-                            await ws.send_json({"type": "stream_delta", "content": delta.content})
+                            await _ws_send({"type": "stream_delta", "content": delta.content})
 
                         # Tool call deltas
                         if delta.tool_calls:
@@ -1228,8 +1283,7 @@ async def ws_llm_chat(
                     full_content = "".join(content_parts)
 
                     # Strip <think>…</think> reasoning blocks (Qwen / DeepSeek models)
-                    import re as _re
-                    clean_content = _re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
+                    clean_content = re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
                     # If still inside an unclosed <think>, drop it
                     think_idx = clean_content.find('<think>')
                     if think_idx >= 0:
@@ -1237,7 +1291,7 @@ async def ws_llm_chat(
 
                     # Finalise streamed text
                     if sent_stream_start:
-                        await ws.send_json({"type": "stream_end", "content": clean_content})
+                        await _ws_send({"type": "stream_end", "content": clean_content})
 
                     # Build message dict for conversation history
                     msg_dict: dict = {"role": "assistant", "content": full_content or None}
@@ -1252,12 +1306,15 @@ async def ws_llm_chat(
                         ]
                     session.messages.append(msg_dict)
 
+                    if not _ws_alive:
+                        break
+
                     # -- No tool calls → done --
                     if not tool_calls_acc:
                         if not sent_stream_start:
-                            await ws.send_json({
+                            await _ws_send({
                                 "type": "response",
-                                "content": full_content or "(no response)",
+                                "content": clean_content or "(no response)",
                             })
                         break
 
@@ -1269,7 +1326,7 @@ async def ws_llm_chat(
                         except json.JSONDecodeError:
                             fn_args = {}
 
-                        await ws.send_json({
+                        await _ws_send({
                             "type": "tool_call",
                             "name": fn_name,
                             "args": fn_args,
@@ -1283,23 +1340,31 @@ async def ws_llm_chat(
                             "content": result,
                         })
 
-                        await ws.send_json({
+                        await _ws_send({
                             "type": "tool_result",
                             "name": fn_name,
                             "success": "error" not in result,
                         })
 
+                    if not _ws_alive:
+                        break
                     # Show thinking before next round
-                    await ws.send_json({"type": "thinking"})
+                    await _ws_send({"type": "thinking"})
                 else:
-                    await ws.send_json({
+                    await _ws_send({
                         "type": "response",
                         "content": "(Reached tool call limit — here is what I found so far.)",
                     })
 
+                session.pending_request = False
+
+            except WebSocketDisconnect:
+                log.info("LLM WS client disconnected during request")
+                break
             except Exception as e:
+                session.pending_request = False
                 log.exception("LLM WebSocket error")
-                await ws.send_json({"type": "error", "content": f"LLM error: {e}"})
+                await _ws_send({"type": "error", "content": f"LLM error: {e}"})
 
     except WebSocketDisconnect:
         log.info("LLM WS disconnected: %s (session %s)", user.nick, sid)

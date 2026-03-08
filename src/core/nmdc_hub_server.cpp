@@ -664,15 +664,25 @@ void NMDCHubServer::SendHubBotInfo(NMDCClient& client) {
 void NMDCHubServer::SendMOTD(NMDCClient& client) {
     if (m_motd.empty()) return;
 
-    // Send MOTD as a chat message from the hub security bot.
-    // Split into lines so multi-line MOTDs render properly in DC clients.
-    std::istringstream stream(m_motd);
-    std::string line;
-    while (std::getline(stream, line)) {
-        // Remove trailing \r if present
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        SendToConn(client.conn, NMDCProtocol::MakeChat(m_hub_security, line));
+    // Send the entire MOTD as a single chat message from the hub security bot.
+    // Replace newlines with \r\n so multi-line MOTDs render properly in DC clients
+    // while remaining a single protocol message.
+    std::string msg;
+    msg.reserve(m_motd.size());
+    for (size_t i = 0; i < m_motd.size(); ++i) {
+        char c = m_motd[i];
+        if (c == '\r') continue;  // strip \r, we add our own \r\n below
+        if (c == '\n') {
+            msg += "\r\n";
+        } else {
+            msg += c;
+        }
     }
+    // Remove trailing whitespace/newlines
+    while (!msg.empty() && (msg.back() == '\r' || msg.back() == '\n' || msg.back() == ' '))
+        msg.pop_back();
+
+    SendToConn(client.conn, NMDCProtocol::MakeChat(m_hub_security, msg));
 }
 
 // =============================================================================

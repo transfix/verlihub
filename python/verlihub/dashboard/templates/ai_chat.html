@@ -816,6 +816,7 @@
     }
 
     function streamEnd(fullContent) {
+        removeThinking();
         const raw = fullContent || _streamBuf;
         const text = _stripThinkBlocks(raw);
         if (_streamBubble) {

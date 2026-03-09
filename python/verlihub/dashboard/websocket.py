@@ -354,7 +354,14 @@ def emit_hub_event(event_type: str, data: dict) -> None:
 
 
 def emit_log(level: str, message: str, log_type: str = "system") -> None:
-    """Schedule a log broadcast (safe to call from any thread)."""
+    """Schedule a log broadcast and persist in ring buffer (safe from any thread)."""
+    # Persist in the ring buffer so page refreshes see history
+    try:
+        from verlihub.log_buffer import get_log_buffer
+        get_log_buffer().add(level=level, message=message, log_type=log_type)
+    except Exception:
+        pass
+
     loop = _ws_loop
     if loop is not None and loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_log(level, message, log_type), loop)

@@ -584,10 +584,20 @@ void HubContext::Log(int level, std::string_view message,
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
     
     // Format: [timestamp] [level] [file:line] message
-    std::cerr << vh::fmt("[{}] [L{}] [{}:{}] {}\n",
-                         time_t_now, level,
-                         loc.file_name(), loc.line(),
-                         message);
+    auto formatted = vh::fmt("[{}] [L{}] [{}:{}] {}",
+                             time_t_now, level,
+                             loc.file_name(), loc.line(),
+                             message);
+    std::cerr << formatted << '\n';
+
+    // Forward to Python callback (if set) so the dashboard log viewer
+    // can capture C++ diagnostic output.  Read the callback pointer
+    // without m_callback_mutex — it is set before Start() and does not
+    // change during the hub lifetime.
+    auto* cb = m_event_callback;
+    if (cb) {
+        cb->OnLog(level, formatted);
+    }
 }
 
 // =============================================================================

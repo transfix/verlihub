@@ -662,7 +662,9 @@ async def logs_page(
         )
     
     context = get_base_context(request, user)
-    context["logs"] = []  # TODO: Implement log retrieval
+    # Serve historical logs from the ring buffer
+    from verlihub.log_buffer import get_log_buffer
+    context["logs"] = get_log_buffer().get_recent(500)
     context["can_edit"] = user.user_class >= 5  # Admin+ can manage
     
     return templates.TemplateResponse(request, "logs.html", context)

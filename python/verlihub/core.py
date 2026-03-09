@@ -168,6 +168,29 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
         self._dispatch('hub_stopping')
 
     # ------------------------------------------------------------------
+    # C++ log callback (called from C++ while m_log_mutex is held)
+    # ------------------------------------------------------------------
+
+    def OnLog(self, level: int, message: str) -> None:
+        """Receive a formatted log line from the C++ core.
+
+        Called from a C++ thread while ``m_log_mutex`` is held.
+        We store it in the ring buffer and push it to WebSocket clients.
+        Must NOT call back into C++ logging to avoid deadlock.
+        """
+        try:
+            from verlihub.log_buffer import _level_str
+            from verlihub.dashboard.websocket import emit_log
+            emit_log(
+                level=_level_str(level),
+                message=message,
+                log_type="core",
+            )
+        except Exception:
+            # Swallow — we MUST NOT raise here or the C++ caller will abort.
+            pass
+
+    # ------------------------------------------------------------------
     # NMDC Authentication callbacks (called from C++ I/O thread)
     # ------------------------------------------------------------------
     # These must be synchronous (C++ blocks until they return).

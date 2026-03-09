@@ -231,6 +231,10 @@ public:
     // Hub lifecycle
     virtual void OnHubStarted() {}
     virtual void OnHubStopping() {}
+
+    // Logging — called by HubContext::Log() so the Python layer can
+    // capture C++ diagnostic output for the dashboard log viewer.
+    virtual void OnLog(int level, const std::string& message) {}
     
     // Configuration — called by LoadConfiguration() so the Python layer
     // can supply values from the YAML config without env-var indirection.

@@ -127,6 +127,12 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     
     Log(0, vh::fmt("Starting hub on {}:{}", actual_ip, actual_port));
     
+    // Require event callback — verlihub-py must set it before starting
+    if (!m_event_callback) {
+        Log(0, "Cannot start hub: no event callback set (call SetEventCallback first)");
+        return false;
+    }
+    
     // Configure the NMDC server
     m_nmdc_server->SetHubName(m_hub_config.hub_name);
     m_nmdc_server->SetHubTopic(m_hub_config.hub_topic);
@@ -653,9 +659,9 @@ bool HubContext::ConnectDatabase() {
 }
 
 bool HubContext::InitializeComponents() {
-    // Create the database-free NMDC hub server
+    // Create the NMDC hub server
     try {
-        Log(0, "Creating NMDCHubServer (database-free mode)");
+        Log(0, "Creating NMDCHubServer");
         m_nmdc_server = new NMDCHubServer(m_config_dir);
         
         if (!m_nmdc_server) {

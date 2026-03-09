@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     
     Handles startup and shutdown of:
     - Database connection (Python-managed: SQLite, PostgreSQL, or MySQL)
-    - Hub context (C++ core, database-free NMDC protocol server)
+    - Hub context (C++ core, NMDC protocol server — auth via Python callback)
     """
     logger.info("Starting Thin Verlihub...")
     
@@ -77,7 +77,8 @@ async def lifespan(app: FastAPI):
         # Continue anyway - API will work with limited functionality
     
     # Initialize hub context (if SWIG module is available)
-    # The C++ core is now database-free - it only handles NMDC protocol
+    # The C++ core handles NMDC protocol; auth and persistence go through
+    # the Python callback which uses the database initialized above.
     #
     # In "both" mode the hub is started by run_both() / run_hub() *before*
     # uvicorn boots, so the global hub context is already populated.  We

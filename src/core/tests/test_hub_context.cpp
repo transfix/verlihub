@@ -28,6 +28,8 @@ using namespace nVerliHub;
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
 
+// Minimal callback stub for tests (IHubEventCallback defaults are sufficient)
+class StubCallback : public IHubEventCallback {};
 // =============================================================================
 // HubContext Factory Tests
 // =============================================================================
@@ -79,6 +81,7 @@ TEST_F(HubContextFactoryTest, UniqueContexts) {
 class HubContextLifecycleTest : public ::testing::Test {
 protected:
     std::unique_ptr<HubContext> ctx;
+    StubCallback stub_callback;
     std::string testConfigDir;
     
     void SetUp() override {
@@ -87,6 +90,7 @@ protected:
         fs::create_directories(testConfigDir);
         ctx = HubContext::Create(testConfigDir);
         ASSERT_NE(nullptr, ctx);
+        ctx->SetEventCallback(&stub_callback);
     }
     
     void TearDown() override {
@@ -110,6 +114,16 @@ TEST_F(HubContextLifecycleTest, StartRequiresInitialize) {
     // Start without Initialize should fail
     EXPECT_FALSE(ctx->Start(14117, "127.0.0.1"));
     EXPECT_FALSE(ctx->IsRunning());
+}
+
+TEST_F(HubContextLifecycleTest, StartRequiresCallback) {
+    ASSERT_TRUE(ctx->Initialize());
+    // Remove callback — Start should fail
+    ctx->SetEventCallback(nullptr);
+    EXPECT_FALSE(ctx->Start(14118, "127.0.0.1"));
+    EXPECT_FALSE(ctx->IsRunning());
+    // Restore for TearDown
+    ctx->SetEventCallback(&stub_callback);
 }
 
 TEST_F(HubContextLifecycleTest, StartAndStop) {
@@ -148,6 +162,7 @@ TEST_F(HubContextLifecycleTest, StopWithoutStart) {
 class HubContextSignalTest : public ::testing::Test {
 protected:
     std::unique_ptr<HubContext> ctx;
+    StubCallback stub_callback;
     std::string testConfigDir;
     
     void SetUp() override {
@@ -156,6 +171,7 @@ protected:
         fs::create_directories(testConfigDir);
         ctx = HubContext::Create(testConfigDir);
         ASSERT_NE(nullptr, ctx);
+        ctx->SetEventCallback(&stub_callback);
     }
     
     void TearDown() override {

@@ -141,7 +141,7 @@ Once connected as admin via a DC client:
 
 The `python/` directory contains a complete Python-based management stack:
 
-  * **NMDC Hub Server** — database-free NMDC server with SQLite or MySQL backend
+  * **NMDC Hub Server** — C++ NMDC protocol server with Python-managed database (SQLite, PostgreSQL, or MySQL)
   * **REST API** — FastAPI-based API for hub management (users, bots, plugins, console, config)
   * **Web Dashboard** — Jinja2 + SPA dashboard with real-time monitoring via WebSockets
   * **YAML Configuration** — single config file for hub, API, plugins, Lua, and more
@@ -439,7 +439,7 @@ src/                          ← shared C++ source (libverlihub.so)
 │
 ├── core/                     ← new C++20 core library (verlihub_core_lib)
 │   ├── hub_context.*         ← HubContext: thread-safe central state
-│   ├── nmdc_hub_server.*     ← database-free NMDC server
+│   ├── nmdc_hub_server.*     ← NMDC protocol server (auth via Python)
 │   ├── nmdc_protocol.*       ← standalone NMDC protocol utilities
 │   └── thread_safe_collections.* ← lock-free containers
 │

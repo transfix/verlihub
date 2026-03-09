@@ -77,6 +77,19 @@ NMDCHubServer::~NMDCHubServer() {
 }
 
 // =============================================================================
+// Callback (Python bridge)
+// =============================================================================
+
+void NMDCHubServer::SetCallback(IHubEventCallback* cb) {
+    if (!cb) {
+        throw std::invalid_argument(
+            "NMDCHubServer::SetCallback: callback must not be null — "
+            "verlihub-py requires the Python event handler for auth");
+    }
+    m_callback = cb;
+}
+
+// =============================================================================
 // NMDCConnFactory implementation
 // =============================================================================
 
@@ -104,6 +117,13 @@ void NMDCConnFactory::DeleteConn(cAsyncConn*& conn) {
 
 int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
     if (!conn) return -1;
+
+    // Refuse all connections if Python callback is not wired.
+    // This should never happen in verlihub-py — SetCallback is called
+    // during Start() before the listener opens.
+    if (!m_callback) {
+        return -1;
+    }
 
     std::string ip = conn->AddrIP();
 
@@ -279,11 +299,8 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
 
     client.nick = nick;
 
-    // Ask Python callback for validation
-    int auth_result = 0;  // Default: allow as guest
-    if (m_callback) {
-        auth_result = m_callback->OnValidateNick(nick, client.ip);
-    }
+    // Ask Python callback for validation (callback guaranteed by SetCallback)
+    int auth_result = m_callback->OnValidateNick(nick, client.ip);
 
     if (auth_result < 0) {
         // Nick rejected
@@ -297,9 +314,10 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
 
     if (auth_result > 0) {
         // Registered user - needs password
+        // IMPORTANT: Don't send $Hello yet! $Hello signals "accepted" to DC clients.
+        // If we send $Hello before $GetPass, clients like EiskaltDC++ skip $MyPass.
         client.user_class = auth_result;
         client.state = NMDCConnState::WaitingMyPass;
-        SendToConn(client.conn, NMDCProtocol::MakeHello(nick));
         SendToConn(client.conn, NMDCProtocol::MakeGetPass());
     } else {
         // Guest - no password needed
@@ -309,9 +327,7 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
         SendToConn(client.conn, NMDCProtocol::MakeLoggedIn());
 
         // Notify callback
-        if (m_callback) {
-            m_callback->OnUserLogin(nick, client.user_class);
-        }
+        m_callback->OnUserLogin(nick, client.user_class);
     }
 }
 
@@ -320,11 +336,8 @@ void NMDCHubServer::HandleMyPass(NMDCClient& client, const std::string& msg) {
 
     std::string password = NMDCProtocol::GetCommandParam(msg, "$MyPass");
 
-    // Ask Python to verify password
-    int auth_class = -1;
-    if (m_callback) {
-        auth_class = m_callback->OnCheckPassword(client.nick, password);
-    }
+    // Ask Python to verify password (callback guaranteed by SetCallback)
+    int auth_class = m_callback->OnCheckPassword(client.nick, password);
 
     if (auth_class < 0) {
         client.login_attempts++;
@@ -345,9 +358,7 @@ void NMDCHubServer::HandleMyPass(NMDCClient& client, const std::string& msg) {
     SendToConn(client.conn, NMDCProtocol::MakeLoggedIn());
 
     // Notify callback
-    if (m_callback) {
-        m_callback->OnUserLogin(client.nick, client.user_class);
-    }
+    m_callback->OnUserLogin(client.nick, client.user_class);
 }
 
 void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
@@ -402,9 +413,7 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
         m_total_share.fetch_add(info.share_size, std::memory_order_relaxed);
 
         // Notify callback
-        if (m_callback) {
-            m_callback->OnUserConnect(client.nick, client.ip);
-        }
+        m_callback->OnUserConnect(client.nick, client.ip);
 
         // Send hub topic if set
         if (!m_hub_topic.empty()) {
@@ -453,10 +462,8 @@ void NMDCHubServer::HandleChat(NMDCClient& client, const std::string& msg) {
     if (chat.nick != client.nick) return;
 
     // Ask Python if message should be allowed
-    if (m_callback) {
-        if (!m_callback->OnChatMessage(client.nick, chat.message)) {
-            return;  // Message blocked
-        }
+    if (!m_callback->OnChatMessage(client.nick, chat.message)) {
+        return;  // Message blocked
     }
 
     // Broadcast to all logged-in users
@@ -473,10 +480,8 @@ void NMDCHubServer::HandlePrivateMessage(NMDCClient& client, const std::string& 
     if (pm.from != client.nick) return;
 
     // Ask Python callback
-    if (m_callback) {
-        if (!m_callback->OnPrivateMessage(pm.from, pm.to, pm.message)) {
-            return;  // Blocked
-        }
+    if (!m_callback->OnPrivateMessage(pm.from, pm.to, pm.message)) {
+        return;  // Blocked
     }
 
     // Deliver to recipient
@@ -490,11 +495,9 @@ void NMDCHubServer::HandleSearch(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
 
     // Ask Python callback
-    if (m_callback) {
-        std::string query = NMDCProtocol::GetCommandParam(msg, "$Search");
-        if (!m_callback->OnSearch(client.nick, query)) {
-            return;  // Blocked
-        }
+    std::string query = NMDCProtocol::GetCommandParam(msg, "$Search");
+    if (!m_callback->OnSearch(client.nick, query)) {
+        return;  // Blocked
     }
 
     // Broadcast search to all users (they respond directly via UDP or TCP)
@@ -599,9 +602,7 @@ void NMDCHubServer::RemoveClient(cAsyncConn* conn) {
         }
 
         // Notify Python
-        if (m_callback) {
-            m_callback->OnUserDisconnect(client.nick);
-        }
+        m_callback->OnUserDisconnect(client.nick);
 
         // Remove from nick map
         m_nick_to_conn.erase(client.nick);

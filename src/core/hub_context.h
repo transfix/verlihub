@@ -807,7 +807,7 @@ private:
     // Owned Components
     // =========================================================================
     
-    /// Database-free NMDC hub server (verlihub-py)
+    /// NMDC hub server (verlihub-py, delegates auth to Python)
     NMDCHubServer* m_nmdc_server{nullptr};
 
     /// GeoIP lookup engine (new core, no cServerDC dependency)

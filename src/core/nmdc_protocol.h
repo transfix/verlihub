@@ -25,10 +25,9 @@
  * @file nmdc_protocol.h
  * @brief Standalone NMDC protocol utilities for verlihub-py.
  *
- * This module provides NMDC protocol message construction and parsing
- * without any database dependency. It is part of the verlihub-py core
- * library and replaces the legacy cDCProto for the database-free hub
- * server.
+ * This module provides NMDC protocol message construction and parsing.
+ * It is part of the verlihub-py core library and replaces the legacy
+ * cDCProto for the NMDC hub server.
  */
 
 #include <string>

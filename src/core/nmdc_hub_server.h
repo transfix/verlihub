@@ -23,17 +23,16 @@
 
 /**
  * @file nmdc_hub_server.h
- * @brief Database-free NMDC hub server for verlihub-py.
+ * @brief NMDC hub server for verlihub-py.
  *
  * NMDCHubServer inherits from cAsyncSocketServer to get the proven
  * socket I/O infrastructure (poll/select, connection management,
- * non-blocking I/O) while implementing NMDC protocol handling
- * without any MySQL or database dependency.
+ * non-blocking I/O) while implementing NMDC protocol handling.
  *
  * All authentication and persistence decisions are delegated to
- * Python through IHubEventCallback. This allows verlihub-py to
- * support SQLite, PostgreSQL, MySQL, or any other database backend
- * managed entirely from the Python side.
+ * Python through IHubEventCallback (required). This allows verlihub-py
+ * to support SQLite, PostgreSQL, MySQL, or any other database backend
+ * managed by the Python layer.
  */
 
 #include "casyncsocketserver.h"
@@ -96,7 +95,7 @@ enum class NMDCConnState {
 };
 
 // ============================================================================
-// NMDC Client Info (in-memory, no database)
+// NMDC Client Info (in-memory state per connection)
 // ============================================================================
 
 /// In-memory representation of a connected NMDC client
@@ -129,16 +128,16 @@ struct NMDCClient {
 };
 
 // ============================================================================
-// NMDCHubServer - Database-free NMDC hub
+// NMDCHubServer - NMDC protocol hub
 // ============================================================================
 
 /**
- * Lightweight NMDC hub server for verlihub-py.
+ * NMDC hub server for verlihub-py.
  *
  * Inherits cAsyncSocketServer for socket infrastructure and
  * implements NMDC protocol handling. All database operations
  * (user auth, bans, config persistence) are delegated to Python
- * via IHubEventCallback.
+ * via IHubEventCallback, which MUST be set before starting.
  *
  * Thread safety: The server event loop runs in a single thread
  * (via run()). Python callbacks are invoked from that thread.
@@ -190,10 +189,13 @@ public:
 
     /**
      * Set the event callback handler for auth and event notifications.
-     * Must be set before StartListening if you want auth.
-     * Pass nullptr to remove.
+     * MUST be set before StartListening — the hub refuses connections
+     * without a callback because auth decisions require it.
      */
-    void SetCallback(IHubEventCallback* cb) { m_callback = cb; }
+    void SetCallback(IHubEventCallback* cb);
+
+    /// Check if a callback is set
+    bool HasCallback() const { return m_callback != nullptr; }
 
     /**
      * Set the GeoIP lookup engine.  Owned externally (by HubContext).
@@ -350,7 +352,7 @@ private:
     GeoIPLookup* m_geoip{nullptr};
 
     // =========================================================================
-    // Hub Configuration (in-memory, no DB)
+    // Hub Configuration (in-memory, DB access via Python callback)
     // =========================================================================
 
     std::string m_hub_name{"Verlihub Hub"};

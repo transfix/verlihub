@@ -11,7 +11,7 @@
 |------|--------|-------|
 | **HubContext (C++20)** | **Done** | `src/core/hub_context.h/.cpp` — factory, lifecycle, atomic signals, jthread timer |
 | **ThreadSafeCollections** | **Done** | `src/core/thread_safe_collections.h` — `Hashable` concept, shared_mutex, LockFreeCounter |
-| **NMDCHubServer** | **Done** | `src/core/nmdc_hub_server.cpp` — database-free NMDC server (delegates auth to Python) |
+| **NMDCHubServer** | **Done** | `src/core/nmdc_hub_server.cpp` — NMDC server (delegates auth/persistence to Python) |
 | **NMDCProtocol** | **Done** | `src/core/nmdc_protocol.h/.cpp` — ParseTag, ParseSR, ParseMyINFO, HandleSR, MakeForceMove, MakeBotList, MakeSupports, MakeHubNameWithTopic, status flags |
 | **GeoIPLookup** | **Done** | `src/core/geo_ip_lookup.h/.cpp` — MaxMind .mmdb GeoIP lookups (country_code in NMDCClient) |
 | **SWIG bindings** | **Done** | `src/swig/verlihub_core.i` — directors, GIL release, exception mapping |

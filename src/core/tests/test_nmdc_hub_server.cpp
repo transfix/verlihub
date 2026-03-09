@@ -182,9 +182,16 @@ TEST_F(NMDCHubServerTest, DisconnectUser_NotOnline) {
 // Callback Tests
 // =============================================================================
 
-TEST_F(NMDCHubServerTest, SetCallback_Nullptr) {
-    // Should not crash
-    EXPECT_NO_THROW(server.SetCallback(nullptr));
+TEST_F(NMDCHubServerTest, SetCallback_Nullptr_Throws) {
+    // SetCallback(nullptr) must throw — verlihub-py requires a Python callback
+    EXPECT_THROW(server.SetCallback(nullptr), std::invalid_argument);
+}
+
+TEST_F(NMDCHubServerTest, SetCallback_ValidPointer) {
+    // A non-null callback must be accepted (use reinterpret_cast for test)
+    auto* fake = reinterpret_cast<IHubEventCallback*>(0xDEADBEEF);
+    EXPECT_NO_THROW(server.SetCallback(fake));
+    EXPECT_TRUE(server.HasCallback());
 }
 
 // =============================================================================

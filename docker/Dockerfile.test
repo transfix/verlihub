@@ -41,10 +41,17 @@ RUN pip install --no-cache-dir \
     pyyaml>=6.0 \
     requests>=2.31.0 \
     python-multipart>=0.0.6 \
-    httpx>=0.26.0
+    httpx>=0.26.0 \
+    uvicorn>=0.27.0 \
+    fastapi>=0.109.0 \
+    jinja2>=3.1.0 \
+    openai>=1.12.0 \
+    "mcp[cli]>=1.0.0" \
+    click>=8.0.0 \
+    dnspython>=2.4.0
 
-# Install the verlihub package in editable mode (include mcp extra for MCP tests)
-RUN pip install --no-cache-dir -e "./python[mcp]"
+# Install the verlihub package in editable mode (include ai extra for LLM + MCP tests)
+RUN pip install --no-cache-dir -e "./python[ai]"
 
 # Create results directory
 RUN mkdir -p /app/results

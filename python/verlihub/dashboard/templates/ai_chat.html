@@ -2,7 +2,7 @@
 
 {% block title %}AI Chat - {{ hub_name }}{% endblock %}
 
-{% block head %}
+{% block extra_head %}
 <style>
     /* ------------------------------------------------------------------ */
     /* Override base layout — the AI chat needs full height, no section    */
@@ -62,26 +62,40 @@
     }
 
     .ai-sidebar-item {
-        padding: 0.55rem 1rem;
+        padding: 0.7rem 1rem;
         cursor: pointer;
         font-size: 0.84rem;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         border-left: 3px solid transparent;
-        transition: background 0.15s, border-color 0.15s;
+        border-bottom: 1px solid var(--sidebar-border, #e8e8ec);
+        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
         display: flex;
         align-items: center;
         gap: 0.5rem;
     }
 
+    .ai-sidebar-item:last-child { border-bottom: none; }
+
     .ai-sidebar-item:hover {
-        background: var(--item-hover, rgba(0,0,0,0.04));
+        background: var(--item-hover, rgba(108,92,231,0.06));
+        box-shadow: inset 0 0 0 1px var(--item-hover-ring, rgba(108,92,231,0.12));
     }
 
     [data-theme="dark"] .ai-sidebar-item:hover {
-        --item-hover: rgba(255,255,255,0.05);
+        --item-hover: rgba(162,155,254,0.08);
+        --item-hover-ring: rgba(162,155,254,0.15);
     }
+
+    .ai-sidebar-item .item-spinner {
+        color: var(--thinking-text, #6c5ce7);
+        font-size: 0.78rem;
+        flex-shrink: 0;
+        animation: thinkPulse 2s ease-in-out infinite;
+    }
+
+    [data-theme="dark"] .ai-sidebar-item .item-spinner { --thinking-text: #a29bfe; }
 
     .ai-sidebar-item.active {
         background: var(--item-active-bg, rgba(108,92,231,0.08));
@@ -566,6 +580,7 @@
     let aiSocket = null;
     let aiWaiting = false;
     let currentSessionId = null;
+    const pendingSessions = new Set();   /* sessions with in-flight LLM requests */
 
     /* ==============================================================
        LocalStorage-backed session history
@@ -617,8 +632,11 @@
             div.className = 'ai-sidebar-item' + (s.id === currentSessionId ? ' active' : '');
             const d = new Date(s.updated || s.created);
             const t = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+            const spin = pendingSessions.has(s.id)
+                ? '<i class="fas fa-spinner fa-spin item-spinner" title="Thinking…"></i>'
+                : '';
             div.innerHTML =
-                `<span class="item-title">${esc(s.title || 'New chat')}</span>` +
+                `${spin}<span class="item-title">${esc(s.title || 'New chat')}</span>` +
                 `<span class="item-time">${t}</span>` +
                 `<span class="item-delete" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Delete"><i class="fas fa-times"></i></span>`;
             div.addEventListener('click', () => switchSession(s.id));
@@ -648,6 +666,13 @@
             });
         }
         scrollAiToBottom();
+
+        // If this session has a pending request, show thinking + disable input.
+        // The WS reconnect below will receive the replayed events.
+        if (pendingSessions.has(sid)) {
+            showThinking();
+            setInputEnabled(false);
+        }
 
         // Reconnect WS for this session
         if (aiSocket) { aiSocket.onclose = null; aiSocket.close(); }
@@ -927,23 +952,19 @@
                         _chatLog = (all[currentSessionId] && all[currentSessionId].messages) || [];
                         renderSidebar();
                     }
-                    /* If the server was mid-LLM-call when we disconnected,
-                       the dangling user turn has been cleaned up server-side.
-                       Remove the unanswered local user bubble + show notice. */
+                    /* If server still has a background task running (or
+                       completed while we were away), it will replay the
+                       buffered events.  Keep the input locked and show
+                       thinking so the user sees progress. */
                     if (data.pending) {
-                        // Remove last user bubble that has no assistant response
-                        if (_chatLog.length && _chatLog[_chatLog.length - 1].role === 'user') {
-                            _chatLog.pop();
-                            _persistChat();
-                            // Remove the last .user-msg element from DOM
-                            const userBubbles = aiMessages.querySelectorAll('.user-msg');
-                            if (userBubbles.length) userBubbles[userBubbles.length - 1].remove();
-                        }
-                        removeThinking();
-                        appendSystemMsg('\u26a0\ufe0f Your previous request was interrupted — please resend.');
+                        pendingSessions.add(currentSessionId);
+                        showThinking();
+                        setInputEnabled(false);
+                        renderSidebar();
+                    } else {
+                        setInputEnabled(true);
+                        aiInput.focus();
                     }
-                    setInputEnabled(true);
-                    aiInput.focus();
                     break;
 
                 case 'thinking':
@@ -968,21 +989,27 @@
 
                 case 'stream_end':
                     streamEnd(data.content);
+                    pendingSessions.delete(currentSessionId);
                     setInputEnabled(true);
                     aiInput.focus();
+                    renderSidebar();
                     break;
 
                 case 'response':
                     removeThinking();
                     appendAssistantBubble(data.content);
+                    pendingSessions.delete(currentSessionId);
                     setInputEnabled(true);
                     aiInput.focus();
+                    renderSidebar();
                     break;
 
                 case 'error':
                     removeThinking();
                     appendSystemMsg('\u274c ' + data.content);
+                    pendingSessions.delete(currentSessionId);
                     setInputEnabled(true);
+                    renderSidebar();
                     break;
             }
         };
@@ -1014,6 +1041,8 @@
         appendUserBubble(text);
         showThinking();          /* instant client-side feedback */
         setInputEnabled(false);
+        pendingSessions.add(currentSessionId);
+        renderSidebar();
 
         aiSocket.send(JSON.stringify({ message: text }));
     };

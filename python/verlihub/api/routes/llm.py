@@ -15,6 +15,7 @@ as the REST API — no bypass, no escalation.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -941,8 +942,7 @@ async def _handle_actions_in_text(
     llm_cfg: "LlmConfig",
     user: "TokenData",
     is_admin: bool,
-    ws_send,
-    ws_alive: bool,
+    emit,
 ) -> str:
     """Detect and execute <action> blocks in a non-streaming LLM response.
 
@@ -959,8 +959,8 @@ async def _handle_actions_in_text(
 
     # Notify frontend
     for ar in action_results:
-        await ws_send({"type": "tool_call", "name": ar["name"], "args": ar["args"]})
-        await ws_send({"type": "tool_result", "name": ar["name"], "success": "error" not in ar["result"]})
+        await emit({"type": "tool_call", "name": ar["name"], "args": ar["args"]})
+        await emit({"type": "tool_result", "name": ar["name"], "success": "error" not in ar["result"]})
 
     # Ask for a summary
     results_msg = "Action results:\n"
@@ -1013,7 +1013,14 @@ def _inject_hub_context(messages: list[dict], user: "TokenData", is_admin: bool)
 # =============================================================================
 
 class ChatSession:
-    """Manages conversation history and tool orchestration for one user session."""
+    """Manages conversation history and tool orchestration for one user session.
+
+    Supports background LLM processing.  When a request is spawned the
+    processing coroutine emits events via :meth:`emit` which buffers them
+    *and* forwards to the currently-attached WebSocket (if any).  If the
+    client disconnects mid-request, events accumulate in the buffer and are
+    replayed on reconnection.
+    """
     
     def __init__(self, user: TokenData, is_admin: bool, llm_cfg: LlmConfig):
         self.user = user
@@ -1028,6 +1035,45 @@ class ChatSession:
         system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
         self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
         self.created_at = time.time()
+
+        # -- Background task / event buffer state --
+        self._bg_task: asyncio.Task | None = None
+        self._event_buffer: list[dict] = []
+        self._ws_ref: WebSocket | None = None
+        self._request_done: asyncio.Event = asyncio.Event()
+        self._request_done.set()  # no pending request initially
+
+    # -- WebSocket attach / detach --
+
+    def attach_ws(self, ws: WebSocket) -> None:
+        self._ws_ref = ws
+
+    def detach_ws(self) -> None:
+        self._ws_ref = None
+
+    # -- Event delivery --
+
+    async def emit(self, event: dict) -> None:
+        """Buffer an event and forward to the attached WS (best-effort)."""
+        self._event_buffer.append(event)
+        ws = self._ws_ref
+        if ws is not None:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                # Client gone — stop trying until next attach
+                self._ws_ref = None
+
+    async def replay_buffered_events(self, ws: WebSocket) -> None:
+        """Replay all buffered events from the current request to *ws*."""
+        for event in list(self._event_buffer):
+            try:
+                await ws.send_json(event)
+            except Exception:
+                break
+
+    def clear_event_buffer(self) -> None:
+        self._event_buffer.clear()
     
     async def chat(self, user_message: str) -> tuple[str, list[dict]]:
         """
@@ -1212,6 +1258,294 @@ def _bump_session_count(key: str) -> None:
 
 
 # =============================================================================
+# Background LLM request processor
+# =============================================================================
+
+
+async def _run_llm_request(
+    session: ChatSession,
+    user_msg: str,
+    user: "TokenData",
+    is_admin: bool,
+    llm_cfg: "LlmConfig",
+    key: str,
+) -> None:
+    """Process a user message through the LLM tool-call loop.
+
+    Runs as a background ``asyncio.Task`` so it survives WebSocket
+    disconnects.  All progress events are pushed through
+    ``session.emit()`` which buffers them *and* forwards to the
+    currently-attached WebSocket (if any).
+    """
+    global _endpoint_supports_tools
+    emit = session.emit
+
+    try:
+        client = _get_openai_client()
+        session.messages.append({"role": "user", "content": user_msg})
+        session.pending_request = True
+        await emit({"type": "thinking"})
+
+        for round_num in range(llm_cfg.max_tool_rounds):
+            stream_mode = True
+
+            # -- No tool support: context-injection path --
+            if not session.tools_available:
+                _inject_hub_context(session.messages, user, is_admin)
+                try:
+                    stream = await client.chat.completions.create(
+                        model=llm_cfg.model,
+                        messages=session.messages,
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                        stream=True,
+                    )
+                except Exception:
+                    resp = await client.chat.completions.create(
+                        model=llm_cfg.model,
+                        messages=session.messages,
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                    )
+                    text = resp.choices[0].message.content or "(no response)"
+                    session.messages.append(resp.choices[0].message.model_dump())
+                    text = await _handle_actions_in_text(
+                        text, session, client, llm_cfg,
+                        user, is_admin, emit,
+                    )
+                    await emit({"type": "response", "content": text})
+                    stream_mode = False
+                    stream = None
+                    break
+            else:
+                # -- Tool-calling path --
+                try:
+                    stream = await client.chat.completions.create(
+                        model=llm_cfg.model,
+                        messages=session.messages,
+                        tools=session.tools if session.tools else None,
+                        tool_choice="auto",
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                        stream=True,
+                    )
+                except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                    if round_num == 0:
+                        log.warning("Tool/stream not supported, falling back: %s", exc)
+                        session.tools_available = False
+                        _endpoint_supports_tools = False
+                        _inject_hub_context(session.messages, user, is_admin)
+                        try:
+                            stream = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                                stream=True,
+                            )
+                        except Exception:
+                            resp = await client.chat.completions.create(
+                                model=llm_cfg.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                            )
+                            text = resp.choices[0].message.content or "(no response)"
+                            session.messages.append(resp.choices[0].message.model_dump())
+                            text = await _handle_actions_in_text(
+                                text, session, client, llm_cfg,
+                                user, is_admin, emit,
+                            )
+                            await emit({"type": "response", "content": text})
+                            stream_mode = False
+                            stream = None
+                            break
+                    else:
+                        raise
+
+            if not stream_mode:
+                break
+
+            # -- Consume the async stream --
+            content_parts: list[str] = []
+            tool_calls_acc: dict[int, dict] = {}
+            sent_stream_start = False
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    if not sent_stream_start:
+                        await emit({"type": "stream_start"})
+                        sent_stream_start = True
+                    content_parts.append(delta.content)
+                    await emit({"type": "stream_delta", "content": delta.content})
+
+                if delta.tool_calls:
+                    for tc_d in delta.tool_calls:
+                        idx = tc_d.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc_d.id:
+                            tool_calls_acc[idx]["id"] = tc_d.id
+                        if tc_d.function:
+                            if tc_d.function.name:
+                                tool_calls_acc[idx]["name"] += tc_d.function.name
+                            if tc_d.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_d.function.arguments
+
+            full_content = "".join(content_parts)
+
+            # Strip <think> reasoning blocks
+            clean_content = re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
+            think_idx = clean_content.find('<think>')
+            if think_idx >= 0:
+                clean_content = clean_content[:think_idx].rstrip()
+
+            visible_content = _strip_action_blocks(clean_content)
+
+            if sent_stream_start:
+                await emit({"type": "stream_end", "content": visible_content})
+
+            msg_dict: dict = {"role": "assistant", "content": full_content or None}
+            if tool_calls_acc:
+                msg_dict["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+                ]
+            session.messages.append(msg_dict)
+
+            # -- <action> block fallback --
+            if not session.tools_available and _ACTION_RE.search(clean_content):
+                action_results = await _extract_and_execute_actions(
+                    clean_content, user, is_admin,
+                )
+                if action_results:
+                    for ar in action_results:
+                        await emit({
+                            "type": "tool_call",
+                            "name": ar["name"],
+                            "args": ar["args"],
+                        })
+                        await emit({
+                            "type": "tool_result",
+                            "name": ar["name"],
+                            "success": "error" not in ar["result"],
+                        })
+
+                    results_msg = "Action results:\n"
+                    for ar in action_results:
+                        results_msg += f"- {ar['name']}: {ar['result']}\n"
+                    results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
+                    session.messages.append({"role": "user", "content": results_msg})
+
+                    await emit({"type": "thinking"})
+                    _inject_hub_context(session.messages, user, is_admin)
+                    try:
+                        summary_stream = await client.chat.completions.create(
+                            model=llm_cfg.model,
+                            messages=session.messages,
+                            temperature=llm_cfg.temperature,
+                            max_tokens=llm_cfg.max_tokens,
+                            stream=True,
+                        )
+                        summary_parts: list[str] = []
+                        sent_summary_start = False
+                        async for chunk in summary_stream:
+                            if not chunk.choices:
+                                continue
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                if not sent_summary_start:
+                                    await emit({"type": "stream_start"})
+                                    sent_summary_start = True
+                                summary_parts.append(delta.content)
+                                await emit({"type": "stream_delta", "content": delta.content})
+                        summary_text = "".join(summary_parts)
+                        summary_clean = re.sub(r'<think>[\s\S]*?</think>', '', summary_text).lstrip()
+                        summary_clean = _strip_action_blocks(summary_clean)
+                        think_idx2 = summary_clean.find('<think>')
+                        if think_idx2 >= 0:
+                            summary_clean = summary_clean[:think_idx2].rstrip()
+                        if sent_summary_start:
+                            await emit({"type": "stream_end", "content": summary_clean})
+                        else:
+                            await emit({"type": "response", "content": summary_clean or "Done."})
+                        session.messages.append({"role": "assistant", "content": summary_text})
+                    except Exception as exc:
+                        log.warning("Summary re-prompt failed: %s", exc)
+                        visible = _strip_action_blocks(clean_content) or "Actions executed."
+                        await emit({"type": "response", "content": visible})
+                    break
+
+            # -- No tool calls -> done --
+            if not tool_calls_acc:
+                if not sent_stream_start:
+                    await emit({
+                        "type": "response",
+                        "content": visible_content or "(no response)",
+                    })
+                break
+
+            # -- Execute tool calls --
+            for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]:
+                fn_name = tc["name"]
+                try:
+                    fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                await emit({
+                    "type": "tool_call",
+                    "name": fn_name,
+                    "args": fn_args,
+                })
+
+                result = await _execute_tool(fn_name, fn_args, user, is_admin)
+
+                session.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+
+                await emit({
+                    "type": "tool_result",
+                    "name": fn_name,
+                    "success": "error" not in result,
+                })
+
+            # Show thinking before next round
+            await emit({"type": "thinking"})
+        else:
+            await emit({
+                "type": "response",
+                "content": "(Reached tool call limit — here is what I found so far.)",
+            })
+
+    except asyncio.CancelledError:
+        log.info("LLM request cancelled for session %s", key)
+        raise
+    except Exception as e:
+        log.exception("LLM background request error (session %s)", key)
+        err_msg = str(e).lower()
+        if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
+            user_err = "The AI backend is temporarily unreachable. Please try again in a moment."
+        else:
+            user_err = "Something went wrong — please try sending your message again."
+        await emit({"type": "error", "content": user_err})
+    finally:
+        session.pending_request = False
+        session._request_done.set()
+
+
+# =============================================================================
 # REST endpoints
 # =============================================================================
 
@@ -1321,9 +1655,14 @@ async def ws_llm_chat(
     Auth: pass JWT as ?token= query param (dashboard sends cookie-derived token).
     Optional: ?session_id= to resume a named session.
 
+    The actual LLM processing runs as a background ``asyncio.Task`` so it
+    survives WebSocket disconnects.  When the client reconnects, buffered
+    events are replayed and (if the task is still running) new events
+    continue to flow as they are produced.
+
     Client sends:  {"message": "who is online?"}
     Server sends:  {"type": "connected", "access": "admin", "model": "llama3.1",
-                    "session_id": "abc123"}
+                    "session_id": "abc123", "pending": false}
                    {"type": "thinking"}
                    {"type": "tool_call", "name": "list_online_users", "args": {}}
                    {"type": "tool_result", "name": "list_online_users", "success": true}
@@ -1331,7 +1670,6 @@ async def ws_llm_chat(
                    {"type": "error", "content": "..."}
     """
     import uuid
-    global _endpoint_supports_tools
 
     await ws.accept()
 
@@ -1368,38 +1706,92 @@ async def ws_llm_chat(
     session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
     key = _session_key(user.nick, sid)
 
-    # Helper: send on WS only if still open.  Returns False if disconnected.
-    _ws_alive = True
-
-    async def _ws_send(payload: dict) -> bool:
-        nonlocal _ws_alive
-        if not _ws_alive:
-            return False
-        try:
-            await ws.send_json(payload)
-            return True
-        except (WebSocketDisconnect, RuntimeError, Exception) as exc:
-            # Client gone — stop sending; the outer loop will clean up.
-            _ws_alive = False
-            log.debug("WS send failed (client gone): %s", exc)
-            return False
-
     log.info("LLM WS session %s for %s (%s)", sid, user.nick, access)
-    await _ws_send({
-        "type": "connected",
-        "access": access,
-        "model": llm_cfg.model,
-        "session_id": sid,
-        "pending": session.pending_request,
-    })
 
-    # If the session has a dangling user message from a previous disconnected
-    # request (server was mid-stream when client left), remove it so the
-    # conversation isn't polluted with an unanswered turn.
-    if session.pending_request:
-        _clean_dangling_turn(session)
-        session.pending_request = False
+    # Attach the WebSocket so background task events are forwarded.
+    session.attach_ws(ws)
 
+    # Is there a background task still running (or completed while we
+    # were away)?
+    has_running_task = (
+        session._bg_task is not None and not session._bg_task.done()
+    )
+    has_buffered = bool(session._event_buffer)
+
+    try:
+        await ws.send_json({
+            "type": "connected",
+            "access": access,
+            "model": llm_cfg.model,
+            "session_id": sid,
+            "pending": has_running_task or has_buffered,
+        })
+    except (WebSocketDisconnect, RuntimeError):
+        session.detach_ws()
+        return
+
+    # Replay any events buffered while we were disconnected.
+    if has_buffered:
+        try:
+            await session.replay_buffered_events(ws)
+        except (WebSocketDisconnect, RuntimeError):
+            session.detach_ws()
+            return
+
+    # If the task already finished while we were away, clean up.
+    if has_buffered and not has_running_task:
+        session.clear_event_buffer()
+
+    # ------------------------------------------------------------------
+    # Helper: wait for the background task to finish while also watching
+    # for a WS disconnect (or a new user message, which we ignore while
+    # a task is running).
+    # ------------------------------------------------------------------
+    async def _await_bg_task() -> bool:
+        """Wait for the current background task to finish.
+
+        Returns True if we should continue the message loop, False if the
+        WebSocket disconnected.
+        """
+        done_fut = asyncio.ensure_future(session._request_done.wait())
+        recv_fut = asyncio.ensure_future(ws.receive_json())
+        try:
+            while True:
+                done_tasks, _ = await asyncio.wait(
+                    [done_fut, recv_fut],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if done_fut in done_tasks:
+                    recv_fut.cancel()
+                    try:
+                        await recv_fut
+                    except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                        pass
+                    return True
+                if recv_fut in done_tasks:
+                    try:
+                        recv_fut.result()  # may raise WebSocketDisconnect
+                    except (WebSocketDisconnect, RuntimeError):
+                        done_fut.cancel()
+                        return False
+                    # User sent another message while still thinking — ignore
+                    recv_fut = asyncio.ensure_future(ws.receive_json())
+        except (WebSocketDisconnect, RuntimeError):
+            done_fut.cancel()
+            return False
+
+    # If a background task is still in-flight, wait for it.
+    if has_running_task:
+        ws_ok = await _await_bg_task()
+        if not ws_ok:
+            session.detach_ws()
+            return
+        # Task finished — clean up the buffer
+        session.clear_event_buffer()
+
+    # ------------------------------------------------------------------
+    # Main message loop
+    # ------------------------------------------------------------------
     try:
         while True:
             data = await ws.receive_json()
@@ -1407,305 +1799,35 @@ async def ws_llm_chat(
             if not user_msg:
                 continue
 
+            # Reject if a task is somehow still running (safety check)
+            if session._bg_task and not session._bg_task.done():
+                await ws.send_json({
+                    "type": "error",
+                    "content": "Still processing a previous request — please wait.",
+                })
+                continue
+
             _update_session_title(key, user_msg)
             _bump_session_count(key)
 
-            try:
-                # Streaming chat with tool-call support.
-                # We stream tokens over the WebSocket for a responsive UX.
-                client = _get_openai_client()
-                session.messages.append({"role": "user", "content": user_msg})
-                session.pending_request = True
-                if not await _ws_send({"type": "thinking"}):
-                    break
+            # Prepare for a new background request.
+            session.clear_event_buffer()
+            session._request_done.clear()
 
-                for round_num in range(llm_cfg.max_tool_rounds):
-                    stream_mode = True
+            session._bg_task = asyncio.create_task(
+                _run_llm_request(session, user_msg, user, is_admin, llm_cfg, key)
+            )
 
-                    # If tools already known to be unsupported, go straight to context-injection
-                    if not session.tools_available:
-                        _inject_hub_context(session.messages, user, is_admin)
-                        try:
-                            stream = await client.chat.completions.create(
-                                model=llm_cfg.model,
-                                messages=session.messages,
-                                temperature=llm_cfg.temperature,
-                                max_tokens=llm_cfg.max_tokens,
-                                stream=True,
-                            )
-                        except Exception:
-                            resp = await client.chat.completions.create(
-                                model=llm_cfg.model,
-                                messages=session.messages,
-                                temperature=llm_cfg.temperature,
-                                max_tokens=llm_cfg.max_tokens,
-                            )
-                            text = resp.choices[0].message.content or "(no response)"
-                            session.messages.append(resp.choices[0].message.model_dump())
-                            # Handle <action> blocks in non-streaming fallback
-                            text = await _handle_actions_in_text(
-                                text, session, client, llm_cfg,
-                                user, is_admin, _ws_send, _ws_alive,
-                            )
-                            await _ws_send({"type": "response", "content": text})
-                            stream_mode = False
-                            stream = None
-                            break
-                    else:
-                        try:
-                            stream = await client.chat.completions.create(
-                                model=llm_cfg.model,
-                                messages=session.messages,
-                                tools=session.tools if session.tools else None,
-                                tool_choice="auto",
-                                temperature=llm_cfg.temperature,
-                                max_tokens=llm_cfg.max_tokens,
-                                stream=True,
-                            )
-                        except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
-                            if round_num == 0:
-                                log.warning("Tool/stream not supported, falling back: %s", exc)
-                                session.tools_available = False
-                                _endpoint_supports_tools = False
-                                _inject_hub_context(session.messages, user, is_admin)
-                                try:
-                                    stream = await client.chat.completions.create(
-                                        model=llm_cfg.model,
-                                        messages=session.messages,
-                                        temperature=llm_cfg.temperature,
-                                        max_tokens=llm_cfg.max_tokens,
-                                        stream=True,
-                                    )
-                                except Exception:
-                                    # Final fallback: non-streaming, no tools
-                                    resp = await client.chat.completions.create(
-                                        model=llm_cfg.model,
-                                        messages=session.messages,
-                                        temperature=llm_cfg.temperature,
-                                        max_tokens=llm_cfg.max_tokens,
-                                    )
-                                    text = resp.choices[0].message.content or "(no response)"
-                                    session.messages.append(resp.choices[0].message.model_dump())
-                                    # Handle <action> blocks in non-streaming fallback
-                                    text = await _handle_actions_in_text(
-                                        text, session, client, llm_cfg,
-                                        user, is_admin, _ws_send, _ws_alive,
-                                    )
-                                    await _ws_send({"type": "response", "content": text})
-                                    stream_mode = False
-                                    stream = None
-                                    break
-                            else:
-                                raise
+            # Wait for the task to finish (events flow via session.emit).
+            ws_ok = await _await_bg_task()
+            if not ws_ok:
+                session.detach_ws()
+                return
 
-                    if not stream_mode:
-                        break
-
-                    # -- Consume the async stream --
-                    content_parts: list[str] = []
-                    tool_calls_acc: dict[int, dict] = {}  # index -> {id, name, arguments}
-                    sent_stream_start = False
-
-                    async for chunk in stream:
-                        if not _ws_alive:
-                            # Client disconnected mid-stream; stop consuming.
-                            log.info("Client disconnected mid-stream, aborting")
-                            break
-                        if not chunk.choices:
-                            continue
-                        delta = chunk.choices[0].delta
-
-                        # Text content tokens
-                        if delta.content:
-                            if not sent_stream_start:
-                                await _ws_send({"type": "stream_start"})
-                                sent_stream_start = True
-                            content_parts.append(delta.content)
-                            await _ws_send({"type": "stream_delta", "content": delta.content})
-
-                        # Tool call deltas
-                        if delta.tool_calls:
-                            for tc_d in delta.tool_calls:
-                                idx = tc_d.index
-                                if idx not in tool_calls_acc:
-                                    tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                                if tc_d.id:
-                                    tool_calls_acc[idx]["id"] = tc_d.id
-                                if tc_d.function:
-                                    if tc_d.function.name:
-                                        tool_calls_acc[idx]["name"] += tc_d.function.name
-                                    if tc_d.function.arguments:
-                                        tool_calls_acc[idx]["arguments"] += tc_d.function.arguments
-
-                    full_content = "".join(content_parts)
-
-                    # Strip <think>…</think> reasoning blocks (Qwen / DeepSeek models)
-                    clean_content = re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
-                    # If still inside an unclosed <think>, drop it
-                    think_idx = clean_content.find('<think>')
-                    if think_idx >= 0:
-                        clean_content = clean_content[:think_idx].rstrip()
-
-                    # Strip <action> blocks from displayed content (they are
-                    # parsed and executed separately below).
-                    visible_content = _strip_action_blocks(clean_content)
-
-                    # Finalise streamed text
-                    if sent_stream_start:
-                        await _ws_send({"type": "stream_end", "content": visible_content})
-
-                    # Build message dict for conversation history
-                    msg_dict: dict = {"role": "assistant", "content": full_content or None}
-                    if tool_calls_acc:
-                        msg_dict["tool_calls"] = [
-                            {
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                            }
-                            for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
-                        ]
-                    session.messages.append(msg_dict)
-
-                    if not _ws_alive:
-                        break
-
-                    # ----------------------------------------------------------
-                    # <action> block extraction (context-injection fallback)
-                    # When native tool calling is unavailable, the LLM embeds
-                    # <action>{...}</action> blocks in its text output.  We
-                    # parse them, execute the requested operations, and ask the
-                    # model for a short summary of the results.
-                    # ----------------------------------------------------------
-                    if not session.tools_available and _ACTION_RE.search(clean_content):
-                        action_results = await _extract_and_execute_actions(
-                            clean_content, user, is_admin,
-                        )
-                        if action_results and _ws_alive:
-                            # Notify frontend about the actions
-                            for ar in action_results:
-                                await _ws_send({
-                                    "type": "tool_call",
-                                    "name": ar["name"],
-                                    "args": ar["args"],
-                                })
-                                await _ws_send({
-                                    "type": "tool_result",
-                                    "name": ar["name"],
-                                    "success": "error" not in ar["result"],
-                                })
-
-                            # Feed results back and ask for a user-facing summary
-                            results_msg = "Action results:\n"
-                            for ar in action_results:
-                                results_msg += f"- {ar['name']}: {ar['result']}\n"
-                            results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
-                            session.messages.append({"role": "user", "content": results_msg})
-
-                            await _ws_send({"type": "thinking"})
-                            # Re-prompt for the summary (one more streaming call)
-                            _inject_hub_context(session.messages, user, is_admin)
-                            try:
-                                summary_stream = await client.chat.completions.create(
-                                    model=llm_cfg.model,
-                                    messages=session.messages,
-                                    temperature=llm_cfg.temperature,
-                                    max_tokens=llm_cfg.max_tokens,
-                                    stream=True,
-                                )
-                                summary_parts: list[str] = []
-                                sent_summary_start = False
-                                async for chunk in summary_stream:
-                                    if not _ws_alive:
-                                        break
-                                    if not chunk.choices:
-                                        continue
-                                    delta = chunk.choices[0].delta
-                                    if delta.content:
-                                        if not sent_summary_start:
-                                            await _ws_send({"type": "stream_start"})
-                                            sent_summary_start = True
-                                        summary_parts.append(delta.content)
-                                        await _ws_send({"type": "stream_delta", "content": delta.content})
-                                summary_text = "".join(summary_parts)
-                                summary_clean = re.sub(r'<think>[\s\S]*?</think>', '', summary_text).lstrip()
-                                summary_clean = _strip_action_blocks(summary_clean)
-                                think_idx2 = summary_clean.find('<think>')
-                                if think_idx2 >= 0:
-                                    summary_clean = summary_clean[:think_idx2].rstrip()
-                                if sent_summary_start:
-                                    await _ws_send({"type": "stream_end", "content": summary_clean})
-                                else:
-                                    await _ws_send({"type": "response", "content": summary_clean or "Done."})
-                                session.messages.append({"role": "assistant", "content": summary_text})
-                            except Exception as exc:
-                                log.warning("Summary re-prompt failed: %s", exc)
-                                # Show the original response without action blocks
-                                visible = _strip_action_blocks(clean_content) or "Actions executed."
-                                await _ws_send({"type": "response", "content": visible})
-                            break
-
-                    # -- No tool calls -> done --
-                    if not tool_calls_acc:
-                        if not sent_stream_start:
-                            await _ws_send({
-                                "type": "response",
-                                "content": visible_content or "(no response)",
-                            })
-                        break
-
-                    # -- Execute tool calls --
-                    for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]:
-                        fn_name = tc["name"]
-                        try:
-                            fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                        except json.JSONDecodeError:
-                            fn_args = {}
-
-                        await _ws_send({
-                            "type": "tool_call",
-                            "name": fn_name,
-                            "args": fn_args,
-                        })
-
-                        result = await _execute_tool(fn_name, fn_args, user, is_admin)
-
-                        session.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": result,
-                        })
-
-                        await _ws_send({
-                            "type": "tool_result",
-                            "name": fn_name,
-                            "success": "error" not in result,
-                        })
-
-                    if not _ws_alive:
-                        break
-                    # Show thinking before next round
-                    await _ws_send({"type": "thinking"})
-                else:
-                    await _ws_send({
-                        "type": "response",
-                        "content": "(Reached tool call limit — here is what I found so far.)",
-                    })
-
-                session.pending_request = False
-
-            except WebSocketDisconnect:
-                log.info("LLM WS client disconnected during request")
-                break
-            except Exception as e:
-                session.pending_request = False
-                log.exception("LLM WebSocket error")
-                err_msg = str(e).lower()
-                if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
-                    user_msg = "The AI backend is temporarily unreachable. Please try again in a moment."
-                else:
-                    user_msg = "Something went wrong — please try sending your message again."
-                await _ws_send({"type": "error", "content": user_msg})
+            # Task done — clean up event buffer.
+            session.clear_event_buffer()
 
     except WebSocketDisconnect:
         log.info("LLM WS disconnected: %s (session %s)", user.nick, sid)
+    finally:
+        session.detach_ws()

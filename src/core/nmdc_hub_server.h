@@ -176,6 +176,7 @@ public:
         SendToAllConns(NMDCProtocol::MakeHubNameWithTopic(m_hub_name, topic));
     }
     void SetHubSecurity(const std::string& name) { m_hub_security = name; }
+    void SetOpChatName(const std::string& name) { m_opchat_name = name; }
     void SetMaxUsers(int max) { m_max_users = max; }
     void SetMOTD(const std::string& motd) { m_motd = motd; }
 
@@ -358,6 +359,7 @@ private:
     std::string m_hub_name{"Verlihub Hub"};
     std::string m_hub_topic;
     std::string m_hub_security{"Hub-Security"};
+    std::string m_opchat_name{"OpChat"};  ///< Operator chat bot nick
     std::string m_motd;  ///< Message of the Day (sent to users on login)
     int m_max_users{1000};
     int m_max_login_attempts{3};

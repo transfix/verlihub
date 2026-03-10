@@ -630,6 +630,13 @@ void NMDCHubServer::SendUserLists(NMDCClient& client) {
     op_nicks.push_back(m_hub_security);
     bot_nicks.push_back(m_hub_security);
 
+    // Include OpChat bot in lists (if configured)
+    if (!m_opchat_name.empty()) {
+        all_nicks.push_back(m_opchat_name);
+        op_nicks.push_back(m_opchat_name);
+        bot_nicks.push_back(m_opchat_name);
+    }
+
     SendToConn(client.conn, NMDCProtocol::MakeNickList(all_nicks));
     SendToConn(client.conn, NMDCProtocol::MakeOpList(op_nicks));
 
@@ -660,6 +667,15 @@ void NMDCHubServer::SendHubBotInfo(NMDCClient& client) {
         "Verlihub-py Hub Security Bot<Bot V:1.0,M:A,H:0/0/1,S:0>"
     );
     SendToConn(client.conn, bot_myinfo);
+
+    // Send OpChat bot's MyINFO (if configured)
+    if (!m_opchat_name.empty()) {
+        std::string opchat_myinfo = NMDCProtocol::MakeBotMyINFO(
+            m_opchat_name,
+            "Operator Chat<Bot V:1.0,M:A,H:0/0/1,S:0>"
+        );
+        SendToConn(client.conn, opchat_myinfo);
+    }
 }
 
 void NMDCHubServer::SendMOTD(NMDCClient& client) {

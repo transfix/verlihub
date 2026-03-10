@@ -137,6 +137,7 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     m_nmdc_server->SetHubName(m_hub_config.hub_name);
     m_nmdc_server->SetHubTopic(m_hub_config.hub_topic);
     m_nmdc_server->SetHubSecurity(m_hub_config.hub_security);
+    m_nmdc_server->SetOpChatName(m_hub_config.opchat_name);
     m_nmdc_server->SetMaxUsers(m_hub_config.max_users);
     m_nmdc_server->SetCallback(m_event_callback);
 
@@ -451,7 +452,11 @@ bool HubContext::SetConfig(std::string_view section, std::string_view key,
             if (m_nmdc_server) { m_nmdc_server->SetHubSecurity(std::string(value)); }
             return true;
         }
-        if (key == "opchat_name") { m_hub_config.opchat_name = value; return true; }
+        if (key == "opchat_name") {
+            m_hub_config.opchat_name = value;
+            if (m_nmdc_server) { m_nmdc_server->SetOpChatName(std::string(value)); }
+            return true;
+        }
         if (key == "hub_category") { m_hub_config.hub_category = value; return true; }
         // Network settings
         if (key == "listen_ip") { m_hub_config.listen_ip = value; return true; }

@@ -212,6 +212,7 @@ class HubConfig:
     motd_file: str = ""
     max_users: int = 1000
     logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
+    send_user_info: bool = True  # PM user info (nick, IP, country, TLS) on connect
     hublist_servers: list[str] = field(default_factory=lambda: [
         "hublist.te-home.net",
         "hublist.pwiam.com",
@@ -990,6 +991,7 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "hub.motd": ("config", "hub_motd"),
     "bots.security.nick": ("config", "hub_security"),
     "bots.op_chat.nick": ("config", "opchat_name"),
+    "hub.send_user_info": ("config", "send_user_info"),
 }
 
 # User class mapping

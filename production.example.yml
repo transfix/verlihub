@@ -49,6 +49,10 @@ hub:
   # Common options: CP1252, UTF-8, ISO-8859-1
   encoding: "CP1252"
   
+  # Send "Your information" PM on connect (nick, IP, country, TLS, NAT)
+  # Set to false to disable
+  send_user_info: true
+  
   # Network settings
   port: 4111
   listen_host: "0.0.0.0"

@@ -417,6 +417,7 @@ std::string HubContext::GetConfig(std::string_view section, std::string_view key
         if (key == "chat_filter") return m_hub_config.chat_filter ? "1" : "0";
         if (key == "anti_clone") return m_hub_config.anti_clone ? "1" : "0";
         if (key == "registration_require_invite") return m_hub_config.registration_require_invite ? "1" : "0";
+        if (key == "send_user_info") return m_hub_config.send_user_info ? "1" : "0";
         // Limits
         if (key == "max_users") return std::to_string(m_hub_config.max_users);
         if (key == "min_share") return std::to_string(m_hub_config.min_share);
@@ -491,6 +492,7 @@ bool HubContext::SetConfig(std::string_view section, std::string_view key,
         if (key == "chat_filter") { m_hub_config.chat_filter = (value == "1"); return true; }
         if (key == "anti_clone") { m_hub_config.anti_clone = (value == "1"); return true; }
         if (key == "registration_require_invite") { m_hub_config.registration_require_invite = (value == "1"); return true; }
+        if (key == "send_user_info") { m_hub_config.send_user_info = (value == "1"); return true; }
         // Limits
         if (key == "max_users") {
             int v = 1000;

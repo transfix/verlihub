@@ -120,6 +120,7 @@ struct HubConfig {
     bool chat_filter{false};
     bool anti_clone{false};
     bool registration_require_invite{false};
+    bool send_user_info{true};  ///< PM user info on connect (legacy DisplayInfo)
 };
 
 /**

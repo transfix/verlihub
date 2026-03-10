@@ -168,6 +168,14 @@ async def lifespan(app: FastAPI):
         except Exception as ws_err:
             logger.warning("WebSocket event wiring failed: %s", ws_err)
 
+    # Send "Your information" PM to users on connect (like legacy send_user_info)
+    if ctx is not None:
+        try:
+            from verlihub.user_info import register as register_user_info
+            register_user_info(ctx)
+        except Exception as ui_err:
+            logger.warning("User-info on-connect handler failed: %s", ui_err)
+
     # Wire LLM bot chat handler (PM + main chat → security bot)
     _bot_chat_handler = None
     if ctx is not None:

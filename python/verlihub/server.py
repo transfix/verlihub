@@ -16,12 +16,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import logging
 import os
 import signal
 import sys
 from pathlib import Path
 from typing import Optional
+
+# Dump all Python thread tracebacks on SIGUSR1 (debugging aid for freezes)
+faulthandler.enable()
+try:
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+except (AttributeError, OSError):
+    pass  # Windows or unsupported
 
 logger = logging.getLogger(__name__)
 

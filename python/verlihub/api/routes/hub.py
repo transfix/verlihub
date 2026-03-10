@@ -144,7 +144,7 @@ def get_hub_start_time() -> float:
 
 
 @router.get("/info", response_model=HubInfo)
-async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
+def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
     """Get full hub information including uptime and MOTD."""
     try:
         hub_name = ctx.get_config("config", "hub_name", "Verlihub")
@@ -197,7 +197,7 @@ async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
 
 
 @router.get("/status", response_model=HubStatus)
-async def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
+def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
     """Get current hub status."""
     total_share = ctx.total_share
     return HubStatus(
@@ -213,7 +213,7 @@ async def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
 
 
 @router.get("/config", response_model=HubConfig)
-async def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
+def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
     """Get hub configuration."""
     return HubConfig(
         hub_name=ctx.get_config("config", "hub_name"),
@@ -272,7 +272,7 @@ class HubConfigUpdate(BaseModel):
 
 
 @router.put("/config")
-async def update_hub_config(
+def update_hub_config(
     request: HubConfigUpdate,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.ADMIN)),
@@ -396,7 +396,7 @@ async def update_hub_config(
 
 
 @router.put("/topic")
-async def set_hub_topic(
+def set_hub_topic(
     request: HubTopicUpdate,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -412,7 +412,7 @@ class ChatMessageRequest(BaseModel):
 
 
 @router.post("/chat")
-async def send_chat_message(
+def send_chat_message(
     request: ChatMessageRequest,
     ctx=Depends(get_hub_context),
     user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -428,8 +428,8 @@ async def send_chat_message(
         # Broadcast via WebSocket so all dashboard users see it.
         # The C++ SendChatToAll only sends to DC clients, it does NOT
         # trigger the OnChatMessage callback, so we must emit manually.
-        from verlihub.dashboard.websocket import broadcast_hub_event
-        await broadcast_hub_event("chat", {
+        from verlihub.dashboard.websocket import emit_hub_event
+        emit_hub_event("chat", {
             "nick": user.nick,
             "message": request.message,
             "user_class": user.user_class,
@@ -439,7 +439,7 @@ async def send_chat_message(
 
 
 @router.post("/broadcast")
-async def broadcast_message(
+def broadcast_message(
     request: BroadcastRequest,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -464,7 +464,7 @@ class HubStartRequest(BaseModel):
 
 
 @router.post("/start")
-async def start_hub(
+def start_hub(
     request: HubStartRequest = HubStartRequest(),
     _user: RequireAdmin = None,
 ) -> dict:
@@ -498,7 +498,7 @@ async def start_hub(
 
 
 @router.post("/shutdown")
-async def shutdown_hub(
+def shutdown_hub(
     ctx=Depends(get_hub_context),
     _user: RequireMaster = None,
 ) -> dict:
@@ -508,7 +508,7 @@ async def shutdown_hub(
 
 
 @router.post("/reload")
-async def reload_config(
+def reload_config(
     ctx=Depends(get_hub_context),
     _user: RequireAdmin = None,
 ) -> dict:
@@ -523,7 +523,7 @@ async def reload_config(
 
 
 @router.get("/geo-stats")
-async def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
+def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
     """Get geographic distribution of online users."""
     from verlihub.enrichment import enrich_user_list, compute_geo_distribution
 
@@ -538,7 +538,7 @@ async def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
 
 
 @router.get("/share-stats")
-async def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
+def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
     """Get share size statistics for online users."""
     from verlihub.enrichment import compute_share_stats
 

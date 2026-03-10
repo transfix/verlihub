@@ -109,7 +109,7 @@ async def get_session():
 
 
 @router.get("/online", response_model=UserList)
-async def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
+def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
     """Get list of currently online users with full info."""
     from verlihub.enrichment import enrich_user_list
 
@@ -120,7 +120,7 @@ async def get_online_users(ctx=Depends(get_hub_context)) -> UserList:
 
 
 @router.get("/online/{nick}")
-async def get_online_user(nick: str, ctx=Depends(get_hub_context)) -> OnlineUser:
+def get_online_user(nick: str, ctx=Depends(get_hub_context)) -> OnlineUser:
     """Get information about a specific online user."""
     from verlihub.enrichment import enrich_user_list
 
@@ -169,7 +169,7 @@ def _user_dict_to_model(u: dict) -> OnlineUser:
 
 
 @router.post("/kick")
-async def kick_user(
+def kick_user(
     request: KickRequest,
     ctx=Depends(get_hub_context),
     user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -185,7 +185,7 @@ async def kick_user(
 
 
 @router.post("/message")
-async def send_message(
+def send_message(
     request: MessageRequest,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),

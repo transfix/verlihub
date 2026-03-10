@@ -168,7 +168,7 @@ public:
     void SetHubTopic(const std::string& topic) {
         m_hub_topic = topic;
         // Broadcast topic change to all connected users
-        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
         if (!topic.empty()) {
             SendToAllConns(NMDCProtocol::MakeHubTopic(topic));
         }
@@ -343,8 +343,11 @@ private:
     /// Map from nick to connection pointer (for fast nick lookup)
     std::unordered_map<std::string, nSocket::cAsyncConn*> m_nick_to_conn;
 
-    /// Mutex for client maps (protects m_clients and m_nick_to_conn)
-    mutable std::mutex m_clients_mutex;
+    /// Mutex for client maps (protects m_clients and m_nick_to_conn).
+    /// Recursive because OnNewMessage holds the lock while dispatching to
+    /// Handle* methods, whose director callbacks (OnUserConnect etc.) may
+    /// call GetUserInfo/GetUserInfoSnapshots which also lock this mutex.
+    mutable std::recursive_mutex m_clients_mutex;
 
     /// Event callback (Python bridge, not owned)
     IHubEventCallback* m_callback{nullptr};

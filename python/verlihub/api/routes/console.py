@@ -69,7 +69,7 @@ COMMAND_REFERENCE = [
 
 
 @router.post("/execute", response_model=CommandResponse)
-async def execute_command(
+def execute_command(
     request: CommandRequest,
     user: TokenData = Depends(require_permission(Permission.OPERATOR)),
 ):

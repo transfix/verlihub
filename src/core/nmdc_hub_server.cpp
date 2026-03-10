@@ -149,7 +149,7 @@ int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
 
     // Store client
     {
-        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
         m_clients[conn] = std::move(client);
     }
 
@@ -168,7 +168,7 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
     if (message.empty()) return;
 
     // Find the client
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_clients.find(conn);
     if (it == m_clients.end()) return;
 
@@ -224,7 +224,7 @@ int NMDCHubServer::OnTimer(const cTime& now) {
     // Login timeout: disconnect clients stuck in handshake
     if (m_login_timeout_sec > 0) {
         auto tp_now = std::chrono::steady_clock::now();
-        std::lock_guard<std::mutex> lock(m_clients_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
 
         std::vector<cAsyncConn*> to_disconnect;
         for (auto& [conn, client] : m_clients) {
@@ -582,7 +582,7 @@ void NMDCHubServer::SendToAllConns(const std::string& data) {
 }
 
 void NMDCHubServer::RemoveClient(cAsyncConn* conn) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
 
     auto it = m_clients.find(conn);
     if (it == m_clients.end()) return;
@@ -707,7 +707,7 @@ void NMDCHubServer::SendMOTD(NMDCClient& client) {
 // =============================================================================
 
 bool NMDCHubServer::SendToNick(const std::string& nick, const std::string& data) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_nick_to_conn.find(nick);
     if (it == m_nick_to_conn.end()) return false;
     SendToConn(it->second, data);
@@ -715,20 +715,20 @@ bool NMDCHubServer::SendToNick(const std::string& nick, const std::string& data)
 }
 
 void NMDCHubServer::SendToAll(const std::string& data) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     SendToAllConns(data);
 }
 
 void NMDCHubServer::SendChatToAll(const std::string& from, const std::string& message) {
     std::string msg = NMDCProtocol::MakeChat(from, message);
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     SendToAllConns(msg);
 }
 
 bool NMDCHubServer::SendPM(const std::string& from, const std::string& to,
                            const std::string& message) {
     std::string msg = NMDCProtocol::MakePrivateMessage(from, to, message);
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_nick_to_conn.find(to);
     if (it == m_nick_to_conn.end()) return false;
     SendToConn(it->second, msg);
@@ -740,7 +740,7 @@ bool NMDCHubServer::SendPM(const std::string& from, const std::string& to,
 // =============================================================================
 
 std::vector<std::string> NMDCHubServer::GetNickList() const {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     std::vector<std::string> nicks;
     nicks.reserve(m_clients.size());
     for (auto& [conn, client] : m_clients) {
@@ -752,7 +752,7 @@ std::vector<std::string> NMDCHubServer::GetNickList() const {
 }
 
 std::vector<std::string> NMDCHubServer::GetOpList() const {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     std::vector<std::string> nicks;
     for (auto& [conn, client] : m_clients) {
         if (client.state == NMDCConnState::LoggedIn && client.user_class >= 3) {
@@ -767,7 +767,7 @@ size_t NMDCHubServer::GetUserCount() const {
 }
 
 bool NMDCHubServer::IsNickOnline(const std::string& nick) const {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     return m_nick_to_conn.count(nick) > 0;
 }
 
@@ -776,7 +776,7 @@ uint64_t NMDCHubServer::GetTotalShare() const {
 }
 
 bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) const {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_nick_to_conn.find(nick);
     if (it == m_nick_to_conn.end()) return false;
     auto cit = m_clients.find(it->second);
@@ -809,7 +809,7 @@ bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) 
 }
 
 std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     std::vector<UserInfoSnapshot> result;
     result.reserve(m_clients.size());
     for (auto& [conn, c] : m_clients) {
@@ -848,7 +848,7 @@ std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
 
 bool NMDCHubServer::KickUser(const std::string& nick, const std::string& reason,
                              const std::string& op) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_nick_to_conn.find(nick);
     if (it == m_nick_to_conn.end()) return false;
 
@@ -870,7 +870,7 @@ bool NMDCHubServer::KickUser(const std::string& nick, const std::string& reason,
 }
 
 bool NMDCHubServer::DisconnectUser(const std::string& nick) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_nick_to_conn.find(nick);
     if (it == m_nick_to_conn.end()) return false;
 

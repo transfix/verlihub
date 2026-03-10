@@ -85,16 +85,11 @@
 </div>
 
 <!-- Log viewer -->
-<div class="box">
-    <div id="log-container" class="log-viewer" style="height: calc(100vh - 360px); min-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85rem;">
+<div class="box" style="padding:0.5rem">
+    <div id="log-container" class="log-viewer">
         {% if logs %}
             {% for log in logs %}
-            <div class="log-entry log-{{ log.level }}" data-level="{{ log.level }}" data-type="{{ log.log_type }}">
-                <span class="log-time has-text-grey">{{ log.time }}</span>
-                <span class="log-level tag is-{% if log.level == 'error' %}danger{% elif log.level == 'warning' %}warning{% elif log.level == 'debug' %}light{% else %}info{% endif %} is-light">{{ log.level|upper }}</span>
-                <span class="log-type-badge has-text-grey-light">[{{ log.log_type }}]</span>
-                <span class="log-message">{{ log.message }}</span>
-            </div>
+            <div class="log-entry log-{{ log.level }}" data-level="{{ log.level }}" data-type="{{ log.log_type }}"><span class="log-time">{{ log.time[-15:-6] if log.time|length > 15 else log.time }}</span> <span class="ll ll-{{ log.level }}">{{ log.level[0]|upper }}</span> <span class="lt">{{ log.log_type }}</span> <span class="log-message">{{ log.message }}</span></div>
             {% endfor %}
         {% else %}
             <div class="has-text-centered has-text-grey py-6" id="no-logs-placeholder">
@@ -132,52 +127,37 @@
     .log-viewer {
         background-color: #1a1a2e;
         color: #e4e4e4;
-        padding: 1rem;
+        padding: 0.25rem 0.4rem;
         border-radius: 4px;
         scroll-behavior: smooth;
-    }
-    
-    [data-theme="light"] .log-viewer {
-        background-color: #f5f5f5;
-        color: #363636;
-    }
-    
-    .log-entry {
-        padding: 0.25rem 0;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-    
-    [data-theme="light"] .log-entry {
-        border-bottom: 1px solid rgba(0,0,0,0.1);
-    }
-    
-    .log-entry.hidden {
-        display: none;
-    }
-    
-    .log-time {
-        margin-right: 0.5rem;
-    }
-    
-    .log-level {
-        margin-right: 0.5rem;
-        font-size: 0.7rem;
-    }
-
-    .log-type-badge {
-        margin-right: 0.5rem;
+        height: calc(100vh - 340px);
+        min-height: 300px;
+        overflow-y: auto;
+        font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
         font-size: 0.75rem;
+        line-height: 1.35;
     }
-    
-    .log-entry.log-error {
-        background-color: rgba(241, 70, 104, 0.1);
+    [data-theme="light"] .log-viewer { background-color: #f5f5f5; color: #363636; }
+    .log-entry {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0 0.2rem;
     }
-    
-    .log-entry.log-warning {
-        background-color: rgba(255, 221, 87, 0.1);
-    }
+    .log-entry:hover { white-space: pre-wrap; word-break: break-all; background-color: rgba(255,255,255,0.05); }
+    [data-theme="light"] .log-entry:hover { background-color: rgba(0,0,0,0.04); }
+    .log-entry.hidden { display: none; }
+    .log-time { color: #888; margin-right: 0.3rem; }
+    .ll { display: inline-block; width: 1.1em; text-align: center; border-radius: 2px; margin-right: 0.3rem; font-weight: 600; font-size: 0.7rem; }
+    .ll-info { color: #43b0f1; }
+    .ll-warning { color: #ffd254; }
+    .ll-error { color: #ff6b81; }
+    .ll-debug { color: #777; }
+    .lt { color: #666; margin-right: 0.3rem; }
+    .log-entry.log-error { background-color: rgba(241,70,104,0.08); }
+    .log-entry.log-warning { background-color: rgba(255,221,87,0.06); }
+    .log-entry:nth-child(even) { background-color: rgba(255,255,255,0.015); }
+    [data-theme="light"] .log-entry:nth-child(even) { background-color: rgba(0,0,0,0.02); }
 </style>
 
 <script>
@@ -238,18 +218,11 @@
         entry.dataset.level = log.level;
         entry.dataset.type = log.log_type || log.type || 'system';
         
-        let levelClass = 'info';
-        if (log.level === 'error') levelClass = 'danger';
-        else if (log.level === 'warning') levelClass = 'warning';
-        else if (log.level === 'debug') levelClass = 'light';
-        
         const logType = log.log_type || log.type || 'system';
-        entry.innerHTML = `
-            <span class="log-time has-text-grey">${log.time || new Date().toISOString()}</span>
-            <span class="log-level tag is-${levelClass} is-light">${log.level?.toUpperCase() || 'INFO'}</span>
-            <span class="log-type-badge has-text-grey-light">[${escapeHtml(logType)}]</span>
-            <span class="log-message">${escapeHtml(log.message)}</span>
-        `;
+        const ts = (log.time || new Date().toISOString());
+        const short_ts = ts.length > 15 ? ts.slice(-15, -6) : ts;
+        const lvl = (log.level || 'info');
+        entry.innerHTML = `<span class="log-time">${short_ts}</span> <span class="ll ll-${lvl}">${lvl.charAt(0).toUpperCase()}</span> <span class="lt">${escapeHtml(logType)}</span> <span class="log-message">${escapeHtml(log.message)}</span>`;
         
         container.appendChild(entry);
         

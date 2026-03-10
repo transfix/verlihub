@@ -250,17 +250,17 @@ class TestLogEntriesRendering:
         expect(placeholder).to_be_visible()
 
     def test_entry_has_level_badge(self, admin_page: Page, base_url: str, seeded_logs):
-        """Each log entry should have a level badge (tag)."""
+        """Each log entry should have a compact level indicator."""
         admin_page.goto(f"{base_url}{LOGS_PATH}")
         admin_page.wait_for_load_state("networkidle")
-        badges = admin_page.locator(".log-entry .log-level.tag")
+        badges = admin_page.locator(".log-entry .ll")
         assert badges.count() >= 1
 
     def test_entry_has_type_badge(self, admin_page: Page, base_url: str, seeded_logs):
-        """Each log entry should have a log_type badge."""
+        """Each log entry should have a log_type label."""
         admin_page.goto(f"{base_url}{LOGS_PATH}")
         admin_page.wait_for_load_state("networkidle")
-        type_badges = admin_page.locator(".log-entry .log-type-badge")
+        type_badges = admin_page.locator(".log-entry .lt")
         assert type_badges.count() >= 1
 
     def test_entry_has_data_attributes(self, admin_page: Page, base_url: str, seeded_logs):

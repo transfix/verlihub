@@ -584,23 +584,28 @@ void HubContext::Log(int level, std::string_view message,
         return;
     }
     
-    std::lock_guard lock(m_log_mutex);
-    
-    // Get current time
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    
-    // Format: [timestamp] [level] [file:line] message
-    auto formatted = vh::fmt("[{}] [L{}] [{}:{}] {}",
-                             time_t_now, level,
-                             loc.file_name(), loc.line(),
-                             message);
-    std::cerr << formatted << '\n';
+    std::string formatted;
+    {
+        std::lock_guard lock(m_log_mutex);
+
+        // Get current time
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+
+        // Format: [timestamp] [level] [file:line] message
+        formatted = vh::fmt("[{}] [L{}] [{}:{}] {}",
+                            time_t_now, level,
+                            loc.file_name(), loc.line(),
+                            message);
+        std::cerr << formatted << '\n';
+    }
 
     // Forward to Python callback (if set) so the dashboard log viewer
-    // can capture C++ diagnostic output.  Read the callback pointer
-    // without m_callback_mutex — it is set before Start() and does not
-    // change during the hub lifetime.
+    // can capture C++ diagnostic output.  This MUST be called outside
+    // m_log_mutex — the SWIG director call acquires the Python GIL,
+    // and holding the mutex while waiting for the GIL causes a
+    // priority-inversion deadlock with API threads that call Log()
+    // while the GIL is held.
     auto* cb = m_event_callback;
     if (cb) {
         cb->OnLog(level, formatted);

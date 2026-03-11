@@ -726,6 +726,7 @@ async def ai_chat_page(
     context["llm_model"] = cfg.llm.model if (cfg and cfg.llm) else ""
     context["llm_endpoints"] = cfg.llm.list_endpoint_names() if (cfg and cfg.llm) else []
     context["access_level"] = "admin" if user.user_class >= admin_class else "read-only"
+    context["hub_timezone"] = cfg.hub.timezone if (cfg and cfg.hub) else "UTC"
 
     return templates.TemplateResponse(request, "ai_chat.html", context)
 

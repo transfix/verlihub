@@ -214,6 +214,7 @@ class HubConfig:
     logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
     send_user_info: bool = True  # Send user info (nick, IP, country, TLS) on connect
     user_info_as_pm: bool = False  # Deliver user info as PM instead of main chat
+    timezone: str = "UTC"  # IANA timezone (e.g. "America/Chicago", "Europe/London")
     hublist_servers: list[str] = field(default_factory=lambda: [
         "hublist.te-home.net",
         "hublist.pwiam.com",

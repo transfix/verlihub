@@ -308,8 +308,25 @@ class BotChatSession:
             except Exception:
                 pass
 
-        # Update current time
-        current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        # Update current time using hub timezone if configured
+        hub_tz_name = ""
+        if self.behavior:
+            try:
+                from verlihub.config import get_config_optional
+                _cfg = get_config_optional()
+                if _cfg and _cfg.hub:
+                    hub_tz_name = _cfg.hub.timezone
+            except Exception:
+                pass
+        if hub_tz_name and hub_tz_name != "UTC":
+            try:
+                from zoneinfo import ZoneInfo
+                hub_tz = ZoneInfo(hub_tz_name)
+                current_time = datetime.now(hub_tz).strftime(f"%Y-%m-%d %H:%M {hub_tz_name}")
+            except Exception:
+                current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         # Replace the {mood}, {memory}, and {current_time} placeholders
         updated = self._base_system_prompt

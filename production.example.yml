@@ -121,7 +121,12 @@ bots:
     # user count relative to 24-hour average + recent interaction rate.
     # Mood states range from "lonely" (quiet hub) to "ecstatic" (busy hub).
     # mood_enabled: true
-    # mood_window: 3600  # interaction tracking window in seconds
+    # mood_window: 3600            # interaction tracking window (seconds)
+    # mood_low_interaction: 2.0    # msgs/hr below this → low activity
+    # mood_high_interaction: 10.0  # msgs/hr above this → high activity
+    # mood_low_user_ratio: 0.5     # current/avg below this → few users
+    # mood_high_user_ratio: 1.5    # current/avg above this → many users
+    # mood_user_history: 86400     # rolling average window (seconds, 24h)
 
     # ── Web access ───────────────────────────────────────────────────
     # Gives the bot tools to search the web, fetch pages, and read RSS
@@ -132,9 +137,9 @@ bots:
     #   - "https://www.phoronix.com/rss.php"
 
     # ── Persistent memory ────────────────────────────────────────────
-    # Lets the bot save/recall notes across restarts (SQLite-backed).
+    # Lets the bot save/recall notes across restarts.  Notes are stored
+    # in the same database the hub uses (MySQL / PostgreSQL / SQLite).
     # memory_enabled: true
-    # memory_file: "/data/bot_memory.db"  # path to SQLite database
 
 # =============================================================================
 # Connection Limits

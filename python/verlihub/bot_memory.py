@@ -1,169 +1,248 @@
 """
 Persistent memory for the hub security bot.
 
-Provides a lightweight SQLite-backed note store so the bot can save facts,
-observations, and reminders that survive restarts.  The bot accesses memory
-through LLM tool calls:
+Uses the application's shared database (MySQL / PostgreSQL / SQLite) via
+the ``BotNote`` SQLModel so there's no separate SQLite file to manage.
+
+The bot accesses memory through LLM tool calls:
 
   * ``save_note(topic, content)``  — create or update a note
   * ``recall_notes(query)``        — search notes by keyword
   * ``list_notes()``               — list all saved topics
   * ``delete_note(topic)``         — remove a note
 
-The database is a single file that can live next to the config or in a
-Docker volume.
+Every note records **when** it was saved and the bot's **mood** at that
+time, giving the LLM a sense of temporal context and emotional history.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-import sqlite3
-import threading
 from datetime import datetime, timezone
 from typing import Any
+
+from sqlmodel import select
 
 log = logging.getLogger("verlihub.bot_memory")
 
 
-class BotMemory:
-    """SQLite-backed persistent memory for the hub bot.
+def _relative_time(dt: datetime) -> str:
+    """Human-readable relative time string (e.g. '3 hours ago')."""
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    if months < 12:
+        return f"{months}mo ago"
+    years = days // 365
+    return f"{years}y ago"
 
-    Parameters
-    ----------
-    db_path:
-        Path to the SQLite database file.  Created if it doesn't exist.
-        Defaults to ``bot_memory.db`` in the current directory.
+
+class BotMemory:
+    """Database-backed persistent memory for the hub bot.
+
+    Uses the application's async database sessions (from
+    ``verlihub.models.database``) so notes are stored alongside all
+    other hub data — no separate SQLite file needed.
     """
 
-    def __init__(self, db_path: str = "bot_memory.db"):
-        self._db_path = db_path
-        self._lock = threading.Lock()
-        self._ensure_schema()
-        log.info("Bot memory initialised: %s", self._db_path)
+    def __init__(self, mood_fn: "Any | None" = None):
+        """
+        Parameters
+        ----------
+        mood_fn:
+            Optional callable that returns the current mood name
+            (e.g. ``mood_engine.get_mood().name``).  When provided the
+            mood is recorded alongside every saved note.
+        """
+        self._mood_fn = mood_fn
+        log.info("Bot memory initialised (application database)")
+
+    def _current_mood(self) -> str:
+        """Return the current mood name, or empty string."""
+        if self._mood_fn:
+            try:
+                return self._mood_fn()
+            except Exception:
+                pass
+        return ""
 
     # ── Public API (called from LLM tool handlers) ───────────────────
 
-    def save_note(self, topic: str, content: str) -> str:
+    async def save_note(self, topic: str, content: str) -> str:
         """Create or update a note.  Returns confirmation text."""
+        from verlihub.models import BotNote
+        from verlihub.models.database import get_async_session
+
         topic = topic.strip()
         content = content.strip()
         if not topic or not content:
             return "Error: topic and content are both required."
 
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock, self._connect() as conn:
-            existing = conn.execute(
-                "SELECT id FROM bot_notes WHERE topic = ?", (topic,)
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    "UPDATE bot_notes SET content = ?, updated_at = ? WHERE topic = ?",
-                    (content, now, topic),
-                )
-                return f"Updated note '{topic}'."
-            else:
-                conn.execute(
-                    "INSERT INTO bot_notes (topic, content, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (topic, content, now, now),
-                )
-                return f"Saved new note '{topic}'."
+        now = datetime.now(timezone.utc)
+        mood = self._current_mood()
 
-    def recall_notes(self, query: str) -> str:
+        try:
+            async with get_async_session() as session:
+                stmt = select(BotNote).where(BotNote.topic == topic)
+                result = await session.execute(stmt)
+                existing = result.scalars().first()
+
+                if existing:
+                    existing.content = content
+                    existing.mood = mood
+                    existing.updated_at = now
+                    session.add(existing)
+                    return f"Updated note '{topic}'."
+                else:
+                    note = BotNote(
+                        topic=topic,
+                        content=content,
+                        mood=mood,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    session.add(note)
+                    return f"Saved new note '{topic}'."
+        except Exception as exc:
+            log.exception("Failed to save note '%s'", topic)
+            return f"Error saving note: {exc}"
+
+    async def recall_notes(self, query: str) -> str:
         """Search notes by keyword (case-insensitive LIKE).
 
-        Returns matching notes as a formatted string, or a "no results"
-        message.
+        Returns matching notes with their content, relative timestamps,
+        and the mood the bot was in when the note was saved.
         """
+        from verlihub.models import BotNote
+        from verlihub.models.database import get_async_session
+
         query = query.strip()
         if not query:
             return "Error: query is required."
 
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT topic, content, updated_at FROM bot_notes "
-                "WHERE topic LIKE ? OR content LIKE ? "
-                "ORDER BY updated_at DESC LIMIT 20",
-                (f"%{query}%", f"%{query}%"),
-            ).fetchall()
+        try:
+            async with get_async_session() as session:
+                stmt = (
+                    select(BotNote)
+                    .where(
+                        BotNote.topic.contains(query)  # type: ignore[union-attr]
+                        | BotNote.content.contains(query)  # type: ignore[union-attr]
+                    )
+                    .order_by(BotNote.updated_at.desc())  # type: ignore[union-attr]
+                    .limit(20)
+                )
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
 
-        if not rows:
-            return f"No notes found matching '{query}'."
+            if not rows:
+                return f"No notes found matching '{query}'."
 
-        parts: list[str] = []
-        for topic, content, updated in rows:
-            parts.append(f"[{topic}] ({updated})\n{content}")
-        return "\n---\n".join(parts)
+            parts: list[str] = []
+            for note in rows:
+                age = _relative_time(note.updated_at)
+                mood_tag = f" [mood: {note.mood}]" if note.mood else ""
+                parts.append(f"[{note.topic}] (updated {age}{mood_tag})\n{note.content}")
+            return "\n---\n".join(parts)
+        except Exception as exc:
+            log.exception("Failed to recall notes for '%s'", query)
+            return f"Error searching notes: {exc}"
 
-    def list_notes(self) -> str:
-        """List all note topics with last-updated timestamps."""
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT topic, updated_at FROM bot_notes ORDER BY updated_at DESC"
-            ).fetchall()
+    async def list_notes(self) -> str:
+        """List all note topics with relative timestamps and moods."""
+        from verlihub.models import BotNote
+        from verlihub.models.database import get_async_session
 
-        if not rows:
-            return "No notes saved yet."
+        try:
+            async with get_async_session() as session:
+                stmt = select(BotNote).order_by(BotNote.updated_at.desc())  # type: ignore[union-attr]
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
 
-        lines = [f"- {topic} (updated {updated})" for topic, updated in rows]
-        return f"{len(lines)} notes:\n" + "\n".join(lines)
+            if not rows:
+                return "No notes saved yet."
 
-    def delete_note(self, topic: str) -> str:
+            lines: list[str] = []
+            for note in rows:
+                age = _relative_time(note.updated_at)
+                mood_tag = f" [{note.mood}]" if note.mood else ""
+                lines.append(f"- {note.topic} (updated {age}{mood_tag})")
+            return f"{len(lines)} notes:\n" + "\n".join(lines)
+        except Exception as exc:
+            log.exception("Failed to list notes")
+            return f"Error listing notes: {exc}"
+
+    async def delete_note(self, topic: str) -> str:
         """Delete a note by topic."""
+        from verlihub.models import BotNote
+        from verlihub.models.database import get_async_session
+
         topic = topic.strip()
         if not topic:
             return "Error: topic is required."
 
-        with self._lock, self._connect() as conn:
-            cur = conn.execute("DELETE FROM bot_notes WHERE topic = ?", (topic,))
-        if cur.rowcount > 0:
-            return f"Deleted note '{topic}'."
-        return f"No note found with topic '{topic}'."
+        try:
+            async with get_async_session() as session:
+                stmt = select(BotNote).where(BotNote.topic == topic)
+                result = await session.execute(stmt)
+                note = result.scalars().first()
+                if note:
+                    await session.delete(note)
+                    return f"Deleted note '{topic}'."
+                return f"No note found with topic '{topic}'."
+        except Exception as exc:
+            log.exception("Failed to delete note '%s'", topic)
+            return f"Error deleting note: {exc}"
 
-    def get_context_summary(self, max_notes: int = 10) -> str:
+    async def get_context_summary(self, max_notes: int = 10) -> str:
         """Return a compact summary of recent notes for prompt injection.
 
-        This gives the LLM awareness of what it has stored without
-        consuming too many tokens.
+        Includes relative timestamps and mood tags so the LLM has a
+        sense of time and its own emotional history.
         """
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT topic, substr(content, 1, 120), updated_at "
-                "FROM bot_notes ORDER BY updated_at DESC LIMIT ?",
-                (max_notes,),
-            ).fetchall()
+        from verlihub.models import BotNote
+        from verlihub.models.database import get_async_session
 
-        if not rows:
-            return ""
-
-        lines = [f"- {topic}: {snippet}…" for topic, snippet, _ in rows]
-        return (
-            "You have the following notes saved in your memory:\n"
-            + "\n".join(lines)
-            + "\nUse the recall_notes tool to look up full details."
-        )
-
-    # ── Internals ────────────────────────────────────────────────────
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
-
-    def _ensure_schema(self) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS bot_notes (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    topic      TEXT    NOT NULL UNIQUE,
-                    content    TEXT    NOT NULL,
-                    created_at TEXT    NOT NULL,
-                    updated_at TEXT    NOT NULL
+        try:
+            async with get_async_session() as session:
+                stmt = (
+                    select(BotNote)
+                    .order_by(BotNote.updated_at.desc())  # type: ignore[union-attr]
+                    .limit(max_notes)
                 )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_notes_topic
-                ON bot_notes(topic)
-            """)
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+
+            if not rows:
+                return ""
+
+            lines: list[str] = []
+            for note in rows:
+                age = _relative_time(note.updated_at)
+                snippet = note.content[:120]
+                mood_tag = f" [{note.mood}]" if note.mood else ""
+                lines.append(f"- {note.topic}: {snippet}… ({age}{mood_tag})")
+
+            return (
+                "You have the following notes saved in your memory:\n"
+                + "\n".join(lines)
+                + "\nUse the recall_notes tool to look up full details."
+            )
+        except Exception as exc:
+            log.debug("Failed to get context summary: %s", exc)
+            return ""
 
 
 # ── Tool definitions (OpenAI function-calling format) ────────────────
@@ -179,7 +258,8 @@ def build_memory_tools() -> list[dict[str, Any]]:
                     "Save a note to your persistent memory.  Use this to "
                     "remember facts, user preferences, things you've learned, "
                     "or anything you want to recall later.  If a note with "
-                    "the same topic already exists it will be updated."
+                    "the same topic already exists it will be updated.  "
+                    "Your current mood is automatically recorded with the note."
                 ),
                 "parameters": {
                     "type": "object",
@@ -203,7 +283,9 @@ def build_memory_tools() -> list[dict[str, Any]]:
                 "name": "recall_notes",
                 "description": (
                     "Search your persistent memory for notes matching a "
-                    "keyword.  Returns matching notes with their content."
+                    "keyword.  Returns matching notes with their content, "
+                    "how long ago they were saved, and the mood you were "
+                    "in when you wrote them."
                 ),
                 "parameters": {
                     "type": "object",
@@ -222,7 +304,9 @@ def build_memory_tools() -> list[dict[str, Any]]:
             "function": {
                 "name": "list_notes",
                 "description": (
-                    "List all topics saved in your persistent memory."
+                    "List all topics saved in your persistent memory, "
+                    "showing when each was last updated and what mood "
+                    "you were in."
                 ),
                 "parameters": {
                     "type": "object",
@@ -258,11 +342,11 @@ async def execute_memory_tool(
     """Execute a memory tool call.  Returns result string, or None if
     *fn_name* is not a memory tool."""
     if fn_name == "save_note":
-        return memory.save_note(fn_args.get("topic", ""), fn_args.get("content", ""))
+        return await memory.save_note(fn_args.get("topic", ""), fn_args.get("content", ""))
     elif fn_name == "recall_notes":
-        return memory.recall_notes(fn_args.get("query", ""))
+        return await memory.recall_notes(fn_args.get("query", ""))
     elif fn_name == "list_notes":
-        return memory.list_notes()
+        return await memory.list_notes()
     elif fn_name == "delete_note":
-        return memory.delete_note(fn_args.get("topic", ""))
+        return await memory.delete_note(fn_args.get("topic", ""))
     return None  # not a memory tool

@@ -42,6 +42,7 @@ import logging
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -56,15 +57,18 @@ log = logging.getLogger("verlihub.bot_chat")
 # System prompts
 #
 # Placeholders:
-#   {personality}  — static persona from BotBehaviorConfig
-#   {mood}         — dynamic mood modifier from BotMoodEngine
-#   {memory}       — summary of stored notes from BotMemory
+#   {personality}   — static persona from BotBehaviorConfig
+#   {mood}          — dynamic mood modifier from BotMoodEngine
+#   {memory}        — summary of stored notes from BotMemory
+#   {current_time}  — current UTC date/time for temporal awareness
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT_BOT_ADMIN = """\
 You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  You are \
 chatting privately with {user_nick} (class {user_class}), who has administrator \
 privileges.
+
+Current date and time (UTC): {current_time}
 
 You have access to tools that query and control the live hub. Use them to \
 answer questions accurately — never guess hub state, always check via tools.
@@ -91,6 +95,8 @@ SYSTEM_PROMPT_BOT_USER = """\
 You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  You are \
 chatting privately with {user_nick} (class {user_class}).
 
+Current date and time (UTC): {current_time}
+
 You have access to read-only tools that show public hub information.  Use \
 them to answer questions accurately.
 
@@ -110,6 +116,8 @@ SYSTEM_PROMPT_BOT_PUBLIC = """\
 You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  A user \
 named {user_nick} is talking to you in the main chat.  All users can see \
 this conversation.
+
+Current date and time (UTC): {current_time}
 
 You have NO tools and NO access to hub internals.  You can only hold a \
 friendly, general-purpose conversation.
@@ -192,6 +200,7 @@ class BotChatSession:
             user_class=user_class,
             personality=personality_text,
             max_chat_length=max_chat_length,
+            current_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             mood="",
             memory="",
         )
@@ -230,11 +239,11 @@ class BotChatSession:
         self._base_system_prompt = prompt
         self.messages = [{"role": "system", "content": prompt}]
 
-    def _refresh_system_prompt(self) -> None:
-        """Re-inject dynamic mood and memory context into the system prompt.
+    async def _refresh_system_prompt(self) -> None:
+        """Re-inject dynamic mood, memory, and current time into the prompt.
 
         Called at the start of every ``chat()`` turn so the LLM sees the
-        bot's current emotional state and memory summary.
+        bot's current emotional state, memory summary, and time of day.
         """
         mood_text = ""
         if self.mood_engine:
@@ -245,19 +254,26 @@ class BotChatSession:
         memory_text = ""
         if self.memory:
             try:
-                ms = self.memory.get_context_summary()
+                ms = await self.memory.get_context_summary()
                 if ms:
                     memory_text = f"\n{ms}\n"
             except Exception:
                 pass
 
-        # Replace the {mood} and {memory} placeholders in the base prompt
-        if "{mood}" in self._base_system_prompt:
-            updated = self._base_system_prompt.replace("{mood}", mood_text)
+        # Update current time
+        current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        # Replace the {mood}, {memory}, and {current_time} placeholders
+        updated = self._base_system_prompt
+        if "{mood}" in updated:
+            updated = updated.replace("{mood}", mood_text)
             updated = updated.replace("{memory}", memory_text)
         else:
             # Fallback: append to base prompt
-            updated = self._base_system_prompt + mood_text + memory_text
+            updated = updated + mood_text + memory_text
+
+        if "{current_time}" in updated:
+            updated = updated.replace("{current_time}", current_time)
 
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0]["content"] = updated
@@ -300,7 +316,7 @@ class BotChatSession:
         from verlihub.api.auth import TokenData
 
         # ── Refresh dynamic context in the system prompt ──
-        self._refresh_system_prompt()
+        await self._refresh_system_prompt()
 
         global _endpoint_supports_tools_bot
         # Use the endpoint specified in bot behavior config, falling back to default
@@ -509,18 +525,34 @@ class BotChatHandler:
                 from verlihub.bot_mood import BotMoodEngine
                 self._mood_engine = BotMoodEngine(
                     interaction_window=self.behavior.mood_window,
+                    user_history_window=self.behavior.mood_user_history,
+                    low_interaction_threshold=self.behavior.mood_low_interaction,
+                    high_interaction_threshold=self.behavior.mood_high_interaction,
+                    low_user_ratio=self.behavior.mood_low_user_ratio,
+                    high_user_ratio=self.behavior.mood_high_user_ratio,
                 )
-                log.info("Bot mood engine enabled (window=%ds)", self.behavior.mood_window)
+                log.info(
+                    "Bot mood engine enabled (window=%ds, thresholds=%.1f/%.1f, user_ratio=%.2f/%.2f)",
+                    self.behavior.mood_window,
+                    self.behavior.mood_low_interaction,
+                    self.behavior.mood_high_interaction,
+                    self.behavior.mood_low_user_ratio,
+                    self.behavior.mood_high_user_ratio,
+                )
             except Exception:
                 log.warning("Failed to initialise mood engine", exc_info=True)
 
-        # Instantiate persistent memory if enabled
+        # Instantiate persistent memory (uses the shared application database)
         if self.behavior and self.behavior.memory_enabled:
             try:
                 from verlihub.bot_memory import BotMemory
-                db_path = self.behavior.memory_file or "bot_memory.db"
-                self._memory = BotMemory(db_path=db_path)
-                log.info("Bot memory enabled (db=%s)", db_path)
+                mood_fn = (
+                    (lambda: self._mood_engine.get_mood().name)
+                    if self._mood_engine
+                    else None
+                )
+                self._memory = BotMemory(mood_fn=mood_fn)
+                log.info("Bot memory enabled (shared database)")
             except Exception:
                 log.warning("Failed to initialise bot memory", exc_info=True)
 

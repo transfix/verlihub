@@ -295,6 +295,22 @@ class BotBehaviorConfig:
     # Sliding window (seconds) for measuring interaction rate.
     mood_window: int = 3600
 
+    # Interaction rate thresholds (messages per hour) that determine
+    # whether activity is considered low or high.
+    mood_low_interaction: float = 2.0
+    mood_high_interaction: float = 10.0
+
+    # User-count ratio thresholds.  The engine compares the current
+    # user count to the 24-hour rolling average.  Ratios below
+    # ``mood_low_user_ratio`` count as "few users"; above
+    # ``mood_high_user_ratio`` as "many users".
+    mood_low_user_ratio: float = 0.5
+    mood_high_user_ratio: float = 1.5
+
+    # How far back (seconds) to keep user-count samples for the
+    # rolling average.  Default 86 400 = 24 hours.
+    mood_user_history: int = 86400
+
     # ── Web access ──────────────────────────────────────────────────
     # Give the bot web_search / fetch_webpage / read_rss tools.
     web_enabled: bool = False
@@ -303,11 +319,10 @@ class BotBehaviorConfig:
     rss_feeds: list[str] = field(default_factory=list)
 
     # ── Persistent memory ───────────────────────────────────────────
-    # Let the bot save and recall notes across sessions (SQLite).
+    # Let the bot save and recall notes across sessions.  Notes are
+    # stored in the shared application database (MySQL / PostgreSQL /
+    # SQLite — whichever the hub is configured to use).
     memory_enabled: bool = False
-
-    # Path to the SQLite database file.  Blank = "bot_memory.db" in cwd.
-    memory_file: str = ""
 
 
 @dataclass
@@ -663,10 +678,14 @@ class VerlihubConfig:
                     max_chat_length=int(beh.get("max_chat_length", config.bots.behavior.max_chat_length)),
                     mood_enabled=beh.get("mood_enabled", config.bots.behavior.mood_enabled),
                     mood_window=int(beh.get("mood_window", config.bots.behavior.mood_window)),
+                    mood_low_interaction=float(beh.get("mood_low_interaction", config.bots.behavior.mood_low_interaction)),
+                    mood_high_interaction=float(beh.get("mood_high_interaction", config.bots.behavior.mood_high_interaction)),
+                    mood_low_user_ratio=float(beh.get("mood_low_user_ratio", config.bots.behavior.mood_low_user_ratio)),
+                    mood_high_user_ratio=float(beh.get("mood_high_user_ratio", config.bots.behavior.mood_high_user_ratio)),
+                    mood_user_history=int(beh.get("mood_user_history", config.bots.behavior.mood_user_history)),
                     web_enabled=beh.get("web_enabled", config.bots.behavior.web_enabled),
                     rss_feeds=beh.get("rss_feeds", config.bots.behavior.rss_feeds),
                     memory_enabled=beh.get("memory_enabled", config.bots.behavior.memory_enabled),
-                    memory_file=beh.get("memory_file", config.bots.behavior.memory_file),
                 )
         
         # Plugins

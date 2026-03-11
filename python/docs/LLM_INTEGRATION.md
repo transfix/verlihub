@@ -285,6 +285,150 @@ so users can have multi-turn conversations with context.
 
 Sessions are held in memory and reset when the hub restarts.
 
+### Dynamic Mood Engine
+
+When `mood_enabled: true`, the bot's personality shifts dynamically based
+on real-time hub activity. Two signals are tracked:
+
+1. **Interaction rate** — messages the bot handles per hour (sliding window).
+2. **User-count ratio** — current online users vs. a 24-hour rolling average.
+
+These two axes combine into a 3×3 mood matrix:
+
+|                   | Low Interaction | Normal | High Interaction |
+|-------------------|-----------------|--------|------------------|
+| **Low Users**     | lonely 😔       | melancholic 🌧️ | wistful 🥹 |
+| **Normal Users**  | bored 😐        | neutral 🙂 | cheerful 😊 |
+| **High Users**    | curious 🤔      | happy 😄 | ecstatic 🤩 |
+
+Each mood injects a short personality modifier into the system prompt, so
+the LLM naturally adopts the emotional tone without explicit instructions.
+The **neutral** mood adds nothing — it's the default personality.
+
+**Mood is global.** A single `BotMoodEngine` instance lives on
+`BotChatHandler` and is shared by all sessions (PM and main-chat). When
+the mood changes, *every* user's next message sees the updated prompt.
+
+#### Configuration
+
+All mood thresholds are configurable in `production.yml`:
+
+```yaml
+bots:
+  behavior:
+    mood_enabled: true
+    mood_window: 3600            # interaction tracking window (seconds)
+    mood_low_interaction: 2.0    # msgs/hr below this → low activity
+    mood_high_interaction: 10.0  # msgs/hr above this → high activity
+    mood_low_user_ratio: 0.5     # current/avg below this → few users
+    mood_high_user_ratio: 1.5    # current/avg above this → many users
+    mood_user_history: 86400     # rolling average window (seconds, 24h)
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `mood_enabled` | `false` | Enable/disable the mood engine |
+| `mood_window` | `3600` | Sliding window (seconds) for counting interactions |
+| `mood_low_interaction` | `2.0` | Messages/hour below this = "low activity" |
+| `mood_high_interaction` | `10.0` | Messages/hour above this = "high activity" |
+| `mood_low_user_ratio` | `0.5` | Current/average user ratio below this = "few users" |
+| `mood_high_user_ratio` | `1.5` | Current/average user ratio above this = "many users" |
+| `mood_user_history` | `86400` | How far back (seconds) to keep user-count samples |
+
+### Web Access (Search, Fetch, RSS)
+
+When `web_enabled: true`, the bot gains three LLM tool calls:
+
+| Tool | Description |
+|------|-------------|
+| `web_search(query)` | Search via DuckDuckGo (instant answers + HTML lite scraping). No API key needed. |
+| `fetch_webpage(url)` | Fetch a URL and extract readable plain text (HTML stripped). |
+| `read_rss(url)` | Parse an RSS 2.0 or Atom feed and return recent headlines with summaries. |
+
+The LLM decides when to use these tools based on the conversation. For
+example, if a user asks "what's in the news?", the bot will call
+`read_rss` on its configured feeds.
+
+#### RSS Feeds
+
+Configure RSS/Atom feed URLs and the bot can proactively check them:
+
+```yaml
+bots:
+  behavior:
+    web_enabled: true
+    rss_feeds:
+      - "https://torrentfreak.com/feed/"
+      - "https://www.phoronix.com/rss.php"
+```
+
+When the bot generates a proactive message (see `proactive_interval`),
+it may choose to pull a headline from one of these feeds and share it
+in main chat. Users can also ask the bot to check feeds explicitly.
+
+### Persistent Memory (Notes)
+
+When `memory_enabled: true`, the bot can save and recall notes across
+restarts using four LLM tool calls:
+
+| Tool | Description |
+|------|-------------|
+| `save_note(topic, content)` | Create or update a note. The current mood is recorded automatically. |
+| `recall_notes(query)` | Search notes by keyword (case-insensitive). Returns content, timestamps, and mood tags. |
+| `list_notes()` | List all saved topics with relative timestamps and mood tags. |
+| `delete_note(topic)` | Remove a note by topic. |
+
+#### Database Storage
+
+Notes are stored in the **same database** the hub uses (MySQL, PostgreSQL,
+or SQLite — whichever is configured in `database:`). The `bot_notes` table
+is created automatically alongside all other hub tables. There is **no
+separate SQLite file** to manage.
+
+The `BotNote` model has these fields:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | int | Auto-increment primary key |
+| `topic` | varchar(255) | Note topic/title (indexed) |
+| `content` | varchar(4096) | Note body |
+| `mood` | varchar(64) | Bot's mood when the note was saved (e.g. "cheerful") |
+| `created_at` | datetime (UTC) | When the note was first created |
+| `updated_at` | datetime (UTC) | When the note was last updated |
+
+#### How Memory Affects Prompts
+
+At the start of every conversation turn, the system prompt is refreshed
+with a compact summary of the bot's most recent notes (up to 10). This
+gives the LLM awareness of what it has stored without overwhelming the
+context window. The summary includes:
+
+- Note topic and a truncated snippet of content
+- Relative timestamp ("3h ago", "2d ago")
+- Mood tag when the note was saved
+
+The LLM can then use `recall_notes` to look up full details if needed.
+
+#### Mood Association
+
+Every note records the bot's mood at save time. When recalling or listing
+notes, the mood tag is included — so the bot (and the LLM) can see how
+it was feeling when it saved that information. This creates an emotional
+history that makes the bot feel more self-aware.
+
+### Time Awareness
+
+The bot is aware of the current time. Every system prompt includes:
+
+```
+Current date and time (UTC): 2025-01-15 14:30 UTC
+```
+
+This is refreshed at the start of every conversation turn. Combined with
+the relative timestamps on notes ("saved 3h ago"), the bot has a genuine
+sense of time passing — it knows what day it is, can reason about
+recency, and understands how long ago it saved particular information.
+
 ### Running Integration Tests
 
 The bot chat integration tests require Docker with Ollama:

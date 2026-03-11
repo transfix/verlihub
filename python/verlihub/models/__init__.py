@@ -439,3 +439,29 @@ class HubListBlockCreate(SQLModel):
     value: str = Field(max_length=512)
     reason: str = Field(default="", max_length=1024)
     expires_at: Optional[datetime] = None
+
+
+# =============================================================================
+# Bot Memory (persistent notes for LLM bot)
+# =============================================================================
+
+
+class BotNoteBase(SQLModel):
+    """Base model for bot memory notes."""
+    topic: str = Field(max_length=255, index=True)
+    content: str = Field(default="", max_length=4096)
+    mood: str = Field(default="", max_length=64)  # mood name when note was saved
+    created_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    updated_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+
+
+class BotNote(BotNoteBase, table=True):
+    """Persistent note stored by the LLM bot."""
+    __tablename__ = "bot_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class BotNoteRead(BotNoteBase):
+    """Schema for reading a bot note."""
+    id: int

@@ -779,6 +779,29 @@ sg docker -c "./run_production.sh --restart"    # restart
 | `mcp.min_class` | `3` | Minimum class for MCP access |
 | `mcp.admin_class` | `5` | Minimum class for admin MCP tools |
 
+#### Bot Behavior
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `bots.behavior.endpoint` | `""` | LLM endpoint name for the bot (empty = default) |
+| `bots.behavior.personality` | `""` | Custom personality injected into system prompts |
+| `bots.behavior.chat_mode` | `"direct"` | How bot responds in main chat (`direct` / `mention` / `keyword`) |
+| `bots.behavior.triggers` | `[]` | Extra keywords that trigger responses (when `chat_mode: keyword`) |
+| `bots.behavior.proactive_interval` | `0` | Seconds between proactive messages (0 = disabled, ±30% jitter) |
+| `bots.behavior.proactive_prompts` | `[]` | Prompts the bot can choose from for proactive messages |
+| `bots.behavior.thinking_interval` | `15` | Seconds between "thinking..." feedback in PM sessions |
+| `bots.behavior.max_chat_length` | `400` | Max characters for main-chat replies |
+| `bots.behavior.mood_enabled` | `false` | Enable dynamic mood engine |
+| `bots.behavior.mood_window` | `3600` | Interaction tracking window in seconds |
+| `bots.behavior.mood_low_interaction` | `2.0` | Msgs/hr below this = "low activity" |
+| `bots.behavior.mood_high_interaction` | `10.0` | Msgs/hr above this = "high activity" |
+| `bots.behavior.mood_low_user_ratio` | `0.5` | Current/avg users below this = "few users" |
+| `bots.behavior.mood_high_user_ratio` | `1.5` | Current/avg users above this = "many users" |
+| `bots.behavior.mood_user_history` | `86400` | Rolling average window for user counts (seconds) |
+| `bots.behavior.web_enabled` | `false` | Give bot web search / fetch / RSS tools |
+| `bots.behavior.rss_feeds` | `[]` | RSS/Atom feed URLs for the bot to read |
+| `bots.behavior.memory_enabled` | `false` | Enable persistent memory (notes in shared database) |
+
 ### Tips
 
 - **No GPU?** Use `qwen2.5:0.5b` (~400 MB) with the Ollama sidecar, or point

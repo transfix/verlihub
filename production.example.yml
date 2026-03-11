@@ -116,6 +116,26 @@ bots:
     # Max response length (characters) for main-chat replies
     max_chat_length: 400
 
+    # ── Mood engine ──────────────────────────────────────────────────
+    # Dynamically adjusts the bot's personality based on hub activity:
+    # user count relative to 24-hour average + recent interaction rate.
+    # Mood states range from "lonely" (quiet hub) to "ecstatic" (busy hub).
+    # mood_enabled: true
+    # mood_window: 3600  # interaction tracking window in seconds
+
+    # ── Web access ───────────────────────────────────────────────────
+    # Gives the bot tools to search the web, fetch pages, and read RSS
+    # feeds.  Uses DuckDuckGo (no API key required).
+    # web_enabled: true
+    # rss_feeds:
+    #   - "https://torrentfreak.com/feed/"
+    #   - "https://www.phoronix.com/rss.php"
+
+    # ── Persistent memory ────────────────────────────────────────────
+    # Lets the bot save/recall notes across restarts (SQLite-backed).
+    # memory_enabled: true
+    # memory_file: "/data/bot_memory.db"  # path to SQLite database
+
 # =============================================================================
 # Connection Limits
 # =============================================================================

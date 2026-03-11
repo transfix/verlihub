@@ -287,6 +287,28 @@ class BotBehaviorConfig:
     # Keeps the bot from flooding the chat room.
     max_chat_length: int = 400
 
+    # ── Dynamic mood ────────────────────────────────────────────────
+    # When enabled the bot's personality shifts with hub activity:
+    # fewer users / less chat → lonely/anxious; packed hub → ecstatic.
+    mood_enabled: bool = False
+
+    # Sliding window (seconds) for measuring interaction rate.
+    mood_window: int = 3600
+
+    # ── Web access ──────────────────────────────────────────────────
+    # Give the bot web_search / fetch_webpage / read_rss tools.
+    web_enabled: bool = False
+
+    # RSS / Atom feed URLs the bot can proactively check.
+    rss_feeds: list[str] = field(default_factory=list)
+
+    # ── Persistent memory ───────────────────────────────────────────
+    # Let the bot save and recall notes across sessions (SQLite).
+    memory_enabled: bool = False
+
+    # Path to the SQLite database file.  Blank = "bot_memory.db" in cwd.
+    memory_file: str = ""
+
 
 @dataclass
 class BotsConfig:
@@ -639,6 +661,12 @@ class VerlihubConfig:
                     proactive_prompts=beh.get("proactive_prompts", config.bots.behavior.proactive_prompts),
                     thinking_interval=int(beh.get("thinking_interval", config.bots.behavior.thinking_interval)),
                     max_chat_length=int(beh.get("max_chat_length", config.bots.behavior.max_chat_length)),
+                    mood_enabled=beh.get("mood_enabled", config.bots.behavior.mood_enabled),
+                    mood_window=int(beh.get("mood_window", config.bots.behavior.mood_window)),
+                    web_enabled=beh.get("web_enabled", config.bots.behavior.web_enabled),
+                    rss_feeds=beh.get("rss_feeds", config.bots.behavior.rss_feeds),
+                    memory_enabled=beh.get("memory_enabled", config.bots.behavior.memory_enabled),
+                    memory_file=beh.get("memory_file", config.bots.behavior.memory_file),
                 )
         
         # Plugins
@@ -1110,6 +1138,9 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "bots.behavior.chat_mode": ("config", "bot_chat_mode"),
     "bots.behavior.thinking_interval": ("config", "bot_thinking_interval"),
     "bots.behavior.max_chat_length": ("config", "bot_max_chat_length"),
+    "bots.behavior.mood_enabled": ("config", "bot_mood_enabled"),
+    "bots.behavior.web_enabled": ("config", "bot_web_enabled"),
+    "bots.behavior.memory_enabled": ("config", "bot_memory_enabled"),
     "hub.send_user_info": ("config", "send_user_info"),
     "hub.user_info_as_pm": ("config", "user_info_as_pm"),
 }

@@ -109,7 +109,7 @@ RUN python3 -m venv /opt/verlihub-venv && \
     /opt/verlihub-venv/bin/pip install --upgrade pip && \
     if [ "$PYTHON_MODE" = "single" ]; then \
         echo "Installing FastAPI dependencies for single-interpreter mode"; \
-        /opt/verlihub-venv/bin/pip install fastapi uvicorn requests; \
+        /opt/verlihub-venv/bin/pip install fastapi uvicorn requests httpx openai pyyaml; \
     else \
         echo "Minimal venv for multi-interpreter mode (script isolation)"; \
     fi

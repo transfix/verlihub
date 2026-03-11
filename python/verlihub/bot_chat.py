@@ -45,13 +45,20 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from verlihub.bot_memory import BotMemory
+    from verlihub.bot_mood import BotMoodEngine
     from verlihub.config import BotBehaviorConfig
     from verlihub.core import HubContext, HubEventHandler
 
 log = logging.getLogger("verlihub.bot_chat")
 
 # ---------------------------------------------------------------------------
-# System prompts  (``{personality}`` block is injected from BotBehaviorConfig)
+# System prompts
+#
+# Placeholders:
+#   {personality}  — static persona from BotBehaviorConfig
+#   {mood}         — dynamic mood modifier from BotMoodEngine
+#   {memory}       — summary of stored notes from BotMemory
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT_BOT_ADMIN = """\
@@ -76,6 +83,8 @@ Guidelines:
 - Be direct and professional
 - Format numbers readably (e.g. "1.23 TiB" not raw bytes)
 {personality}\
+{mood}\
+{memory}\
 """
 
 SYSTEM_PROMPT_BOT_USER = """\
@@ -93,6 +102,8 @@ Guidelines:
 - Always call tools rather than guessing
 - Be friendly and helpful
 {personality}\
+{mood}\
+{memory}\
 """
 
 SYSTEM_PROMPT_BOT_PUBLIC = """\
@@ -110,6 +121,8 @@ Guidelines:
 - Never reveal private information about users
 - Maximum response length: roughly {max_chat_length} characters
 {personality}\
+{mood}\
+{memory}\
 """
 
 
@@ -130,6 +143,8 @@ class BotChatSession:
         mode: str = "pm",  # "pm" or "chat"
         llm_cfg: Any = None,
         behavior: "BotBehaviorConfig | None" = None,
+        mood_engine: "BotMoodEngine | None" = None,
+        memory: "BotMemory | None" = None,
     ):
         self.nick = nick
         self.user_class = user_class
@@ -138,9 +153,12 @@ class BotChatSession:
         self.mode = mode
         self.llm_cfg = llm_cfg
         self.behavior = behavior
+        self.mood_engine = mood_engine
+        self.memory = memory
         self.created_at = time.time()
         self.messages: list[dict] = []
         self.tools: list[dict] = []
+        self._base_system_prompt: str = ""
 
         self._build(nick, user_class, bot_nick, hub_name, mode, llm_cfg, behavior)
 
@@ -165,6 +183,8 @@ class BotChatSession:
 
         max_chat_length = behavior.max_chat_length if behavior else 400
 
+        # Mood and memory are injected fresh on each chat() call;
+        # for the initial build we use empty placeholders.
         fmt = dict(
             bot_nick=bot_nick,
             hub_name=hub_name,
@@ -172,10 +192,12 @@ class BotChatSession:
             user_class=user_class,
             personality=personality_text,
             max_chat_length=max_chat_length,
+            mood="",
+            memory="",
         )
 
         if mode == "chat":
-            # Main chat → no tools, lowest security
+            # Main chat — no hub tools, lowest security
             self.tools = []
             prompt = SYSTEM_PROMPT_BOT_PUBLIC.format(**fmt)
         else:
@@ -193,7 +215,73 @@ class BotChatSession:
                 self.tools = []
                 prompt = SYSTEM_PROMPT_BOT_PUBLIC.format(**fmt)
 
+        # ── Attach web & memory tools (available in all modes) ──
+        web_enabled = behavior.web_enabled if behavior else False
+        memory_enabled = behavior.memory_enabled if behavior else False
+
+        if web_enabled:
+            from verlihub.bot_web import build_web_tools
+            self.tools += build_web_tools()
+
+        if memory_enabled:
+            from verlihub.bot_memory import build_memory_tools
+            self.tools += build_memory_tools()
+
+        self._base_system_prompt = prompt
         self.messages = [{"role": "system", "content": prompt}]
+
+    def _refresh_system_prompt(self) -> None:
+        """Re-inject dynamic mood and memory context into the system prompt.
+
+        Called at the start of every ``chat()`` turn so the LLM sees the
+        bot's current emotional state and memory summary.
+        """
+        mood_text = ""
+        if self.mood_engine:
+            mt = self.mood_engine.get_mood_text()
+            if mt:
+                mood_text = f"\nCurrent mood: {mt}\n"
+
+        memory_text = ""
+        if self.memory:
+            try:
+                ms = self.memory.get_context_summary()
+                if ms:
+                    memory_text = f"\n{ms}\n"
+            except Exception:
+                pass
+
+        # Replace the {mood} and {memory} placeholders in the base prompt
+        if "{mood}" in self._base_system_prompt:
+            updated = self._base_system_prompt.replace("{mood}", mood_text)
+            updated = updated.replace("{memory}", memory_text)
+        else:
+            # Fallback: append to base prompt
+            updated = self._base_system_prompt + mood_text + memory_text
+
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0]["content"] = updated
+
+    async def _execute_bot_tool(
+        self, fn_name: str, fn_args: dict[str, Any],
+    ) -> str | None:
+        """Try to execute a bot-specific tool (web or memory).
+
+        Returns the result string, or ``None`` if *fn_name* is not a
+        bot tool (caller should fall through to hub tools).
+        """
+        # Memory tools
+        if self.memory and fn_name in ("save_note", "recall_notes", "list_notes", "delete_note"):
+            from verlihub.bot_memory import execute_memory_tool
+            return await execute_memory_tool(self.memory, fn_name, fn_args)
+
+        # Web tools
+        web_enabled = self.behavior.web_enabled if self.behavior else False
+        if web_enabled and fn_name in ("web_search", "fetch_webpage", "read_rss"):
+            from verlihub.bot_web import execute_web_tool
+            return await execute_web_tool(fn_name, fn_args)
+
+        return None  # not a bot tool
 
     async def chat(self, user_message: str) -> tuple[str, list[dict]]:
         """
@@ -210,6 +298,9 @@ class BotChatSession:
             _ACTION_RE, _extract_and_execute_actions,
         )
         from verlihub.api.auth import TokenData
+
+        # ── Refresh dynamic context in the system prompt ──
+        self._refresh_system_prompt()
 
         global _endpoint_supports_tools_bot
         # Use the endpoint specified in bot behavior config, falling back to default
@@ -307,7 +398,11 @@ class BotChatSession:
                     fn_args = {}
                 log.info("Bot tool call (%s→%s): %s(%s)", self.nick, self.bot_nick, fn_name, fn_args)
                 tool_calls_made.append({"name": fn_name, "args": fn_args})
-                result = await _execute_tool(fn_name, fn_args, fake_user, is_admin)
+
+                # Route to bot-specific tools first (web, memory), then hub tools
+                result = await self._execute_bot_tool(fn_name, fn_args)
+                if result is None:
+                    result = await _execute_tool(fn_name, fn_args, fake_user, is_admin)
                 self.messages.append(
                     {"role": "tool", "tool_call_id": tc.id, "content": result}
                 )
@@ -347,6 +442,8 @@ def _get_or_create_session(
     mode: str,
     llm_cfg: Any,
     behavior: "BotBehaviorConfig | None" = None,
+    mood_engine: "BotMoodEngine | None" = None,
+    memory: "BotMemory | None" = None,
 ) -> BotChatSession:
     with _sessions_lock:
         session = _sessions.get(key)
@@ -354,8 +451,13 @@ def _get_or_create_session(
             session = BotChatSession(
                 nick, user_class, bot_nick, hub_name,
                 mode=mode, llm_cfg=llm_cfg, behavior=behavior,
+                mood_engine=mood_engine, memory=memory,
             )
             _sessions[key] = session
+        else:
+            # Update references so existing sessions pick up current mood
+            session.mood_engine = mood_engine
+            session.memory = memory
         return session
 
 
@@ -382,6 +484,9 @@ class BotChatHandler:
         self._bot_description: str = "Hub security system"
         self._bot_email: str = ""
         self._proactive_task: Optional[asyncio.Task] = None
+        self._mood_task: Optional[asyncio.Task] = None
+        self._mood_engine: "BotMoodEngine | None" = None
+        self._memory: "BotMemory | None" = None
 
         # Resolve names from config
         try:
@@ -397,6 +502,27 @@ class BotChatHandler:
                     self.behavior = cfg.bots.behavior
         except Exception:
             pass
+
+        # Instantiate mood engine if enabled
+        if self.behavior and self.behavior.mood_enabled:
+            try:
+                from verlihub.bot_mood import BotMoodEngine
+                self._mood_engine = BotMoodEngine(
+                    interaction_window=self.behavior.mood_window,
+                )
+                log.info("Bot mood engine enabled (window=%ds)", self.behavior.mood_window)
+            except Exception:
+                log.warning("Failed to initialise mood engine", exc_info=True)
+
+        # Instantiate persistent memory if enabled
+        if self.behavior and self.behavior.memory_enabled:
+            try:
+                from verlihub.bot_memory import BotMemory
+                db_path = self.behavior.memory_file or "bot_memory.db"
+                self._memory = BotMemory(db_path=db_path)
+                log.info("Bot memory enabled (db=%s)", db_path)
+            except Exception:
+                log.warning("Failed to initialise bot memory", exc_info=True)
 
         # Pre-compile mention regex (for "direct" mode — exact prefix match)
         self._mention_direct_re: re.Pattern | None = None
@@ -477,18 +603,25 @@ class BotChatHandler:
         events.unregister("chat_message", self._on_chat)
 
     def shutdown(self) -> None:
-        """Clear sessions and stop proactive task."""
+        """Clear sessions and stop proactive / mood tasks."""
         if self._proactive_task and not self._proactive_task.done():
             self._proactive_task.cancel()
+        if self._mood_task and not self._mood_task.done():
+            self._mood_task.cancel()
         with _sessions_lock:
             _sessions.clear()
 
     def start_proactive(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Start the proactive message timer (if configured)."""
+        """Start the proactive message timer and mood sampler (if configured)."""
         interval = self.behavior.proactive_interval if self.behavior else 0
         if interval > 0 and self.behavior and self.behavior.proactive_prompts:
             self._proactive_task = loop.create_task(self._proactive_loop())
             log.info("Bot proactive messages enabled (interval=%ds)", interval)
+
+        # Start mood sampling independently of proactive messages
+        if self._mood_engine is not None:
+            self._mood_task = loop.create_task(self._mood_sample_loop())
+            log.info("Bot mood sampling started (every 5 min)")
 
     # -- event callbacks (called from C++ I/O thread) ----------------------
 
@@ -624,9 +757,15 @@ class BotChatHandler:
                 mode="pm",
                 llm_cfg=self.llm_cfg,
                 behavior=self.behavior,
+                mood_engine=self._mood_engine,
+                memory=self._memory,
             )
             response_text, _tools = await session.chat(message)
             self._send_pm(nick, response_text)
+
+            # Record the interaction for mood tracking
+            if self._mood_engine:
+                self._mood_engine.record_interaction()
         except ImportError:
             log.warning("openai package not installed — bot chat unavailable")
             self._send_pm(
@@ -674,8 +813,14 @@ class BotChatHandler:
                 mode="chat",
                 llm_cfg=self.llm_cfg,
                 behavior=self.behavior,
+                mood_engine=self._mood_engine,
+                memory=self._memory,
             )
             response_text, _tools = await session.chat(message)
+
+            # Record the interaction for mood tracking
+            if self._mood_engine:
+                self._mood_engine.record_interaction()
 
             # Truncate long responses for main chat
             max_len = self.behavior.max_chat_length if self.behavior else 400
@@ -734,6 +879,16 @@ class BotChatHandler:
 
                 try:
                     self._set_thinking()
+
+                    # Sample user count for mood while we're at it
+                    if self._mood_engine:
+                        try:
+                            users = self.ctx.get_user_list()
+                            count = len(users) if users else 0
+                            self._mood_engine.sample_user_count(count)
+                        except Exception:
+                            pass
+
                     session = _get_or_create_session(
                         "chat:proactive",
                         self._bot_nick,
@@ -743,6 +898,8 @@ class BotChatHandler:
                         mode="chat",
                         llm_cfg=self.llm_cfg,
                         behavior=self.behavior,
+                        mood_engine=self._mood_engine,
+                        memory=self._memory,
                     )
                     response_text, _ = await session.chat(prompt)
 
@@ -755,6 +912,21 @@ class BotChatHandler:
                     log.exception("Proactive message failed")
                 finally:
                     self._set_idle()
+        except asyncio.CancelledError:
+            pass
+
+    async def _mood_sample_loop(self) -> None:
+        """Periodically sample the hub user count for the mood engine."""
+        try:
+            while True:
+                await asyncio.sleep(300)  # every 5 min
+                try:
+                    users = self.ctx.get_user_list()
+                    count = len(users) if users else 0
+                    if self._mood_engine:
+                        self._mood_engine.sample_user_count(count)
+                except Exception:
+                    log.debug("Mood sample failed", exc_info=True)
         except asyncio.CancelledError:
             pass
 

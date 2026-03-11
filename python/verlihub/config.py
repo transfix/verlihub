@@ -271,7 +271,9 @@ class BotBehaviorConfig:
     triggers: list[str] = field(default_factory=list)
 
     # Proactive behaviours — the bot occasionally initiates conversation.
-    # Interval in seconds between proactive messages (0 = disabled).
+    # Base interval in seconds between proactive messages (0 = disabled).
+    # The actual delay is randomised ±30 % around this value so the bot
+    # doesn't feel robotic.
     proactive_interval: int = 0
 
     # Proactive messages: list of prompts the bot can choose from.

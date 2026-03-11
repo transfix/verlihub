@@ -104,7 +104,8 @@ bots:
     #   - "help"
 
     # Proactive messages — bot occasionally speaks unprompted (0 = off)
-    # proactive_interval: 3600  # seconds between proactive messages
+    # Actual delay is randomised ±30% around this value for a human feel.
+    # proactive_interval: 3600  # base seconds between proactive messages
     # proactive_prompts:
     #   - "Share an interesting fact about file sharing."
     #   - "Ask the chat room a fun trivia question."

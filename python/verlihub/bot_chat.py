@@ -711,7 +711,11 @@ class BotChatHandler:
             pass  # normal — the LLM response came back
 
     async def _proactive_loop(self) -> None:
-        """Periodically send a proactive message in main chat."""
+        """Periodically send a proactive message in main chat.
+
+        The actual delay is *interval* ± 30 % (uniform) so the bot
+        doesn't feel robotic.
+        """
         import random
 
         interval = self.behavior.proactive_interval if self.behavior else 0
@@ -721,7 +725,9 @@ class BotChatHandler:
 
         try:
             while True:
-                await asyncio.sleep(interval)
+                # ±30 % jitter so the bot feels more human
+                jitter = random.uniform(-0.3, 0.3) * interval
+                await asyncio.sleep(max(60, interval + jitter))
 
                 prompt = random.choice(prompts)
                 log.info("Bot proactive message: %s", prompt[:80])

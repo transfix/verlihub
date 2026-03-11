@@ -315,57 +315,62 @@
             text-overflow: ellipsis;
         }
 
-        /* ── Always-burger responsive navbar ─────────────────────────── */
-        /* Override Bulma's 1024 px breakpoint so the burger is always
-           visible. The menu opens as a dropdown overlay. */
-        .navbar-burger {
-            display: flex !important;   /* always show the burger */
+        /* ── Responsive burger navbar ─────────────────────────────── */
+        /* On small/medium screens (≤1023 px) the burger is visible and
+           the menu opens as a dropdown overlay.  On wide screens the
+           standard Bulma horizontal navbar is used instead. */
+
+        /* Mobile/tablet: burger always visible, dropdown overlay menu */
+        @media screen and (max-width: 1023px) {
+            .navbar-burger {
+                display: flex !important;   /* show the burger */
+            }
+
+            .navbar-menu {
+                display: none !important;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                z-index: 40;
+                background: var(--vh-navbar-bg, #fff);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+                border-top: 1px solid rgba(0,0,0,0.06);
+                padding: 0.5rem 0;
+                max-height: calc(100vh - 52px);
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .navbar-menu.is-active {
+                display: block !important;
+            }
+
+            /* Items render as stacked list */
+            .navbar-menu .navbar-start,
+            .navbar-menu .navbar-end {
+                display: flex;
+                flex-direction: column;
+            }
+            .navbar-menu .navbar-end {
+                border-top: 1px solid rgba(0,0,0,0.06);
+                margin-top: 0.25rem;
+                padding-top: 0.25rem;
+            }
+            .navbar-menu .navbar-item {
+                padding: 0.55rem 1.25rem;
+            }
+            .navbar-menu .navbar-item:hover {
+                background: rgba(0,0,0,0.04);
+            }
+            .navbar-menu .navbar-item i.fas,
+            .navbar-menu .navbar-item i.far {
+                width: 1.4em;
+                text-align: center;
+            }
         }
 
-        .navbar-menu {
-            display: none !important;
-            position: absolute;
-            top: 100%;                  /* just below the navbar bar */
-            left: 0;
-            right: 0;
-            z-index: 40;
-            background: var(--vh-navbar-bg, #fff);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-            border-top: 1px solid rgba(0,0,0,0.06);
-            padding: 0.5rem 0;
-            max-height: calc(100vh - 52px);
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        .navbar-menu.is-active {
-            display: block !important;
-        }
-
-        /* Items render as stacked list at every breakpoint */
-        .navbar-menu .navbar-start,
-        .navbar-menu .navbar-end {
-            display: flex;
-            flex-direction: column;
-        }
-        .navbar-menu .navbar-end {
-            border-top: 1px solid rgba(0,0,0,0.06);
-            margin-top: 0.25rem;
-            padding-top: 0.25rem;
-        }
-        .navbar-menu .navbar-item {
-            padding: 0.55rem 1.25rem;
-        }
-        .navbar-menu .navbar-item:hover {
-            background: rgba(0,0,0,0.04);
-        }
-        .navbar-menu .navbar-item i.fas,
-        .navbar-menu .navbar-item i.far {
-            width: 1.4em;
-            text-align: center;
-        }
-
-        /* Wider viewport: cap the dropdown width */
-        @media screen and (min-width: 769px) {
+        /* Tablet portrait: cap the dropdown width */
+        @media screen and (min-width: 769px) and (max-width: 1023px) {
             .navbar-menu {
                 left: auto;
                 right: 0;
@@ -374,18 +379,20 @@
             }
         }
 
-        /* Dark theme overrides */
-        [data-theme="dark"] .navbar-menu {
-            --vh-navbar-bg: var(--vh-dark-card);
-            background: var(--vh-dark-card);
-            border-top-color: var(--vh-dark-border);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-        }
-        [data-theme="dark"] .navbar-menu .navbar-end {
-            border-top-color: var(--vh-dark-border);
-        }
-        [data-theme="dark"] .navbar-menu .navbar-item:hover {
-            background: rgba(255,255,255,0.06);
+        /* Dark theme overrides for mobile/tablet dropdown */
+        @media screen and (max-width: 1023px) {
+            [data-theme="dark"] .navbar-menu {
+                --vh-navbar-bg: var(--vh-dark-card);
+                background: var(--vh-dark-card);
+                border-top-color: var(--vh-dark-border);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-end {
+                border-top-color: var(--vh-dark-border);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-item:hover {
+                background: rgba(255,255,255,0.06);
+            }
         }
     </style>
     

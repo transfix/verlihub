@@ -212,7 +212,8 @@ class HubConfig:
     motd_file: str = ""
     max_users: int = 1000
     logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
-    send_user_info: bool = True  # PM user info (nick, IP, country, TLS) on connect
+    send_user_info: bool = True  # Send user info (nick, IP, country, TLS) on connect
+    user_info_as_pm: bool = False  # Deliver user info as PM instead of main chat
     hublist_servers: list[str] = field(default_factory=lambda: [
         "hublist.te-home.net",
         "hublist.pwiam.com",
@@ -346,6 +347,21 @@ class UsersConfig:
 
 
 @dataclass
+class LlmEndpoint:
+    """
+    A single OpenAI-compatible LLM endpoint.
+
+    When multiple endpoints are defined the user can pick one from the
+    dashboard AI-chat dropdown.  The first endpoint in the list is the
+    default.
+    """
+    name: str = ""          # Human-readable label shown in the UI
+    base_url: str = ""      # OpenAI-compatible base URL
+    model: str = ""         # Model identifier sent to the API
+    api_key: str = "none"   # API key (many local servers ignore this)
+
+
+@dataclass
 class LlmConfig:
     """
     LLM (Large Language Model) integration configuration.
@@ -356,6 +372,12 @@ class LlmConfig:
     The LLM can query hub state and perform admin operations via tool calling.
     Access is gated by user class: ``min_class`` controls who can use the
     chat, ``admin_class`` controls who gets admin-level tools (kick, ban, etc.).
+
+    Multiple endpoints can be configured under ``endpoints:``.  When the list
+    is non-empty each entry's ``base_url`` / ``model`` / ``api_key`` override
+    the top-level values, and the user picks one from the dashboard.  If
+    ``endpoints`` is empty the top-level ``base_url`` / ``model`` / ``api_key``
+    are used as a single unnamed endpoint.
     """
     enabled: bool = False
     base_url: str = "http://localhost:11434/v1"  # Ollama default
@@ -366,6 +388,34 @@ class LlmConfig:
     max_tokens: int = 2048
     min_class: int = 3   # Minimum user class to access AI chat (3=Operator)
     admin_class: int = 5  # Minimum class for admin tools (5=Admin)
+    endpoints: list[LlmEndpoint] = field(default_factory=list)
+
+    # -- helpers -------------------------------------------------------------
+
+    def get_endpoint(self, name: str | None = None) -> LlmEndpoint:
+        """Return the endpoint matching *name*, or the default.
+
+        Falls back to the top-level ``base_url`` / ``model`` / ``api_key``
+        when no endpoints are configured or when *name* doesn't match.
+        """
+        if self.endpoints:
+            if name:
+                for ep in self.endpoints:
+                    if ep.name == name:
+                        return ep
+            return self.endpoints[0]
+        return LlmEndpoint(
+            name=self.model,
+            base_url=self.base_url,
+            model=self.model,
+            api_key=self.api_key,
+        )
+
+    def list_endpoint_names(self) -> list[str]:
+        """Return the ordered list of endpoint display names."""
+        if self.endpoints:
+            return [ep.name for ep in self.endpoints]
+        return [self.model]
 
 
 @dataclass
@@ -615,6 +665,15 @@ class VerlihubConfig:
         # LLM integration
         if "llm" in data:
             llm_data = data["llm"]
+            # Parse endpoint list
+            endpoints: list[LlmEndpoint] = []
+            for ep in llm_data.get("endpoints", []):
+                endpoints.append(LlmEndpoint(
+                    name=ep.get("name", ""),
+                    base_url=ep.get("base_url", ""),
+                    model=ep.get("model", ""),
+                    api_key=ep.get("api_key", "none"),
+                ))
             config.llm = LlmConfig(
                 enabled=llm_data.get("enabled", config.llm.enabled),
                 base_url=llm_data.get("base_url", config.llm.base_url),
@@ -625,6 +684,7 @@ class VerlihubConfig:
                 max_tokens=llm_data.get("max_tokens", config.llm.max_tokens),
                 min_class=llm_data.get("min_class", config.llm.min_class),
                 admin_class=llm_data.get("admin_class", config.llm.admin_class),
+                endpoints=endpoints,
             )
         
         # Logging
@@ -992,6 +1052,7 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "bots.security.nick": ("config", "hub_security"),
     "bots.op_chat.nick": ("config", "opchat_name"),
     "hub.send_user_info": ("config", "send_user_info"),
+    "hub.user_info_as_pm": ("config", "user_info_as_pm"),
 }
 
 # User class mapping

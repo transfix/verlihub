@@ -724,6 +724,7 @@ async def ai_chat_page(
     context["auth_token"] = token or ""
     context["llm_enabled"] = bool(llm_enabled)
     context["llm_model"] = cfg.llm.model if (cfg and cfg.llm) else ""
+    context["llm_endpoints"] = cfg.llm.list_endpoint_names() if (cfg and cfg.llm) else []
     context["access_level"] = "admin" if user.user_class >= admin_class else "read-only"
 
     return templates.TemplateResponse(request, "ai_chat.html", context)

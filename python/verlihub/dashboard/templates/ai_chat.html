@@ -520,6 +520,15 @@
             </span>
             {% if llm_enabled %}
             <span class="tag is-info is-light is-rounded is-small" id="ai-model">{{ llm_model }}</span>
+            {% if llm_endpoints|length > 1 %}
+            <div class="select is-small is-rounded" style="margin-left:0.25rem;">
+                <select id="ai-endpoint-select" title="Select LLM endpoint">
+                    {% for ep in llm_endpoints %}
+                    <option value="{{ ep }}"{% if loop.first %} selected{% endif %}>{{ ep }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
             {% endif %}
             <span style="flex:1"></span>
             <button class="button is-small is-light is-rounded" onclick="scrollAiToBottom()" title="Scroll to bottom">
@@ -576,10 +585,13 @@
     const statusEl    = document.getElementById('ai-status');
     const authToken   = '{{ auth_token }}';
     const llmEnabled  = {{ 'true' if llm_enabled else 'false' }};
+    const epSelect    = document.getElementById('ai-endpoint-select');
+    const modelTag    = document.getElementById('ai-model');
 
     let aiSocket = null;
     let aiWaiting = false;
     let currentSessionId = null;
+    let currentEndpoint = epSelect ? epSelect.value : null;
     const pendingSessions = new Set();   /* sessions with in-flight LLM requests */
 
     /* ==============================================================
@@ -929,6 +941,7 @@
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         let url = `${proto}//${location.host}/ws/llm-chat?token=${encodeURIComponent(authToken)}`;
         if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
+        if (currentEndpoint) url += `&endpoint=${encodeURIComponent(currentEndpoint)}`;
 
         aiSocket = new WebSocket(url);
         aiSocket.onopen = () => { console.log('[AI Chat] WS connected to', url.replace(/token=[^&]+/, 'token=***')); };
@@ -942,6 +955,19 @@
                 case 'connected':
                     statusEl.textContent = 'Connected (' + data.access + ')';
                     statusEl.className = 'tag is-success is-rounded is-small';
+                    /* Update model & endpoint from server */
+                    if (data.model && modelTag) modelTag.textContent = data.model;
+                    if (data.endpoint) currentEndpoint = data.endpoint;
+                    if (data.endpoints && epSelect) {
+                        const prev = epSelect.value;
+                        epSelect.innerHTML = '';
+                        data.endpoints.forEach(ep => {
+                            const opt = document.createElement('option');
+                            opt.value = ep; opt.textContent = ep;
+                            if (ep === (data.endpoint || prev)) opt.selected = true;
+                            epSelect.appendChild(opt);
+                        });
+                    }
                     if (data.session_id && !currentSessionId) {
                         currentSessionId = data.session_id;
                         const all = loadSessions();
@@ -1011,6 +1037,15 @@
                     setInputEnabled(true);
                     renderSidebar();
                     break;
+
+                case 'endpoint_changed':
+                    if (data.model && modelTag) modelTag.textContent = data.model;
+                    if (data.endpoint) {
+                        currentEndpoint = data.endpoint;
+                        if (epSelect) epSelect.value = data.endpoint;
+                        appendSystemMsg('\u2699\ufe0f Switched to endpoint: ' + data.endpoint + ' (' + data.model + ')');
+                    }
+                    break;
             }
         };
 
@@ -1046,6 +1081,16 @@
 
         aiSocket.send(JSON.stringify({ message: text }));
     };
+
+    /* Endpoint selector — switch the active endpoint via WebSocket */
+    if (epSelect) {
+        epSelect.addEventListener('change', () => {
+            currentEndpoint = epSelect.value;
+            if (aiSocket && aiSocket.readyState === WebSocket.OPEN) {
+                aiSocket.send(JSON.stringify({ endpoint: currentEndpoint }));
+            }
+        });
+    }
 
     aiInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); }

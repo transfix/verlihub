@@ -35,7 +35,7 @@ from verlihub.api.auth import (
     require_permission,
 )
 from verlihub.api.deps import get_hub_context
-from verlihub.config import LlmConfig, get_config_optional
+from verlihub.config import LlmConfig, LlmEndpoint, get_config_optional
 
 log = logging.getLogger("verlihub.llm")
 
@@ -55,6 +55,7 @@ class LlmStatusResponse(BaseModel):
     base_url: str
     min_class: int
     admin_class: int
+    endpoints: list[str] = []  # Available endpoint names
 
 
 class ChatRequest(BaseModel):
@@ -84,10 +85,10 @@ class SessionListResponse(BaseModel):
 
 
 # =============================================================================
-# LLM client — lazy singleton
+# LLM client — per-endpoint cache
 # =============================================================================
 
-_openai_client = None
+_openai_clients: dict[str, Any] = {}  # keyed by (base_url, api_key)
 _endpoint_supports_tools: bool | None = None  # None = unknown, probe once
 
 
@@ -99,12 +100,13 @@ def _get_llm_config() -> LlmConfig:
     return cfg.llm
 
 
-def _get_openai_client():
-    """Get or create the OpenAI-compatible async client."""
-    global _openai_client
-    if _openai_client is not None:
-        return _openai_client
-    
+def _get_openai_client(endpoint: LlmEndpoint | None = None):
+    """Get or create an OpenAI-compatible async client for the given endpoint.
+
+    When *endpoint* is ``None`` the default endpoint from config is used.
+    Clients are cached by ``(base_url, api_key)`` tuple so switching
+    endpoints within the same session is cheap.
+    """
     try:
         from openai import AsyncOpenAI
     except ImportError:
@@ -112,20 +114,28 @@ def _get_openai_client():
             status_code=503,
             detail="LLM integration requires the 'openai' package. Install with: pip install openai",
         )
-    
-    llm_cfg = _get_llm_config()
-    _openai_client = AsyncOpenAI(
-        base_url=llm_cfg.base_url,
-        api_key=llm_cfg.api_key,
+
+    if endpoint is None:
+        llm_cfg = _get_llm_config()
+        endpoint = llm_cfg.get_endpoint()
+
+    cache_key = (endpoint.base_url, endpoint.api_key)
+    client = _openai_clients.get(cache_key)
+    if client is not None:
+        return client
+
+    client = AsyncOpenAI(
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
         default_headers={"User-Agent": "verlihub/1.0"},
     )
-    return _openai_client
+    _openai_clients[cache_key] = client
+    return client
 
 
 def reset_openai_client():
-    """Reset the client (called when config changes)."""
-    global _openai_client
-    _openai_client = None
+    """Reset all cached clients (called when config changes)."""
+    _openai_clients.clear()
 
 
 # =============================================================================
@@ -972,10 +982,10 @@ async def _handle_actions_in_text(
 
     try:
         resp = await client.chat.completions.create(
-            model=llm_cfg.model,
+            model=session.endpoint.model,
             messages=session.messages,
-            temperature=llm_cfg.temperature,
-            max_tokens=llm_cfg.max_tokens,
+            temperature=session.llm_cfg.temperature,
+            max_tokens=session.llm_cfg.max_tokens,
         )
         summary = resp.choices[0].message.content or "Done."
         summary = _strip_action_blocks(summary)
@@ -1022,10 +1032,12 @@ class ChatSession:
     replayed on reconnection.
     """
     
-    def __init__(self, user: TokenData, is_admin: bool, llm_cfg: LlmConfig):
+    def __init__(self, user: TokenData, is_admin: bool, llm_cfg: LlmConfig,
+                 endpoint: LlmEndpoint | None = None):
         self.user = user
         self.is_admin = is_admin
         self.llm_cfg = llm_cfg
+        self.endpoint: LlmEndpoint = endpoint or llm_cfg.get_endpoint()
         self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
         global _endpoint_supports_tools
         self.tools_available = _endpoint_supports_tools is not False
@@ -1081,7 +1093,7 @@ class ChatSession:
         
         Returns (response_text, tool_calls_made).
         """
-        client = _get_openai_client()
+        client = _get_openai_client(self.endpoint)
         self.messages.append({"role": "user", "content": user_message})
         tool_calls_made: list[dict] = []
         
@@ -1089,7 +1101,7 @@ class ChatSession:
         if not self.tools_available:
             _inject_hub_context(self.messages, self.user, self.is_admin)
             response = await client.chat.completions.create(
-                model=self.llm_cfg.model,
+                model=self.endpoint.model,
                 messages=self.messages,
                 temperature=self.llm_cfg.temperature,
                 max_tokens=self.llm_cfg.max_tokens,
@@ -1112,7 +1124,7 @@ class ChatSession:
                     _inject_hub_context(self.messages, self.user, self.is_admin)
                     try:
                         resp2 = await client.chat.completions.create(
-                            model=self.llm_cfg.model,
+                            model=self.endpoint.model,
                             messages=self.messages,
                             temperature=self.llm_cfg.temperature,
                             max_tokens=self.llm_cfg.max_tokens,
@@ -1131,7 +1143,7 @@ class ChatSession:
             
             try:
                 response = await client.chat.completions.create(
-                    model=self.llm_cfg.model,
+                    model=self.endpoint.model,
                     messages=self.messages,
                     tools=self.tools if self.tools else None,
                     tool_choice="auto",
@@ -1146,7 +1158,7 @@ class ChatSession:
                     _endpoint_supports_tools = False
                     _inject_hub_context(self.messages, self.user, self.is_admin)
                     response = await client.chat.completions.create(
-                        model=self.llm_cfg.model,
+                        model=self.endpoint.model,
                         messages=self.messages,
                         temperature=self.llm_cfg.temperature,
                         max_tokens=self.llm_cfg.max_tokens,
@@ -1185,7 +1197,7 @@ class ChatSession:
             "content": "(System: tool call limit reached. Provide your answer with data collected so far.)",
         })
         response = await client.chat.completions.create(
-            model=self.llm_cfg.model,
+            model=self.endpoint.model,
             messages=self.messages,
             temperature=self.llm_cfg.temperature,
             max_tokens=self.llm_cfg.max_tokens,
@@ -1227,13 +1239,15 @@ def _clean_dangling_turn(session: ChatSession) -> None:
 
 
 def _ensure_session(
-    nick: str, session_id: str, user: TokenData, is_admin: bool, llm_cfg: LlmConfig
+    nick: str, session_id: str, user: TokenData, is_admin: bool, llm_cfg: LlmConfig,
+    endpoint_name: str | None = None,
 ) -> ChatSession:
     """Get or create a ChatSession and its metadata entry."""
     key = _session_key(nick, session_id)
     session = _sessions.get(key)
     if session is None:
-        session = ChatSession(user, is_admin, llm_cfg)
+        endpoint = llm_cfg.get_endpoint(endpoint_name)
+        session = ChatSession(user, is_admin, llm_cfg, endpoint=endpoint)
         _sessions[key] = session
         _session_meta[key] = {
             "session_id": session_id,
@@ -1241,6 +1255,11 @@ def _ensure_session(
             "created_at": session.created_at,
             "message_count": 0,
         }
+    elif endpoint_name:
+        # Allow switching endpoint on an existing session
+        new_ep = llm_cfg.get_endpoint(endpoint_name)
+        if new_ep.name != session.endpoint.name:
+            session.endpoint = new_ep
     return session
 
 
@@ -1281,7 +1300,7 @@ async def _run_llm_request(
     emit = session.emit
 
     try:
-        client = _get_openai_client()
+        client = _get_openai_client(session.endpoint)
         session.messages.append({"role": "user", "content": user_msg})
         session.pending_request = True
         await emit({"type": "thinking"})
@@ -1294,7 +1313,7 @@ async def _run_llm_request(
                 _inject_hub_context(session.messages, user, is_admin)
                 try:
                     stream = await client.chat.completions.create(
-                        model=llm_cfg.model,
+                        model=session.endpoint.model,
                         messages=session.messages,
                         temperature=llm_cfg.temperature,
                         max_tokens=llm_cfg.max_tokens,
@@ -1302,7 +1321,7 @@ async def _run_llm_request(
                     )
                 except Exception:
                     resp = await client.chat.completions.create(
-                        model=llm_cfg.model,
+                        model=session.endpoint.model,
                         messages=session.messages,
                         temperature=llm_cfg.temperature,
                         max_tokens=llm_cfg.max_tokens,
@@ -1321,7 +1340,7 @@ async def _run_llm_request(
                 # -- Tool-calling path --
                 try:
                     stream = await client.chat.completions.create(
-                        model=llm_cfg.model,
+                        model=session.endpoint.model,
                         messages=session.messages,
                         tools=session.tools if session.tools else None,
                         tool_choice="auto",
@@ -1337,7 +1356,7 @@ async def _run_llm_request(
                         _inject_hub_context(session.messages, user, is_admin)
                         try:
                             stream = await client.chat.completions.create(
-                                model=llm_cfg.model,
+                                model=session.endpoint.model,
                                 messages=session.messages,
                                 temperature=llm_cfg.temperature,
                                 max_tokens=llm_cfg.max_tokens,
@@ -1345,7 +1364,7 @@ async def _run_llm_request(
                             )
                         except Exception:
                             resp = await client.chat.completions.create(
-                                model=llm_cfg.model,
+                                model=session.endpoint.model,
                                 messages=session.messages,
                                 temperature=llm_cfg.temperature,
                                 max_tokens=llm_cfg.max_tokens,
@@ -1449,7 +1468,7 @@ async def _run_llm_request(
                     _inject_hub_context(session.messages, user, is_admin)
                     try:
                         summary_stream = await client.chat.completions.create(
-                            model=llm_cfg.model,
+                            model=session.endpoint.model,
                             messages=session.messages,
                             temperature=llm_cfg.temperature,
                             max_tokens=llm_cfg.max_tokens,
@@ -1558,9 +1577,10 @@ async def llm_status(
     llm_cfg = _get_llm_config()
     
     llm_reachable = False
+    default_ep = llm_cfg.get_endpoint()
     if llm_cfg.enabled:
         try:
-            client = _get_openai_client()
+            client = _get_openai_client(default_ep)
             await client.models.list()
             llm_reachable = True
         except Exception:
@@ -1569,10 +1589,11 @@ async def llm_status(
     return LlmStatusResponse(
         enabled=llm_cfg.enabled,
         llm_reachable=llm_reachable,
-        model=llm_cfg.model,
-        base_url=llm_cfg.base_url,
+        model=default_ep.model,
+        base_url=default_ep.base_url,
         min_class=llm_cfg.min_class,
         admin_class=llm_cfg.admin_class,
+        endpoints=llm_cfg.list_endpoint_names(),
     )
 
 
@@ -1608,7 +1629,7 @@ async def llm_chat(
     return ChatResponse(
         response=response_text,
         tool_calls=tool_calls,
-        model=llm_cfg.model,
+        model=session.endpoint.model,
     )
 
 
@@ -1648,6 +1669,7 @@ async def ws_llm_chat(
     ws: WebSocket,
     token: Optional[str] = None,
     session_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
 ):
     """
     WebSocket chat endpoint with tool-call progress.
@@ -1703,10 +1725,11 @@ async def ws_llm_chat(
 
     # Resolve / create session
     sid = session_id or str(uuid.uuid4())[:8]
-    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
+    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg,
+                              endpoint_name=endpoint)
     key = _session_key(user.nick, sid)
 
-    log.info("LLM WS session %s for %s (%s)", sid, user.nick, access)
+    log.info("LLM WS session %s for %s (%s) endpoint=%s", sid, user.nick, access, session.endpoint.name)
 
     # Attach the WebSocket so background task events are forwarded.
     session.attach_ws(ws)
@@ -1722,7 +1745,9 @@ async def ws_llm_chat(
         await ws.send_json({
             "type": "connected",
             "access": access,
-            "model": llm_cfg.model,
+            "model": session.endpoint.model,
+            "endpoint": session.endpoint.name,
+            "endpoints": llm_cfg.list_endpoint_names(),
             "session_id": sid,
             "pending": has_running_task or has_buffered,
         })
@@ -1796,6 +1821,26 @@ async def ws_llm_chat(
         while True:
             data = await ws.receive_json()
             user_msg = data.get("message", "").strip()
+
+            # Handle endpoint switch request
+            ep_switch = data.get("endpoint")
+            if ep_switch:
+                new_ep = llm_cfg.get_endpoint(ep_switch)
+                if new_ep.name != session.endpoint.name:
+                    session.endpoint = new_ep
+                    log.info("Endpoint switched to %s for session %s", new_ep.name, sid)
+                    try:
+                        await ws.send_json({
+                            "type": "endpoint_changed",
+                            "endpoint": new_ep.name,
+                            "model": new_ep.model,
+                        })
+                    except (WebSocketDisconnect, RuntimeError):
+                        session.detach_ws()
+                        return
+                if not user_msg:
+                    continue
+
             if not user_msg:
                 continue
 

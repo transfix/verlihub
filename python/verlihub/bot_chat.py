@@ -182,7 +182,10 @@ class BotChatSession:
         from verlihub.api.auth import TokenData
 
         global _endpoint_supports_tools_bot
-        client = _get_openai_client()
+        # Use default endpoint from config
+        bot_endpoint = self.llm_cfg.get_endpoint() if self.llm_cfg else None
+        client = _get_openai_client(bot_endpoint)
+        bot_model = bot_endpoint.model if bot_endpoint else "llama3.1"
         self.messages.append({"role": "user", "content": user_message})
         tool_calls_made: list[dict] = []
 
@@ -204,7 +207,7 @@ class BotChatSession:
 
         for _round in range(max_rounds):
             kwargs: dict[str, Any] = dict(
-                model=self.llm_cfg.model if self.llm_cfg else "llama3.1",
+                model=bot_model,
                 messages=self.messages,
                 temperature=self.llm_cfg.temperature if self.llm_cfg else 0.3,
                 max_tokens=self.llm_cfg.max_tokens if self.llm_cfg else 2048,
@@ -280,7 +283,7 @@ class BotChatSession:
             }
         )
         kwargs_final: dict[str, Any] = dict(
-            model=self.llm_cfg.model if self.llm_cfg else "llama3.1",
+            model=bot_model,
             messages=self.messages,
             temperature=self.llm_cfg.temperature if self.llm_cfg else 0.3,
             max_tokens=self.llm_cfg.max_tokens if self.llm_cfg else 2048,

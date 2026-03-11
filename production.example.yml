@@ -49,9 +49,12 @@ hub:
   # Common options: CP1252, UTF-8, ISO-8859-1
   encoding: "CP1252"
   
-  # Send "Your information" PM on connect (nick, IP, country, TLS, NAT)
-  # Set to false to disable
+  # Send "Your information" on connect (nick, IP, country, TLS, NAT)
+  # Set to false to disable the message entirely
   send_user_info: true
+  # Deliver user info as a private message instead of main chat
+  # Default: false (main chat, visible only to the connecting user)
+  user_info_as_pm: false
   
   # Network settings
   port: 4111
@@ -353,6 +356,35 @@ llm:
   admin_class: 5
   # Ollama host port to expose on the Docker host (0 = don't expose)
   # ollama_port: 11434
+
+  # Multiple LLM endpoints — users can select from a dropdown.
+  # When configured, these override the top-level base_url/model/api_key
+  # for the dashboard AI chat. The first endpoint is the default.
+  # endpoints:
+  #   - name: "Qwen3.5-35B (Traefik)"
+  #     base_url: "https://vllm-qwen35-35b.example.com/v1"
+  #     model: "Qwen/Qwen3.5-35B"
+  #     api_key: "none"
+  #   - name: "Qwen3.5-9B #0 (Traefik)"
+  #     base_url: "https://vllm-qwen35-9b.example.com/v1"
+  #     model: "Qwen/Qwen3.5-9B"
+  #     api_key: "none"
+  #   - name: "Qwen3.5-9B #1 (Traefik)"
+  #     base_url: "https://vllm-qwen35-9b-1.example.com/v1"
+  #     model: "Qwen/Qwen3.5-9B"
+  #     api_key: "none"
+  #   - name: "Ministral #0 (Traefik)"
+  #     base_url: "https://ministral.example.com/v1"
+  #     model: "ministral"
+  #     api_key: "none"
+  #   - name: "Ministral #1 (Traefik)"
+  #     base_url: "https://ministral-1-edge.example.com/v1"
+  #     model: "ministral"
+  #     api_key: "none"
+  #   - name: "LLM Catalog (Traefik)"
+  #     base_url: "https://llm-catalog.example.com/v1"
+  #     model: "catalog"
+  #     api_key: "none"
 
 # =============================================================================
 # MCP (Model Context Protocol) Server

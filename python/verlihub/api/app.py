@@ -181,10 +181,14 @@ async def lifespan(app: FastAPI):
     if ctx is not None:
         try:
             llm_cfg = cfg.llm if cfg else None
+            bot_behavior = cfg.bots.behavior if cfg else None
             if llm_cfg and llm_cfg.enabled:
                 from verlihub.bot_chat import BotChatHandler
-                _bot_chat_handler = BotChatHandler(ctx, llm_cfg)
+                _bot_chat_handler = BotChatHandler(
+                    ctx, llm_cfg, behavior=bot_behavior,
+                )
                 _bot_chat_handler.register(ctx.events)
+                _bot_chat_handler.start_proactive(asyncio.get_event_loop())
                 logger.info("LLM bot chat handler enabled")
         except Exception as bot_err:
             logger.warning("Bot chat handler failed to start: %s", bot_err)

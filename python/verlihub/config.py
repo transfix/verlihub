@@ -248,10 +248,50 @@ class BotConfig:
 
 
 @dataclass
+class BotBehaviorConfig:
+    """Configures how the hub security bot interacts with users.
+
+    All fields are optional — sensible defaults are applied.
+    """
+    # Which LLM endpoint the bot should use (name from llm.endpoints).
+    # Empty string → use the default (first) endpoint.
+    endpoint: str = ""
+
+    # Personality / persona injected into every system prompt.
+    personality: str = ""
+
+    # How eagerly the bot responds to non-direct mentions in main chat.
+    # "direct"  — only respond when addressed by name  (e.g. "Hub-Security: hi")
+    # "mention" — also respond when the bot name appears anywhere in the message
+    # "keyword" — respond to bot name OR any keyword in ``triggers``
+    chat_mode: str = "direct"
+
+    # Extra keywords (besides the bot nick) that trigger a main-chat response.
+    # Only used when ``chat_mode`` is "keyword".
+    triggers: list[str] = field(default_factory=list)
+
+    # Proactive behaviours — the bot occasionally initiates conversation.
+    # Interval in seconds between proactive messages (0 = disabled).
+    proactive_interval: int = 0
+
+    # Proactive messages: list of prompts the bot can choose from.
+    proactive_prompts: list[str] = field(default_factory=list)
+
+    # Periodic "thinking…" feedback interval in seconds for PM sessions
+    # while the LLM is processing.  0 = no periodic feedback.
+    thinking_interval: int = 15
+
+    # Max response length (characters) for main-chat replies.
+    # Keeps the bot from flooding the chat room.
+    max_chat_length: int = 400
+
+
+@dataclass
 class BotsConfig:
     """Configuration for hub bots."""
     security: BotConfig = field(default_factory=lambda: BotConfig(nick="Hub-Security", description="Hub security system"))
     op_chat: BotConfig = field(default_factory=lambda: BotConfig(nick="OpChat", description="Operator chat"))
+    behavior: BotBehaviorConfig = field(default_factory=BotBehaviorConfig)
 
 
 @dataclass
@@ -585,6 +625,18 @@ class VerlihubConfig:
                 config.bots.op_chat = BotConfig(
                     nick=op.get("nick", config.bots.op_chat.nick),
                     description=op.get("description", config.bots.op_chat.description),
+                )
+            if "behavior" in bots:
+                beh = bots["behavior"]
+                config.bots.behavior = BotBehaviorConfig(
+                    endpoint=beh.get("endpoint", config.bots.behavior.endpoint),
+                    personality=beh.get("personality", config.bots.behavior.personality),
+                    chat_mode=beh.get("chat_mode", config.bots.behavior.chat_mode),
+                    triggers=beh.get("triggers", config.bots.behavior.triggers),
+                    proactive_interval=int(beh.get("proactive_interval", config.bots.behavior.proactive_interval)),
+                    proactive_prompts=beh.get("proactive_prompts", config.bots.behavior.proactive_prompts),
+                    thinking_interval=int(beh.get("thinking_interval", config.bots.behavior.thinking_interval)),
+                    max_chat_length=int(beh.get("max_chat_length", config.bots.behavior.max_chat_length)),
                 )
         
         # Plugins
@@ -1051,6 +1103,11 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "hub.motd": ("config", "hub_motd"),
     "bots.security.nick": ("config", "hub_security"),
     "bots.op_chat.nick": ("config", "opchat_name"),
+    "bots.behavior.endpoint": ("config", "bot_endpoint"),
+    "bots.behavior.personality": ("config", "bot_personality"),
+    "bots.behavior.chat_mode": ("config", "bot_chat_mode"),
+    "bots.behavior.thinking_interval": ("config", "bot_thinking_interval"),
+    "bots.behavior.max_chat_length": ("config", "bot_max_chat_length"),
     "hub.send_user_info": ("config", "send_user_info"),
     "hub.user_info_as_pm": ("config", "user_info_as_pm"),
 }

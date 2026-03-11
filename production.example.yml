@@ -82,6 +82,39 @@ bots:
     # Minimum class to access operator chat (default: 3 = operators)
     min_class: 3
 
+  # Bot behaviour — controls how the security bot interacts via LLM
+  behavior:
+    # Which LLM endpoint the bot should use (name from llm.endpoints).
+    # Empty = use the default (first) endpoint.
+    endpoint: ""
+
+    # Personality injected into every system prompt.
+    # Example: "You are cheerful and use DC++ slang."
+    personality: ""
+
+    # How eagerly the bot responds in main chat:
+    #   "direct"  — only when addressed: "Hub-Security: hello"
+    #   "mention" — whenever the bot name appears anywhere in a message
+    #   "keyword" — respond to bot name OR any word in 'triggers'
+    chat_mode: "direct"
+
+    # Extra trigger words for "keyword" mode (besides the bot nick)
+    # triggers:
+    #   - "hub"
+    #   - "help"
+
+    # Proactive messages — bot occasionally speaks unprompted (0 = off)
+    # proactive_interval: 3600  # seconds between proactive messages
+    # proactive_prompts:
+    #   - "Share an interesting fact about file sharing."
+    #   - "Ask the chat room a fun trivia question."
+
+    # Periodic "Thinking…" feedback in PMs while LLM is processing (seconds)
+    thinking_interval: 15
+
+    # Max response length (characters) for main-chat replies
+    max_chat_length: 400
+
 # =============================================================================
 # Connection Limits
 # =============================================================================

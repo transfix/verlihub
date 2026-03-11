@@ -558,6 +558,26 @@ class HubClient:
         })
         return result.get("status") == "updated"
 
+    # =========================================================================
+    # Hub Config (full)
+    # =========================================================================
+
+    def get_hub_config(self) -> dict[str, Any]:
+        """Get full hub configuration."""
+        return self._request("GET", "/hub/config")
+
+    def update_hub_config(self, **kwargs) -> dict[str, Any]:
+        """Update hub configuration fields."""
+        return self._request("PUT", "/hub/config", json=kwargs)
+
+    # =========================================================================
+    # LLM Status
+    # =========================================================================
+
+    def get_llm_status(self) -> dict[str, Any]:
+        """Get LLM backend status."""
+        return self._request("GET", "/llm/status")
+
 
 class AsyncHubClient:
     """
@@ -803,3 +823,137 @@ class AsyncHubClient:
             "reason": reason,
             "duration_hours": duration_hours,
         })
+
+    async def unban(self, ban_id: int) -> bool:
+        """Remove a ban by ID."""
+        result = await self._request("DELETE", f"/bans/{ban_id}")
+        return result.get("status") == "removed"
+
+    # =========================================================================
+    # Hub Management (lifecycle, config, topic)
+    # =========================================================================
+
+    @property
+    def user_class(self) -> int:
+        """Return the authenticated user's class."""
+        return self._user_class
+
+    async def start(self) -> dict[str, Any]:
+        """Start the hub."""
+        return await self._request("POST", "/hub/start")
+
+    async def stop(self) -> dict[str, Any]:
+        """Stop the hub."""
+        return await self._request("POST", "/hub/shutdown")
+
+    async def restart(self) -> dict[str, Any]:
+        """Restart the hub."""
+        return await self._request("POST", "/hub/restart")
+
+    @property
+    def is_running(self) -> bool:
+        """Check if the hub is running (requires a prior status call)."""
+        # Async property workaround — callers should await get_hub_info() instead
+        return self.is_authenticated
+
+    async def reload_config(self) -> dict[str, Any]:
+        """Reload hub configuration."""
+        return await self._request("POST", "/hub/reload")
+
+    async def get_hub_name(self) -> str:
+        """Get the hub name."""
+        info = await self.get_hub_info()
+        return info.get("hub_name", "")
+
+    async def get_hub_topic(self) -> str:
+        """Get the hub topic."""
+        info = await self.get_hub_info()
+        return info.get("hub_topic", "")
+
+    async def set_hub_topic(self, topic: str) -> dict[str, Any]:
+        """Set the hub topic."""
+        return await self._request("PUT", "/hub/topic", json={"topic": topic})
+
+    async def get_total_share(self) -> int:
+        """Get total share in bytes."""
+        stats = await self.get_hub_stats()
+        return stats.get("total_share", 0)
+
+    async def get_hub_config(self) -> dict[str, Any]:
+        """Get full hub configuration."""
+        return await self._request("GET", "/hub/config")
+
+    async def update_hub_config(self, **kwargs) -> dict[str, Any]:
+        """Update hub configuration fields."""
+        return await self._request("PUT", "/hub/config", json=kwargs)
+
+    # =========================================================================
+    # User Info & Management (extended)
+    # =========================================================================
+
+    async def get_user_info(self, nick: str) -> dict[str, Any]:
+        """Get info for a specific online user."""
+        return await self._request("GET", f"/users/{nick}")
+
+    async def drop_user(self, nick: str) -> bool:
+        """Drop a user's connection."""
+        result = await self._request("POST", f"/users/{nick}/drop")
+        return result.get("status") == "dropped"
+
+    async def redirect_user(self, nick: str, address: str) -> bool:
+        """Redirect a user to another hub."""
+        result = await self._request("POST", f"/users/{nick}/redirect", json={
+            "address": address,
+        })
+        return result.get("status") == "redirected"
+
+    async def send_to_class(
+        self,
+        user_class: int,
+        message: str,
+    ) -> dict[str, Any]:
+        """Send a message to all users of a specific class."""
+        return await self._request("POST", "/hub/chat", json={
+            "message": message,
+            "min_class": user_class,
+        })
+
+    # =========================================================================
+    # Registered Users (extended)
+    # =========================================================================
+
+    async def delete_registration(self, nick: str) -> bool:
+        """Delete a user registration."""
+        result = await self._request("DELETE", f"/users/registered/{nick}")
+        return result.get("status") == "deleted"
+
+    async def update_user(self, nick: str, **kwargs) -> dict[str, Any]:
+        """Update a registered user."""
+        return await self._request("PATCH", f"/users/registered/{nick}", json=kwargs)
+
+    # =========================================================================
+    # Configuration (per-section/key)
+    # =========================================================================
+
+    async def get_config(self, section: str, key: str, default: str = "") -> str:
+        """Get a configuration value."""
+        try:
+            result = await self._request("GET", f"/config/{section}/{key}")
+            return result.get("value", default)
+        except HubClientError:
+            return default
+
+    async def set_config(self, section: str, key: str, value: str) -> bool:
+        """Set a configuration value."""
+        result = await self._request("PUT", f"/config/{section}/{key}", json={
+            "value": value,
+        })
+        return result.get("status") == "updated"
+
+    # =========================================================================
+    # LLM Status
+    # =========================================================================
+
+    async def get_llm_status(self) -> dict[str, Any]:
+        """Get LLM backend status."""
+        return await self._request("GET", "/llm/status")

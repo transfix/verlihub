@@ -5,7 +5,13 @@ When users send a private message to the hub security bot (``Hub-Security``),
 this module intercepts it via the C++ event callback and forwards the message
 to the LLM chat pipeline.  The bot's reply is sent back as an NMDC PM.
 
-Users can also address the bot in main chat (e.g. ``Hub-Security: hello``).
+Users can also address the bot in main chat.  The ``chat_mode`` setting
+controls how eagerly the bot responds:
+
+  * ``"direct"``  — only when addressed by name (``Hub-Security: hi``)
+  * ``"mention"`` — whenever the bot name appears anywhere in the message
+  * ``"keyword"`` — bot name **or** any word in ``triggers`` list
+
 Main-chat interactions always operate at the **lowest** security level — no
 tools, purely conversational.
 
@@ -13,6 +19,14 @@ Private messages respect the sender's actual user class:
   * class ≥ ``admin_class`` → admin tools (kick/ban/config)
   * class ≥ ``min_class``   → read-only hub tools
   * lower classes           → conversational only (no tools)
+
+Thinking feedback
+~~~~~~~~~~~~~~~~~
+While the LLM is processing, the bot:
+  1. Broadcasts an updated ``$MyINFO`` to show "⏳ Thinking…" in its
+     description (visible in most DC++ client user-lists).
+  2. Sends periodic "Thinking…" PM hints (interval from config).
+  3. Resets description to idle when done or on error.
 
 Threading model
 ~~~~~~~~~~~~~~~
@@ -31,12 +45,13 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from verlihub.config import BotBehaviorConfig
     from verlihub.core import HubContext, HubEventHandler
 
 log = logging.getLogger("verlihub.bot_chat")
 
 # ---------------------------------------------------------------------------
-# System prompts
+# System prompts  (``{personality}`` block is injected from BotBehaviorConfig)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT_BOT_ADMIN = """\
@@ -60,6 +75,7 @@ Guidelines:
 - Always call tools rather than assuming hub state
 - Be direct and professional
 - Format numbers readably (e.g. "1.23 TiB" not raw bytes)
+{personality}\
 """
 
 SYSTEM_PROMPT_BOT_USER = """\
@@ -76,6 +92,7 @@ Guidelines:
 - Keep responses concise — this is an NMDC chat, not a web page
 - Always call tools rather than guessing
 - Be friendly and helpful
+{personality}\
 """
 
 SYSTEM_PROMPT_BOT_PUBLIC = """\
@@ -91,6 +108,8 @@ Guidelines:
 - Do NOT make up information about the hub
 - If asked about hub status, suggest the user PM you for detailed info
 - Never reveal private information about users
+- Maximum response length: roughly {max_chat_length} characters
+{personality}\
 """
 
 
@@ -110,6 +129,7 @@ class BotChatSession:
         *,
         mode: str = "pm",  # "pm" or "chat"
         llm_cfg: Any = None,
+        behavior: "BotBehaviorConfig | None" = None,
     ):
         self.nick = nick
         self.user_class = user_class
@@ -117,11 +137,12 @@ class BotChatSession:
         self.hub_name = hub_name
         self.mode = mode
         self.llm_cfg = llm_cfg
+        self.behavior = behavior
         self.created_at = time.time()
         self.messages: list[dict] = []
         self.tools: list[dict] = []
 
-        self._build(nick, user_class, bot_nick, hub_name, mode, llm_cfg)
+        self._build(nick, user_class, bot_nick, hub_name, mode, llm_cfg, behavior)
 
     # -- internal ---------------------------------------------------------
 
@@ -133,15 +154,24 @@ class BotChatSession:
         hub_name: str,
         mode: str,
         llm_cfg: Any,
+        behavior: "BotBehaviorConfig | None" = None,
     ) -> None:
         """Select the system prompt and tool set based on context."""
         from verlihub.api.routes.llm import _build_admin_tools, _build_readonly_tools
+
+        personality_text = ""
+        if behavior and behavior.personality:
+            personality_text = f"\nPersonality: {behavior.personality}\n"
+
+        max_chat_length = behavior.max_chat_length if behavior else 400
 
         fmt = dict(
             bot_nick=bot_nick,
             hub_name=hub_name,
             user_nick=nick,
             user_class=user_class,
+            personality=personality_text,
+            max_chat_length=max_chat_length,
         )
 
         if mode == "chat":
@@ -182,8 +212,15 @@ class BotChatSession:
         from verlihub.api.auth import TokenData
 
         global _endpoint_supports_tools_bot
-        # Use default endpoint from config
-        bot_endpoint = self.llm_cfg.get_endpoint() if self.llm_cfg else None
+        # Use the endpoint specified in bot behavior config, falling back to default
+        bot_endpoint_name = (
+            self.behavior.endpoint if self.behavior and self.behavior.endpoint else ""
+        )
+        bot_endpoint = (
+            self.llm_cfg.get_endpoint(bot_endpoint_name)
+            if self.llm_cfg
+            else None
+        )
         client = _get_openai_client(bot_endpoint)
         bot_model = bot_endpoint.model if bot_endpoint else "llama3.1"
         self.messages.append({"role": "user", "content": user_message})
@@ -296,9 +333,6 @@ class BotChatSession:
 # Handler that plugs into the C++ event system
 # ---------------------------------------------------------------------------
 
-# regex to detect bot addressed in main chat: "Bot-Nick: msg" or "Bot-Nick, msg"
-_MENTION_RE: re.Pattern | None = None
-
 # Active sessions  —  keyed "pm:{nick}" or "chat:{nick}"
 _sessions: dict[str, BotChatSession] = {}
 _sessions_lock = threading.Lock()
@@ -312,13 +346,14 @@ def _get_or_create_session(
     hub_name: str,
     mode: str,
     llm_cfg: Any,
+    behavior: "BotBehaviorConfig | None" = None,
 ) -> BotChatSession:
     with _sessions_lock:
         session = _sessions.get(key)
         if session is None:
             session = BotChatSession(
                 nick, user_class, bot_nick, hub_name,
-                mode=mode, llm_cfg=llm_cfg,
+                mode=mode, llm_cfg=llm_cfg, behavior=behavior,
             )
             _sessions[key] = session
         return session
@@ -332,12 +367,21 @@ class BotChatHandler:
     with the :class:`HubEventHandler`.  Call :meth:`shutdown` to clean up.
     """
 
-    def __init__(self, ctx: "HubContext", llm_cfg: Any = None):
+    def __init__(
+        self,
+        ctx: "HubContext",
+        llm_cfg: Any = None,
+        behavior: "BotBehaviorConfig | None" = None,
+    ):
         self.ctx = ctx
         self.llm_cfg = llm_cfg
+        self.behavior = behavior
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._bot_nick: str = "Hub-Security"
         self._hub_name: str = "Verlihub"
+        self._bot_description: str = "Hub security system"
+        self._bot_email: str = ""
+        self._proactive_task: Optional[asyncio.Task] = None
 
         # Resolve names from config
         try:
@@ -346,15 +390,73 @@ class BotChatHandler:
             if cfg:
                 self._bot_nick = cfg.bots.security.nick
                 self._hub_name = cfg.hub.name
+                self._bot_description = cfg.bots.security.description
+                self._bot_email = cfg.bots.security.email
+                # Merge behavior from config if not explicitly passed
+                if self.behavior is None:
+                    self.behavior = cfg.bots.behavior
         except Exception:
             pass
 
-        # Pre-compile mention regex
-        global _MENTION_RE
+        # Pre-compile mention regex (for "direct" mode — exact prefix match)
+        self._mention_direct_re: re.Pattern | None = None
+        self._mention_anywhere_re: re.Pattern | None = None
+        self._keyword_re: re.Pattern | None = None
+        self._rebuild_patterns()
+
+    def _rebuild_patterns(self) -> None:
+        """Compile chat-matching patterns from bot nick + behavior config."""
         escaped = re.escape(self._bot_nick)
-        _MENTION_RE = re.compile(
+
+        # "direct" — Bot-Nick: msg  or  Bot-Nick, msg
+        self._mention_direct_re = re.compile(
             rf"^{escaped}\s*[:,]\s*(.+)", re.DOTALL | re.IGNORECASE
         )
+
+        # "mention" — bot name appears anywhere in the message
+        self._mention_anywhere_re = re.compile(
+            rf"\b{escaped}\b", re.IGNORECASE
+        )
+
+        # "keyword" — bot name OR trigger words
+        triggers: list[str] = []
+        if self.behavior and self.behavior.triggers:
+            triggers = [t.strip() for t in self.behavior.triggers if t.strip()]
+        all_terms = [escaped] + [re.escape(t) for t in triggers]
+        pattern = "|".join(all_terms)
+        self._keyword_re = re.compile(
+            rf"\b(?:{pattern})\b", re.IGNORECASE
+        )
+
+    # -- NMDC MyINFO helpers (bot description updates) --------------------
+
+    def _broadcast_bot_description(self, description: str) -> None:
+        """Broadcast an updated $MyINFO for the bot nick to all clients.
+
+        This updates the bot's user-list entry (description / comment)
+        in real-time for all connected DC++ clients.
+        """
+        try:
+            nick = self._bot_nick
+            email = self._bot_email or ""
+            # NMDC $MyINFO format for a bot user
+            myinfo = (
+                f"$MyINFO $ALL {nick} {description}"
+                f"$ $Bot\x01${email}$0$"
+            )
+            self.ctx.send_to_all(myinfo)
+        except Exception:
+            log.debug("Failed to broadcast bot description update", exc_info=True)
+
+    def _set_thinking(self) -> None:
+        """Set bot description to "thinking" state."""
+        self._broadcast_bot_description(
+            f"{self._bot_description} ⏳ Thinking…"
+        )
+
+    def _set_idle(self) -> None:
+        """Reset bot description to normal idle state."""
+        self._broadcast_bot_description(self._bot_description)
 
     # -- public API --------------------------------------------------------
 
@@ -362,9 +464,11 @@ class BotChatHandler:
         """Wire into the hub event system."""
         events.register("private_message", self._on_pm)
         events.register("chat_message", self._on_chat)
+
+        chat_mode = self.behavior.chat_mode if self.behavior else "direct"
         log.info(
-            "Bot chat registered — bot=%s, hub=%s",
-            self._bot_nick, self._hub_name,
+            "Bot chat registered — bot=%s, hub=%s, chat_mode=%s",
+            self._bot_nick, self._hub_name, chat_mode,
         )
 
     def unregister(self, events: "HubEventHandler") -> None:
@@ -373,9 +477,18 @@ class BotChatHandler:
         events.unregister("chat_message", self._on_chat)
 
     def shutdown(self) -> None:
-        """Clear sessions."""
+        """Clear sessions and stop proactive task."""
+        if self._proactive_task and not self._proactive_task.done():
+            self._proactive_task.cancel()
         with _sessions_lock:
             _sessions.clear()
+
+    def start_proactive(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Start the proactive message timer (if configured)."""
+        interval = self.behavior.proactive_interval if self.behavior else 0
+        if interval > 0 and self.behavior and self.behavior.proactive_prompts:
+            self._proactive_task = loop.create_task(self._proactive_loop())
+            log.info("Bot proactive messages enabled (interval=%ds)", interval)
 
     # -- event callbacks (called from C++ I/O thread) ----------------------
 
@@ -428,27 +541,49 @@ class BotChatHandler:
             self._handle_pm_async(from_nick, message), loop
         )
 
-        # Return True — the C++ side will try to deliver the PM to
-        # Hub-Security which isn't a real connection, so it silently fails.
         return True
 
     def _on_chat(self, nick: str, message: str) -> bool:
-        """Handle main-chat messages that mention the bot."""
-        if _MENTION_RE is None:
-            return True
-
-        m = _MENTION_RE.match(message)
-        if not m:
-            return True  # not addressed to the bot
-
+        """Handle main-chat messages based on the configured chat_mode."""
         if not self.llm_cfg or not self.llm_cfg.enabled:
             return True
 
-        body = m.group(1).strip()
-        if not body:
-            return True
+        chat_mode = self.behavior.chat_mode if self.behavior else "direct"
+        body: str | None = None
 
-        log.info("Bot chat mention from %s: %s", nick, body[:120])
+        if chat_mode == "direct":
+            # Only respond when directly addressed: "Bot-Nick: msg"
+            if self._mention_direct_re is None:
+                return True
+            m = self._mention_direct_re.match(message)
+            if m:
+                body = m.group(1).strip()
+
+        elif chat_mode == "mention":
+            # Respond when bot name appears anywhere in the message
+            if self._mention_anywhere_re and self._mention_anywhere_re.search(message):
+                # Try to extract a direct address body first, else use full msg
+                m = (
+                    self._mention_direct_re.match(message)
+                    if self._mention_direct_re
+                    else None
+                )
+                body = m.group(1).strip() if m else message
+
+        elif chat_mode == "keyword":
+            # Respond to bot name or trigger keywords
+            if self._keyword_re and self._keyword_re.search(message):
+                m = (
+                    self._mention_direct_re.match(message)
+                    if self._mention_direct_re
+                    else None
+                )
+                body = m.group(1).strip() if m else message
+
+        if not body:
+            return True  # no match — pass through silently
+
+        log.info("Bot chat match (%s) from %s: %s", chat_mode, nick, body[:120])
 
         loop = self._get_loop()
         if loop is None:
@@ -464,8 +599,21 @@ class BotChatHandler:
     # -- async LLM handlers -----------------------------------------------
 
     async def _handle_pm_async(self, nick: str, message: str) -> None:
-        """Process a PM to the bot via the LLM pipeline."""
+        """Process a PM to the bot via the LLM pipeline, with thinking feedback."""
+        thinking_task: asyncio.Task | None = None
         try:
+            # Set bot description to "thinking"
+            self._set_thinking()
+
+            # Start periodic "thinking…" feedback in PM
+            thinking_interval = (
+                self.behavior.thinking_interval if self.behavior else 15
+            )
+            if thinking_interval > 0:
+                thinking_task = asyncio.ensure_future(
+                    self._send_thinking_hints(nick, thinking_interval)
+                )
+
             user_class = self._get_user_class(nick)
             session = _get_or_create_session(
                 f"pm:{nick}",
@@ -475,6 +623,7 @@ class BotChatHandler:
                 self._hub_name,
                 mode="pm",
                 llm_cfg=self.llm_cfg,
+                behavior=self.behavior,
             )
             response_text, _tools = await session.chat(message)
             self._send_pm(nick, response_text)
@@ -487,18 +636,23 @@ class BotChatHandler:
             )
         except Exception as exc:
             log.exception("Bot PM handler error for %s", nick)
-            # Provide a user-friendly message depending on error type
             err_msg = str(exc).lower()
             if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
                 self._send_pm(
                     nick,
-                    "The AI backend is temporarily unreachable. Please try again later.",
+                    "⚠ The AI backend is temporarily unreachable. Please try again later.",
                 )
             else:
                 self._send_pm(
                     nick,
-                    "Sorry, I encountered an error processing your message.",
+                    "⚠ Sorry, I encountered an error processing your message. "
+                    "Please try again or contact an operator.",
                 )
+        finally:
+            # Cancel thinking hints and reset description
+            if thinking_task and not thinking_task.done():
+                thinking_task.cancel()
+            self._set_idle()
 
     async def _handle_chat_async(self, nick: str, message: str) -> None:
         """Process a main-chat mention via the LLM pipeline (no tools).
@@ -508,6 +662,8 @@ class BotChatHandler:
         the main chat room.
         """
         try:
+            self._set_thinking()
+
             user_class = self._get_user_class(nick)
             session = _get_or_create_session(
                 "chat:public",
@@ -517,13 +673,84 @@ class BotChatHandler:
                 self._hub_name,
                 mode="chat",
                 llm_cfg=self.llm_cfg,
+                behavior=self.behavior,
             )
             response_text, _tools = await session.chat(message)
+
+            # Truncate long responses for main chat
+            max_len = self.behavior.max_chat_length if self.behavior else 400
+            if max_len > 0 and len(response_text) > max_len:
+                response_text = response_text[:max_len].rstrip() + "…"
+
             self._send_chat(response_text)
         except ImportError:
             log.warning("openai package not installed — bot chat unavailable")
+            self._send_chat(
+                "⚠ AI chat is not available right now. Please try again later."
+            )
         except Exception:
             log.exception("Bot chat handler error for %s", nick)
+            self._send_chat(
+                "⚠ Sorry, I ran into an issue processing that. Please try again."
+            )
+        finally:
+            self._set_idle()
+
+    async def _send_thinking_hints(self, nick: str, interval: int) -> None:
+        """Periodically send "Thinking…" PMs while the LLM is processing."""
+        try:
+            # Wait the first interval before sending anything
+            await asyncio.sleep(interval)
+            dots = 1
+            while True:
+                hint = "Thinking" + "." * dots
+                self._send_pm(nick, hint)
+                dots = (dots % 3) + 1
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass  # normal — the LLM response came back
+
+    async def _proactive_loop(self) -> None:
+        """Periodically send a proactive message in main chat."""
+        import random
+
+        interval = self.behavior.proactive_interval if self.behavior else 0
+        prompts = self.behavior.proactive_prompts if self.behavior else []
+        if not interval or not prompts:
+            return
+
+        try:
+            while True:
+                await asyncio.sleep(interval)
+
+                prompt = random.choice(prompts)
+                log.info("Bot proactive message: %s", prompt[:80])
+
+                try:
+                    self._set_thinking()
+                    session = _get_or_create_session(
+                        "chat:proactive",
+                        self._bot_nick,
+                        10,  # max class for system-initiated
+                        self._bot_nick,
+                        self._hub_name,
+                        mode="chat",
+                        llm_cfg=self.llm_cfg,
+                        behavior=self.behavior,
+                    )
+                    response_text, _ = await session.chat(prompt)
+
+                    max_len = self.behavior.max_chat_length if self.behavior else 400
+                    if max_len > 0 and len(response_text) > max_len:
+                        response_text = response_text[:max_len].rstrip() + "…"
+
+                    self._send_chat(response_text)
+                except Exception:
+                    log.exception("Proactive message failed")
+                finally:
+                    self._set_idle()
+        except asyncio.CancelledError:
+            pass
 
     # -- helpers -----------------------------------------------------------
 

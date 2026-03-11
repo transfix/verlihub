@@ -53,6 +53,24 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("verlihub.bot_chat")
 
+
+def _strip_think_blocks(text: str | None) -> str:
+    """Remove ``<think>…</think>`` reasoning blocks from LLM output.
+
+    Handles both properly closed and unterminated ``<think>`` blocks.
+    If stripping would remove *all* visible content, falls back to
+    returning the text with just the tags removed.
+    """
+    if not text:
+        return text or ""
+    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', text).lstrip()
+    idx = cleaned.find('<think>')
+    if idx >= 0:
+        cleaned = cleaned[:idx].rstrip()
+    if not cleaned.strip() and text.strip():
+        cleaned = text.replace('<think>', '').replace('</think>', '').strip()
+    return cleaned
+
 # ---------------------------------------------------------------------------
 # System prompts
 #
@@ -64,6 +82,7 @@ log = logging.getLogger("verlihub.bot_chat")
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT_BOT_ADMIN = """\
+{personality}\
 You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  You are \
 chatting privately with {user_nick} (class {user_class}), who has administrator \
 privileges.
@@ -81,54 +100,73 @@ Available capabilities:
 - Execute hub console commands (!help for list)
 - Read and write hub configuration
 
-Guidelines:
-- Keep responses concise — this is an NMDC chat, not a web page
+FORMATTING RULES (IMPORTANT):
+- This is an NMDC chat client that does NOT render markdown
+- NEVER use markdown: no **bold**, no *italic*, no # headings, no ```code blocks```
+- NEVER use markdown tables (no | pipes)
+- For tabular data use fixed-width columns with spaces
+- Use plain ASCII text only
+- Keep responses concise and conversational
 - Always call tools rather than assuming hub state
-- Be direct and professional
 - Format numbers readably (e.g. "1.23 TiB" not raw bytes)
-{personality}\
 {mood}\
 {memory}\
 """
 
 SYSTEM_PROMPT_BOT_USER = """\
+{personality}\
 You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  You are \
 chatting privately with {user_nick} (class {user_class}).
 
 Current date and time (UTC): {current_time}
 
-You have access to read-only tools that show public hub information.  Use \
+You have access to read-only tools that show hub information.  Use \
 them to answer questions accurately.
 
-You CANNOT: see IP addresses, kick users, ban users, change configuration, \
+You can see: hub info, online users (nicknames, IPs, countries, share sizes, \
+user classes, client tags, descriptions), operators, geographic distribution, \
+and share statistics.  This is all publicly visible information that clients \
+broadcast via MyINFO.
+
+You CANNOT: kick users, ban users, change configuration, \
 execute console commands, or send messages on behalf of users.
 
-Guidelines:
-- Keep responses concise — this is an NMDC chat, not a web page
+FORMATTING RULES (IMPORTANT):
+- This is an NMDC chat client that does NOT render markdown
+- NEVER use markdown: no **bold**, no *italic*, no # headings, no ```code blocks```
+- NEVER use markdown tables (no | pipes)
+- For tabular data use fixed-width columns with spaces
+- Use plain ASCII text only
+- Keep responses concise and conversational
 - Always call tools rather than guessing
-- Be friendly and helpful
-{personality}\
 {mood}\
 {memory}\
 """
 
 SYSTEM_PROMPT_BOT_PUBLIC = """\
-You are {bot_nick}, the security bot of the "{hub_name}" DC++ hub.  A user \
-named {user_nick} is talking to you in the main chat.  All users can see \
-this conversation.
+{personality}\
+You are {bot_nick}, the bot of the "{hub_name}" DC++ hub.  You are in \
+the main public chat room.  Multiple users may talk to you — each message \
+is prefixed with their nickname like "[SomeUser]: message".  All users \
+can see this conversation.
 
 Current date and time (UTC): {current_time}
 
 You have NO tools and NO access to hub internals.  You can only hold a \
 friendly, general-purpose conversation.
 
-Guidelines:
-- Keep responses short and friendly — this is a public chat room
-- Do NOT make up information about the hub
+FORMATTING RULES (IMPORTANT):
+- This is an NMDC chat client that does NOT render markdown
+- NEVER use markdown: no **bold**, no *italic*, no # headings, no ```code blocks```
+- NEVER use markdown tables (no | pipes)
+- For tabular data use fixed-width columns with spaces
+- Use plain ASCII text only
+- Keep responses short and conversational — this is a public chat room
+- Do NOT make up information about the hub (users, status, uptime, etc.)
 - If asked about hub status, suggest the user PM you for detailed info
 - Never reveal private information about users
 - Maximum response length: roughly {max_chat_length} characters
-{personality}\
+- Address users by name when replying to make multi-user chat clear
 {mood}\
 {memory}\
 """
@@ -164,6 +202,7 @@ class BotChatSession:
         self.mood_engine = mood_engine
         self.memory = memory
         self.created_at = time.time()
+        self.last_activity = time.time()
         self.messages: list[dict] = []
         self.tools: list[dict] = []
         self._base_system_prompt: str = ""
@@ -187,12 +226,13 @@ class BotChatSession:
 
         personality_text = ""
         if behavior and behavior.personality:
-            personality_text = f"\nPersonality: {behavior.personality}\n"
+            personality_text = f"PERSONALITY AND VOICE (always stay in character): {behavior.personality}\n\n"
 
         max_chat_length = behavior.max_chat_length if behavior else 400
 
         # Mood and memory are injected fresh on each chat() call;
-        # for the initial build we use empty placeholders.
+        # keep {mood}, {memory}, {current_time} as literal placeholders
+        # so _refresh_system_prompt() can replace them each turn.
         fmt = dict(
             bot_nick=bot_nick,
             hub_name=hub_name,
@@ -200,15 +240,23 @@ class BotChatSession:
             user_class=user_class,
             personality=personality_text,
             max_chat_length=max_chat_length,
-            current_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            mood="",
-            memory="",
         )
+
+        # Use a two-phase format: first substitute static fields,
+        # then leave dynamic placeholders intact for _refresh_system_prompt().
+        # Double-brace the dynamic placeholders so .format() preserves them.
+        def _prepare_template(template: str) -> str:
+            return (
+                template
+                .replace("{mood}", "{{mood}}")
+                .replace("{memory}", "{{memory}}")
+                .replace("{current_time}", "{{current_time}}")
+            )
 
         if mode == "chat":
             # Main chat — no hub tools, lowest security
             self.tools = []
-            prompt = SYSTEM_PROMPT_BOT_PUBLIC.format(**fmt)
+            prompt = _prepare_template(SYSTEM_PROMPT_BOT_PUBLIC).format(**fmt)
         else:
             # PM — tools depend on user class
             admin_class = llm_cfg.admin_class if llm_cfg else 5
@@ -216,13 +264,13 @@ class BotChatSession:
 
             if user_class >= admin_class:
                 self.tools = _build_readonly_tools() + _build_admin_tools()
-                prompt = SYSTEM_PROMPT_BOT_ADMIN.format(**fmt)
+                prompt = _prepare_template(SYSTEM_PROMPT_BOT_ADMIN).format(**fmt)
             elif user_class >= min_class:
                 self.tools = _build_readonly_tools()
-                prompt = SYSTEM_PROMPT_BOT_USER.format(**fmt)
+                prompt = _prepare_template(SYSTEM_PROMPT_BOT_USER).format(**fmt)
             else:
                 self.tools = []
-                prompt = SYSTEM_PROMPT_BOT_PUBLIC.format(**fmt)
+                prompt = _prepare_template(SYSTEM_PROMPT_BOT_PUBLIC).format(**fmt)
 
         # ── Attach web & memory tools (available in all modes) ──
         web_enabled = behavior.web_enabled if behavior else False
@@ -386,7 +434,7 @@ class BotChatSession:
 
             # If not using native tools, check for <action> blocks
             if not use_tools:
-                text = msg.content or "(no response)"
+                text = _strip_think_blocks(msg.content) or "(no response)"
                 if _ACTION_RE.search(text):
                     action_results = await _extract_and_execute_actions(
                         text, fake_user, is_admin,
@@ -400,7 +448,7 @@ class BotChatSession:
                 return text, tool_calls_made
 
             if not msg.tool_calls:
-                return msg.content or "(no response)", tool_calls_made
+                return _strip_think_blocks(msg.content) or "(no response)", tool_calls_made
 
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
@@ -437,12 +485,227 @@ class BotChatSession:
             max_tokens=self.llm_cfg.max_tokens if self.llm_cfg else 2048,
         )
         response = await client.chat.completions.create(**kwargs_final)
-        return response.choices[0].message.content or "(no response)", tool_calls_made
+        return _strip_think_blocks(response.choices[0].message.content) or "(no response)", tool_calls_made
+
+    async def chat_stream(self, user_message: str):
+        """Stream one user turn, yielding sentence/paragraph chunks.
+
+        This is an async generator that yields ``str`` chunks as they
+        become available.  The full message is appended to history once
+        complete.  Tool calls are executed silently and the final text
+        response is streamed.
+        """
+        import json as _json
+        import openai
+        from datetime import datetime, timedelta, timezone
+        from verlihub.api.routes.llm import (
+            _execute_tool, _get_openai_client,
+            _endpoint_supports_tools, _inject_hub_context,
+            _ACTION_RE, _extract_and_execute_actions,
+        )
+        from verlihub.api.auth import TokenData
+
+        await self._refresh_system_prompt()
+
+        global _endpoint_supports_tools_bot
+        bot_endpoint_name = (
+            self.behavior.endpoint if self.behavior and self.behavior.endpoint else ""
+        )
+        bot_endpoint = (
+            self.llm_cfg.get_endpoint(bot_endpoint_name)
+            if self.llm_cfg
+            else None
+        )
+        client = _get_openai_client(bot_endpoint)
+        bot_model = bot_endpoint.model if bot_endpoint else "llama3.1"
+        self.messages.append({"role": "user", "content": user_message})
+
+        fake_user = TokenData(
+            nick=self.nick,
+            user_class=self.user_class,
+            exp=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+        is_admin = (
+            self.llm_cfg
+            and self.user_class >= self.llm_cfg.admin_class
+        )
+        max_rounds = self.llm_cfg.max_tool_rounds if self.llm_cfg else 5
+        use_tools = bool(self.tools) and _endpoint_supports_tools is not False
+
+        for _round in range(max_rounds):
+            kwargs: dict[str, Any] = dict(
+                model=bot_model,
+                messages=self.messages,
+                temperature=self.llm_cfg.temperature if self.llm_cfg else 0.3,
+                max_tokens=self.llm_cfg.max_tokens if self.llm_cfg else 2048,
+                stream=True,
+            )
+            if use_tools:
+                kwargs["tools"] = self.tools
+                kwargs["tool_choice"] = "auto"
+
+            try:
+                stream = await client.chat.completions.create(**kwargs)
+            except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                if _round == 0 and use_tools:
+                    log.warning("Bot stream: tool calling not supported, falling back: %s", exc)
+                    use_tools = False
+                    import verlihub.api.routes.llm as _llm_mod
+                    _llm_mod._endpoint_supports_tools = False
+                    _inject_hub_context(self.messages, fake_user, is_admin)
+                    kwargs.pop("tools", None)
+                    kwargs.pop("tool_choice", None)
+                    stream = await client.chat.completions.create(**kwargs)
+                else:
+                    raise
+            except Exception:
+                # Streaming not supported — fall back to non-streaming
+                kwargs.pop("stream", None)
+                response = await client.chat.completions.create(**kwargs)
+                text = _strip_think_blocks(response.choices[0].message.content) or "(no response)"
+                self.messages.append(response.choices[0].message.model_dump())
+                yield text
+                return
+
+            # Consume the stream
+            content_parts: list[str] = []
+            tool_calls_acc: dict[int, dict] = {}
+            _in_think = False
+            _raw_buf = ""  # Accumulates raw text for think-block detection
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    token = delta.content
+                    content_parts.append(token)
+                    _raw_buf += token
+
+                    # Process accumulated buffer for <think> blocks.
+                    # We buffer because tags may span multiple tokens.
+                    while True:
+                        if _in_think:
+                            end_idx = _raw_buf.find("</think>")
+                            if end_idx == -1:
+                                # Still inside think block — consume buffer
+                                _raw_buf = ""
+                                break
+                            # Found end tag — skip everything up to and including </think>
+                            _raw_buf = _raw_buf[end_idx + len("</think>"):]
+                            _in_think = False
+                        else:
+                            start_idx = _raw_buf.find("<think>")
+                            if start_idx == -1:
+                                # No think tag — yield visible content
+                                # But keep a small tail in case a partial "<think" is at the end
+                                if len(_raw_buf) > 7:
+                                    to_yield = _raw_buf[:-7]
+                                    _raw_buf = _raw_buf[-7:]
+                                    if to_yield:
+                                        yield to_yield
+                                break
+                            else:
+                                # Yield content before the <think> tag
+                                before = _raw_buf[:start_idx]
+                                if before:
+                                    yield before
+                                _raw_buf = _raw_buf[start_idx + len("<think>"):]
+                                _in_think = True
+
+                if delta.tool_calls:
+                    for tc_d in delta.tool_calls:
+                        idx = tc_d.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc_d.id:
+                            tool_calls_acc[idx]["id"] = tc_d.id
+                        if tc_d.function:
+                            if tc_d.function.name:
+                                tool_calls_acc[idx]["name"] += tc_d.function.name
+                            if tc_d.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_d.function.arguments
+
+            # Flush any remaining visible content from the buffer.
+            # If the stream ended while inside a <think> block (incomplete
+            # thinking, timeout, or model that only produces reasoning),
+            # fall back to the regex-based stripper on the full content so
+            # we still yield whatever visible text was produced.
+            if _raw_buf and not _in_think:
+                yield _raw_buf
+                _raw_buf = ""
+
+            full_content = "".join(content_parts)
+
+            if _in_think and full_content:
+                # Stream ended mid-think — extract any visible text
+                fallback = _strip_think_blocks(full_content)
+                if fallback:
+                    yield fallback
+            msg_dict: dict = {"role": "assistant", "content": full_content or None}
+            if tool_calls_acc:
+                msg_dict["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+                ]
+            self.messages.append(msg_dict)
+
+            if not tool_calls_acc:
+                # No tool calls — streaming is done
+                return
+
+            # Execute tool calls and loop for next round
+            for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]:
+                fn_name = tc["name"]
+                try:
+                    fn_args = _json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except Exception:
+                    fn_args = {}
+                log.info("Bot tool call (%s→%s): %s(%s)", self.nick, self.bot_nick, fn_name, fn_args)
+
+                result = await self._execute_bot_tool(fn_name, fn_args)
+                if result is None:
+                    result = await _execute_tool(fn_name, fn_args, fake_user, is_admin)
+                self.messages.append(
+                    {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                )
+
+        # Exhausted rounds — yield a summary
+        yield "(working...)"
 
 
-# ---------------------------------------------------------------------------
-# Handler that plugs into the C++ event system
-# ---------------------------------------------------------------------------
+# Sentence/paragraph splitter for chunked NMDC delivery
+_SENTENCE_RE = re.compile(r'(?<=[.!?…])\s+|(?<=\n)\s*')
+
+
+def _chunk_sentences(text: str, min_chunk: int = 60) -> list[str]:
+    """Split text into sentence-sized chunks for progressive delivery.
+
+    Groups short sentences together so each chunk is at least
+    *min_chunk* characters (except the last one).
+    """
+    parts = _SENTENCE_RE.split(text)
+    chunks: list[str] = []
+    buf = ""
+    for part in parts:
+        if buf:
+            buf += " " + part
+        else:
+            buf = part
+        if len(buf) >= min_chunk:
+            chunks.append(buf)
+            buf = ""
+    if buf:
+        if chunks:
+            chunks.append(buf)
+        else:
+            chunks = [buf]
+    return chunks
 
 # Active sessions  —  keyed "pm:{nick}" or "chat:{nick}"
 _sessions: dict[str, BotChatSession] = {}
@@ -461,8 +724,15 @@ def _get_or_create_session(
     mood_engine: "BotMoodEngine | None" = None,
     memory: "BotMemory | None" = None,
 ) -> BotChatSession:
+    session_timeout = behavior.session_timeout if behavior else 7200
     with _sessions_lock:
         session = _sessions.get(key)
+        if session is not None:
+            # Check if session has expired
+            if session_timeout > 0 and (time.time() - session.last_activity) > session_timeout:
+                log.info("Bot session %s expired (idle %.0fs > %ds), starting fresh",
+                         key, time.time() - session.last_activity, session_timeout)
+                session = None  # will create a new one below
         if session is None:
             session = BotChatSession(
                 nick, user_class, bot_nick, hub_name,
@@ -474,7 +744,45 @@ def _get_or_create_session(
             # Update references so existing sessions pick up current mood
             session.mood_engine = mood_engine
             session.memory = memory
+            session.last_activity = time.time()
         return session
+
+
+def get_nmdc_sessions_for_user(nick: str) -> list[dict]:
+    """Return metadata about NMDC PM sessions for *nick*.
+
+    Used by the dashboard to list sessions that originated in the NMDC
+    client so the user can continue them from the web UI.
+    """
+    prefix = f"pm:{nick}"
+    results: list[dict] = []
+    with _sessions_lock:
+        for key, session in _sessions.items():
+            if key == prefix:
+                results.append({
+                    "session_id": f"nmdc-{nick}",
+                    "title": f"NMDC chat with {session.bot_nick}",
+                    "created_at": session.created_at,
+                    "last_activity": session.last_activity,
+                    "message_count": max(0, len(session.messages) - 1),  # exclude system
+                    "source": "nmdc",
+                })
+    return results
+
+
+def get_nmdc_session_messages(nick: str) -> list[dict] | None:
+    """Return the message history of an NMDC PM session.
+
+    Returns ``None`` if no session exists for *nick*.
+    """
+    key = f"pm:{nick}"
+    with _sessions_lock:
+        session = _sessions.get(key)
+        if session is None:
+            return None
+        session.last_activity = time.time()
+        # Return a copy excluding the system prompt
+        return [m for m in session.messages if m.get("role") != "system"]
 
 
 class BotChatHandler:
@@ -503,6 +811,15 @@ class BotChatHandler:
         self._mood_task: Optional[asyncio.Task] = None
         self._mood_engine: "BotMoodEngine | None" = None
         self._memory: "BotMemory | None" = None
+
+        # ── Main-chat message batching ──
+        # Collect messages arriving within a short window so the bot
+        # can respond to all of them at once instead of firing separate
+        # LLM calls per message.
+        self._chat_batch: list[tuple[str, str]] = []  # [(nick, body), ...]
+        self._chat_batch_lock = threading.Lock()
+        self._chat_batch_task: Optional[asyncio.Task] = None
+        self._chat_batch_delay: float = 2.5  # seconds to wait for more msgs
 
         # Resolve names from config
         try:
@@ -755,22 +1072,60 @@ class BotChatHandler:
             log.warning("No asyncio loop — cannot process bot chat")
             return True
 
+        # Add to batch and schedule a delayed flush.
+        # If more messages arrive within the delay window they will be
+        # grouped together so the bot responds to all of them at once.
+        with self._chat_batch_lock:
+            self._chat_batch.append((nick, body))
+
         asyncio.run_coroutine_threadsafe(
-            self._handle_chat_async(nick, body), loop
+            self._schedule_chat_batch(), loop
         )
 
         return True  # let the original message through to other users
 
+    async def _schedule_chat_batch(self) -> None:
+        """Schedule processing of the accumulated chat batch.
+
+        If a flush is already pending, this is a no-op — the new message
+        will be picked up when the pending delay expires.
+        """
+        if self._chat_batch_task and not self._chat_batch_task.done():
+            return  # a flush is already scheduled
+        self._chat_batch_task = asyncio.ensure_future(self._flush_chat_batch())
+
+    async def _flush_chat_batch(self) -> None:
+        """Wait for the batch window then process all collected messages."""
+        await asyncio.sleep(self._chat_batch_delay)
+
+        # Drain the batch
+        with self._chat_batch_lock:
+            batch = list(self._chat_batch)
+            self._chat_batch.clear()
+
+        if not batch:
+            return
+
+        # Build a combined message with sender attribution
+        if len(batch) == 1:
+            nick, body = batch[0]
+            combined = f"[{nick}]: {body}"
+        else:
+            parts = [f"[{nick}]: {body}" for nick, body in batch]
+            combined = "\n".join(parts)
+
+        # Use the first sender's nick for session creation
+        first_nick = batch[0][0]
+        await self._handle_chat_async(first_nick, combined)
+
     # -- async LLM handlers -----------------------------------------------
 
     async def _handle_pm_async(self, nick: str, message: str) -> None:
-        """Process a PM to the bot via the LLM pipeline, with thinking feedback."""
+        """Process a PM to the bot via the LLM pipeline, with streaming delivery."""
         thinking_task: asyncio.Task | None = None
         try:
-            # Set bot description to "thinking"
             self._set_thinking()
 
-            # Start periodic "thinking…" feedback in PM
             thinking_interval = (
                 self.behavior.thinking_interval if self.behavior else 15
             )
@@ -792,12 +1147,37 @@ class BotChatHandler:
                 mood_engine=self._mood_engine,
                 memory=self._memory,
             )
-            response_text, _tools = await session.chat(message)
-            self._send_pm(nick, response_text)
 
-            # Record the interaction for mood tracking
+            # Stream and deliver in sentence-sized chunks
+            buf = ""
+            sent_any = False
+            async for token in session.chat_stream(message):
+                buf += token
+                chunks = _chunk_sentences(buf, min_chunk=80)
+                if len(chunks) > 1:
+                    for chunk in chunks[:-1]:
+                        if thinking_task and not thinking_task.done():
+                            thinking_task.cancel()
+                            thinking_task = None
+                        self._send_pm(nick, chunk)
+                        sent_any = True
+                        await asyncio.sleep(0.3)
+                    buf = chunks[-1]
+
+            # Send any remaining content
+            if buf.strip():
+                if thinking_task and not thinking_task.done():
+                    thinking_task.cancel()
+                    thinking_task = None
+                self._send_pm(nick, buf.strip())
+                sent_any = True
+
+            if not sent_any:
+                self._send_pm(nick, "(no response)")
+
             if self._mood_engine:
                 self._mood_engine.record_interaction()
+
         except ImportError:
             log.warning("openai package not installed — bot chat unavailable")
             self._send_pm(
@@ -813,6 +1193,12 @@ class BotChatHandler:
                     nick,
                     "⚠ The AI backend is temporarily unreachable. Please try again later.",
                 )
+            elif "does not exist" in err_msg or "404" in err_msg:
+                self._send_pm(
+                    nick,
+                    "⚠ The configured AI model was not found. "
+                    "Please contact an operator to check the LLM endpoint.",
+                )
             else:
                 self._send_pm(
                     nick,
@@ -820,17 +1206,17 @@ class BotChatHandler:
                     "Please try again or contact an operator.",
                 )
         finally:
-            # Cancel thinking hints and reset description
             if thinking_task and not thinking_task.done():
                 thinking_task.cancel()
             self._set_idle()
 
     async def _handle_chat_async(self, nick: str, message: str) -> None:
-        """Process a main-chat mention via the LLM pipeline (no tools).
+        """Process a main-chat mention via the LLM pipeline with streaming.
 
         All users share one public chat session (``chat:public``) so
         conversation context is visible and consistent for everyone in
-        the main chat room.
+        the main chat room.  Responses are streamed in sentence-sized
+        chunks for faster perceived latency.
         """
         try:
             self._set_thinking()
@@ -848,28 +1234,65 @@ class BotChatHandler:
                 mood_engine=self._mood_engine,
                 memory=self._memory,
             )
-            response_text, _tools = await session.chat(message)
 
-            # Record the interaction for mood tracking
+            max_len = self.behavior.max_chat_length if self.behavior else 400
+
+            # Stream and deliver in sentence-sized chunks
+            buf = ""
+            total_sent = 0
+            sent_any = False
+            async for token in session.chat_stream(message):
+                buf += token
+
+                # Enforce max length
+                if max_len > 0 and total_sent + len(buf) > max_len:
+                    remaining = max_len - total_sent
+                    if remaining > 0:
+                        # Truncate at word boundary, not mid-word
+                        snippet = buf[:remaining]
+                        last_space = snippet.rfind(' ')
+                        if last_space > remaining // 2:
+                            snippet = snippet[:last_space]
+                        self._send_chat(snippet.rstrip() + "…")
+                        sent_any = True
+                    break
+
+                chunks = _chunk_sentences(buf, min_chunk=60)
+                if len(chunks) > 1:
+                    for chunk in chunks[:-1]:
+                        self._send_chat(chunk)
+                        total_sent += len(chunk)
+                        sent_any = True
+                        await asyncio.sleep(0.4)
+                    buf = chunks[-1]
+
+            # Send remaining buffer
+            if buf.strip() and (max_len <= 0 or total_sent + len(buf) <= max_len):
+                self._send_chat(buf.strip())
+                sent_any = True
+
+            if not sent_any:
+                self._send_chat("(no response)")
+
             if self._mood_engine:
                 self._mood_engine.record_interaction()
 
-            # Truncate long responses for main chat
-            max_len = self.behavior.max_chat_length if self.behavior else 400
-            if max_len > 0 and len(response_text) > max_len:
-                response_text = response_text[:max_len].rstrip() + "…"
-
-            self._send_chat(response_text)
         except ImportError:
             log.warning("openai package not installed — bot chat unavailable")
             self._send_chat(
                 "⚠ AI chat is not available right now. Please try again later."
             )
-        except Exception:
+        except Exception as exc:
             log.exception("Bot chat handler error for %s", nick)
-            self._send_chat(
-                "⚠ Sorry, I ran into an issue processing that. Please try again."
-            )
+            err_msg = str(exc).lower()
+            if "does not exist" in err_msg or "404" in err_msg:
+                self._send_chat(
+                    "⚠ The configured AI model was not found on this endpoint."
+                )
+            else:
+                self._send_chat(
+                    "⚠ Sorry, I ran into an issue processing that. Please try again."
+                )
         finally:
             self._set_idle()
 
@@ -937,7 +1360,12 @@ class BotChatHandler:
 
                     max_len = self.behavior.max_chat_length if self.behavior else 400
                     if max_len > 0 and len(response_text) > max_len:
-                        response_text = response_text[:max_len].rstrip() + "…"
+                        # Truncate at word boundary
+                        snippet = response_text[:max_len]
+                        last_space = snippet.rfind(' ')
+                        if last_space > max_len // 2:
+                            snippet = snippet[:last_space]
+                        response_text = snippet.rstrip() + "…"
 
                     self._send_chat(response_text)
                 except Exception:

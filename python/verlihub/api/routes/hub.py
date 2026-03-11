@@ -435,6 +435,14 @@ def send_chat_message(
             "user_class": user.user_class,
         })
 
+        # Dispatch the chat_message event so the bot handler sees it too.
+        # Without this, messages sent from the web dashboard never reach
+        # the bot's _on_chat callback.
+        try:
+            ctx.events.OnChatMessage(user.nick, request.message)
+        except Exception:
+            pass  # best-effort — don't fail the REST response
+
     return {"success": success}
 
 

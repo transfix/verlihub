@@ -401,6 +401,7 @@ async def _execute_tool(
             for u in users:
                 entry = {
                     "nick": u.get("nick", ""),
+                    "ip": u.get("ip", ""),
                     "country_code": u.get("country_code", ""),
                     "share_bytes": u.get("share", 0),
                     "share_formatted": _format_bytes(u.get("share", 0)),
@@ -409,7 +410,6 @@ async def _execute_tool(
                     "description": u.get("description", ""),
                 }
                 if is_admin:
-                    entry["ip"] = u.get("ip", "")
                     entry["hostname"] = u.get("hostname", "")
                 result.append(entry)
             return json.dumps(result, default=str)
@@ -423,7 +423,6 @@ async def _execute_tool(
                 return json.dumps({"error": f"User '{nick}' not found or not online"})
             result = dict(info)
             if not is_admin:
-                result.pop("ip", None)
                 result.pop("hostname", None)
             return json.dumps(result, default=str)
         
@@ -660,6 +659,18 @@ async def _execute_tool(
             except Exception as e:
                 return json.dumps({"error": f"Set MOTD failed: {e}"})
         
+        # ------------------------------------------------------------------
+        # Web tools (search, fetch, RSS)
+        # ------------------------------------------------------------------
+        elif tool_name in ("web_search", "fetch_webpage", "read_rss"):
+            try:
+                from verlihub.bot_web import execute_web_tool
+                return await execute_web_tool(tool_name, arguments)
+            except ImportError:
+                return json.dumps({"error": "Web tools not available (missing bot_web module)"})
+            except Exception as e:
+                return json.dumps({"error": f"Web tool error: {e}"})
+
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
     
@@ -789,6 +800,8 @@ SYSTEM_PROMPT_ADMIN = """\
 You are a Verlihub DC++ hub assistant with administrator access. You help hub \
 operators monitor and manage the hub through natural language.
 
+{personality_block}\
+
 You have access to tools that query and control the live hub. Use them to answer \
 questions accurately — never guess hub state, always check via tools.
 
@@ -805,7 +818,6 @@ Guidelines:
 - Present user lists as clean tables when there are few users
 - Summarize when there are many users (20+)
 - Flag anything unusual: zero-share users, suspicious clients, connectivity issues
-- Be direct and professional — this is an ops tool
 - Format numbers readably (e.g. "1.23 TiB" not raw bytes)
 - When asked to kick or ban, confirm the action and provide the result
 """
@@ -814,13 +826,17 @@ SYSTEM_PROMPT_USER = """\
 You are a Verlihub DC++ hub assistant. You help users learn about the hub \
 and see who's online.
 
-You have access to read-only tools that show public hub information. Use them \
+{personality_block}\
+
+You have access to read-only tools that show hub information. Use them \
 to answer questions accurately.
 
-You can see: hub info, online users (nicknames, countries, share sizes, classes), \
-operators, geographic distribution, and share statistics.
+You can see: hub info, online users (nicknames, IPs, countries, share sizes, \
+user classes, client tags, descriptions), operators, geographic distribution, \
+and share statistics.  This is all publicly visible information that clients \
+broadcast via MyINFO.
 
-You CANNOT: see IP addresses, kick users, ban users, change configuration, \
+You CANNOT: kick users, ban users, change configuration, \
 execute console commands, or send messages on behalf of users.
 
 Guidelines:
@@ -940,6 +956,28 @@ async def _extract_and_execute_actions(
     return results
 
 
+def _strip_think_blocks(text: str) -> str:
+    """Remove ``<think>…</think>`` reasoning blocks from LLM output.
+
+    Handles both properly closed and unterminated ``<think>`` blocks
+    (e.g. when ``max_tokens`` cuts off the reasoning mid-stream).
+    If stripping would remove *all* visible content, falls back to
+    returning the text with just the tags removed.
+    """
+    if not text:
+        return text
+    # 1. Strip properly closed <think>...</think> blocks
+    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', text).lstrip()
+    # 2. Strip any remaining unterminated <think> block
+    idx = cleaned.find('<think>')
+    if idx >= 0:
+        cleaned = cleaned[:idx].rstrip()
+    # 3. If nothing left, fall back to tags-only removal
+    if not cleaned.strip() and text.strip():
+        cleaned = text.replace('<think>', '').replace('</think>', '').strip()
+    return cleaned
+
+
 def _strip_action_blocks(text: str) -> str:
     """Remove <action>...</action> blocks from visible output."""
     return _ACTION_RE.sub('', text).strip()
@@ -1039,12 +1077,63 @@ class ChatSession:
         self.llm_cfg = llm_cfg
         self.endpoint: LlmEndpoint = endpoint or llm_cfg.get_endpoint()
         self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
+
+        # Add web tools (search, fetch, RSS) if enabled in bot behavior config
+        try:
+            _cfg = get_config_optional()
+            _behavior = getattr(getattr(_cfg, "bots", None), "behavior", None) if _cfg else None
+            if _behavior and getattr(_behavior, "web_enabled", False):
+                from verlihub.bot_web import build_web_tools
+                self.tools += build_web_tools()
+        except Exception:
+            pass
+
         global _endpoint_supports_tools
         self.tools_available = _endpoint_supports_tools is not False
         self.pending_request = False  # True while server is processing an LLM call
         system_prompt = SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER
-        # Personalize the system prompt
+
+        # Build personality block and hub context to embed in the prompt
+        personality_block = ""
+        extra_parts: list[str] = []
+        try:
+            cfg = get_config_optional()
+            if cfg is not None:
+                behavior = getattr(getattr(cfg, "bots", None), "behavior", None)
+                security = getattr(getattr(cfg, "bots", None), "security", None)
+                hub = getattr(cfg, "hub", None)
+
+                hub_name = getattr(hub, "name", "") if hub else ""
+                bot_nick = getattr(security, "nick", "") if security else ""
+
+                if hub_name:
+                    extra_parts.append(f"The hub is called \"{hub_name}\".")
+                if bot_nick:
+                    extra_parts.append(
+                        f"You are also known as \"{bot_nick}\" on the NMDC side of the hub."
+                    )
+                if behavior:
+                    personality = getattr(behavior, "personality", "")
+                    rss_feeds = getattr(behavior, "rss_feeds", [])
+                    if personality:
+                        personality_block = (
+                            f"PERSONALITY AND VOICE (always stay in character): {personality}"
+                        )
+                    if rss_feeds:
+                        feeds = ", ".join(rss_feeds)
+                        extra_parts.append(
+                            f"You are aware of these RSS feeds and can discuss their content: {feeds}"
+                        )
+        except Exception:
+            pass  # config unavailable — use base prompt only
+
+        # Substitute personality into the prompt template
+        system_prompt = system_prompt.replace("{personality_block}", personality_block)
+        # Append operator identity and extra hub context
         system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
+        if extra_parts:
+            system_prompt += "\n" + "\n".join(extra_parts)
+
         self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
         self.created_at = time.time()
 
@@ -1108,7 +1197,7 @@ class ChatSession:
             )
             msg = response.choices[0].message
             self.messages.append(msg.model_dump())
-            text = msg.content or "(no response)"
+            text = _strip_think_blocks(msg.content) or "(no response)"
 
             # Handle <action> blocks for admin write operations
             if self.is_admin and _ACTION_RE.search(text):
@@ -1171,7 +1260,7 @@ class ChatSession:
             self.messages.append(msg.model_dump())
             
             if not msg.tool_calls:
-                return msg.content or "(no response)", tool_calls_made
+                return _strip_think_blocks(msg.content) or "(no response)", tool_calls_made
             
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
@@ -1202,7 +1291,7 @@ class ChatSession:
             temperature=self.llm_cfg.temperature,
             max_tokens=self.llm_cfg.max_tokens,
         )
-        return response.choices[0].message.content or "(no response)", tool_calls_made
+        return _strip_think_blocks(response.choices[0].message.content) or "(no response)", tool_calls_made
 
 
 # Active sessions keyed by "nick:session_id"
@@ -1417,11 +1506,8 @@ async def _run_llm_request(
 
             full_content = "".join(content_parts)
 
-            # Strip <think> reasoning blocks
-            clean_content = re.sub(r'<think>[\s\S]*?</think>', '', full_content).lstrip()
-            think_idx = clean_content.find('<think>')
-            if think_idx >= 0:
-                clean_content = clean_content[:think_idx].rstrip()
+            # Strip <think> reasoning blocks (e.g. Qwen 3.5 thinking mode)
+            clean_content = _strip_think_blocks(full_content)
 
             visible_content = _strip_action_blocks(clean_content)
 
@@ -1487,11 +1573,8 @@ async def _run_llm_request(
                                 summary_parts.append(delta.content)
                                 await emit({"type": "stream_delta", "content": delta.content})
                         summary_text = "".join(summary_parts)
-                        summary_clean = re.sub(r'<think>[\s\S]*?</think>', '', summary_text).lstrip()
+                        summary_clean = _strip_think_blocks(summary_text)
                         summary_clean = _strip_action_blocks(summary_clean)
-                        think_idx2 = summary_clean.find('<think>')
-                        if think_idx2 >= 0:
-                            summary_clean = summary_clean[:think_idx2].rstrip()
                         if sent_summary_start:
                             await emit({"type": "stream_end", "content": summary_clean})
                         else:
@@ -1551,6 +1634,18 @@ async def _run_llm_request(
     except asyncio.CancelledError:
         log.info("LLM request cancelled for session %s", key)
         raise
+    except openai.NotFoundError as e:
+        log.warning("Model not found on endpoint (session %s): %s", key, e)
+        model = session.endpoint.model
+        ep_name = session.endpoint.name or session.endpoint.base_url
+        await emit({
+            "type": "error",
+            "content": (
+                f"The model **{model}** was not found on endpoint "
+                f"**{ep_name}**. Please switch to a different endpoint "
+                f"or check that the model is loaded on the server."
+            ),
+        })
     except Exception as e:
         log.exception("LLM background request error (session %s)", key)
         err_msg = str(e).lower()
@@ -1637,15 +1732,60 @@ async def llm_chat(
 async def list_sessions(
     user: TokenData = Depends(get_current_user),
 ):
-    """List the caller's active chat sessions."""
+    """List the caller's active chat sessions (dashboard + NMDC)."""
     prefix = f"{user.nick}:"
     sessions = [
         SessionInfo(**meta)
         for key, meta in _session_meta.items()
         if key.startswith(prefix)
     ]
+
+    # Also include NMDC PM sessions so users can continue them on the dashboard
+    try:
+        from verlihub.bot_chat import get_nmdc_sessions_for_user
+        for nmdc_meta in get_nmdc_sessions_for_user(user.nick):
+            sessions.append(SessionInfo(
+                session_id=nmdc_meta["session_id"],
+                title=nmdc_meta["title"],
+                created_at=nmdc_meta["created_at"],
+                message_count=nmdc_meta["message_count"],
+            ))
+    except Exception:
+        pass  # bot_chat module may not be loaded
+
     sessions.sort(key=lambda s: s.created_at, reverse=True)
     return SessionListResponse(sessions=sessions)
+
+
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    user: TokenData = Depends(get_current_user),
+):
+    """Get the message history of a session (dashboard or NMDC)."""
+    # Check for NMDC session first
+    if session_id.startswith("nmdc-"):
+        try:
+            from verlihub.bot_chat import get_nmdc_session_messages
+            nick = session_id[len("nmdc-"):]
+            if nick != user.nick:
+                raise HTTPException(403, "Cannot access another user's NMDC session")
+            messages = get_nmdc_session_messages(nick)
+            if messages is None:
+                raise HTTPException(404, "NMDC session not found")
+            return {"messages": messages}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to fetch NMDC session: {exc}")
+
+    # Dashboard session
+    key = _session_key(user.nick, session_id)
+    session = _sessions.get(key)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    # Return non-system messages
+    return {"messages": [m for m in session.messages if m.get("role") != "system"]}
 
 
 @router.delete("/sessions/{session_id}")

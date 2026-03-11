@@ -324,6 +324,12 @@ class BotBehaviorConfig:
     # SQLite — whichever the hub is configured to use).
     memory_enabled: bool = False
 
+    # ── Session management ──────────────────────────────────────────
+    # How long (seconds) an NMDC PM session stays alive before a new
+    # one is started.  Applies to both the NMDC client and the
+    # dashboard.  Default 7200 = 2 hours.
+    session_timeout: int = 7200
+
 
 @dataclass
 class BotsConfig:

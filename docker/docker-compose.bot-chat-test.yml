@@ -94,7 +94,7 @@ services:
   bot-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     container_name: bot-chat-test-runner
     depends_on:
       bot-hub:

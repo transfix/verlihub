@@ -88,6 +88,9 @@ COPY --from=builder /src/python /src/python
 # Copy docker test configs
 COPY --from=builder /src/docker /app/docker
 
+# Symlink so relative 'docker/tests/...' paths resolve from WORKDIR=/src
+RUN ln -sf /app/docker /src/docker
+
 # Install Python test dependencies and verlihub-py package
 RUN pip3 install --no-cache-dir --break-system-packages \
     pytest>=7.4.0 \
@@ -138,6 +141,9 @@ RUN useradd -r -s /bin/false verlihub && \
 
 # Ensure 'python' command exists (Ubuntu 24.04 only ships python3)
 RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Create results directory for JUnit XML output
+RUN mkdir -p /app/results
 
 # Set up Python path for SWIG module
 ENV PYTHONPATH=/build/python:/src/python

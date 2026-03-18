@@ -68,7 +68,7 @@ services:
   qa-load-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     container_name: qa-load-test
     depends_on:
       qa-hub:

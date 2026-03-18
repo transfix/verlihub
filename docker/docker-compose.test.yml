@@ -72,7 +72,7 @@ services:
   mysql-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       mysql:
         condition: service_healthy
@@ -93,7 +93,6 @@ services:
         --ignore=python/tests/test_benchmarks.py
         ${PYTEST_ARGS:-}
     volumes:
-      - ../python:/app/python:ro
       - test-results:/app/results
     networks:
       - test-network
@@ -104,7 +103,7 @@ services:
   postgres-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +124,6 @@ services:
         --ignore=python/tests/test_benchmarks.py
         ${PYTEST_ARGS:-}
     volumes:
-      - ../python:/app/python:ro
       - test-results:/app/results
     networks:
       - test-network
@@ -136,7 +134,7 @@ services:
   all-db-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       mysql:
         condition: service_healthy
@@ -191,7 +189,6 @@ services:
         # Exit with failure if any tests failed
         [ -z "$$SQLITE_FAILED" ] && [ -z "$$MYSQL_FAILED" ] && [ -z "$$POSTGRES_FAILED" ]
     volumes:
-      - ../python:/app/python:ro
       - test-results:/app/results
     networks:
       - test-network
@@ -202,7 +199,7 @@ services:
   sql-semantics-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       mysql:
         condition: service_healthy
@@ -229,9 +226,8 @@ services:
         echo "SQL Semantics Comparison Tests"
         echo "=========================================="
         echo "Testing SQL behavior across database backends..."
-        python3 /app/python/tests/test_sql_semantics.py
+        python3 python/tests/test_sql_semantics.py
     volumes:
-      - ../python:/app/python:ro
       - test-results:/app/results
     networks:
       - test-network

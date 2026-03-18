@@ -92,7 +92,7 @@ services:
   llm-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     container_name: llm-test-runner
     depends_on:
       llm-hub:

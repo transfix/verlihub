@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.websockets import WebSocketState
@@ -160,65 +160,13 @@ class TestHubEventHandlerOnLog:
 
     @classmethod
     def _get_on_log(cls):
-        """Get the OnLog method, stubbing the SWIG module if necessary.
-
-        Returns a callable(level: int, message: str) that exercises the
-        real OnLog logic from core.py without requiring the C++ extension.
-
-        The stub is installed temporarily and cleaned up afterwards so
-        it does not leak into other test modules (e.g. test_plugins.py)
-        that rely on ``verlihub_core`` being ``None`` to skip.
-        """
+        """Get the OnLog method, skipping if SWIG module unavailable."""
         if cls._on_log_fn is not None:
             return cls._on_log_fn
 
-        import sys
-        import verlihub as _pkg
-
-        swig_available = True
-        try:
-            from verlihub import verlihub_core as _vc
-            if _vc is None:
-                swig_available = False
-        except ImportError:
-            swig_available = False
-
-        if not swig_available:
-            # Build a lightweight stub module with a real base class
-            # so HubEventHandler can subclass it normally.
-            import types
-            stub_mod = types.ModuleType("verlihub.verlihub_core")
-
-            class _IHubEventCallback:
-                """Minimal stand-in for the SWIG IHubEventCallback."""
-                pass
-
-            stub_mod.IHubEventCallback = _IHubEventCallback
-            stub_mod.HubContext = MagicMock()
-            stub_mod.UserInfoSnapshot = MagicMock()
-
-            # Save original state
-            orig_swig = sys.modules.get("verlihub.verlihub_core")
-            orig_attr = getattr(_pkg, "verlihub_core", None)
-
-            # Temporarily install stub so verlihub.core can be imported
-            sys.modules["verlihub.verlihub_core"] = stub_mod
-            _pkg.verlihub_core = stub_mod
-            sys.modules.pop("verlihub.core", None)
-
-            from verlihub.core import HubEventHandler
-            cls._on_log_fn = HubEventHandler.OnLog
-
-            # Restore original state — prevents stub from leaking into
-            # other test files that check ``verlihub_core is None``.
-            if orig_swig is None:
-                sys.modules.pop("verlihub.verlihub_core", None)
-            else:
-                sys.modules["verlihub.verlihub_core"] = orig_swig
-            _pkg.verlihub_core = orig_attr
-            sys.modules.pop("verlihub.core", None)
-
-            return cls._on_log_fn
+        from verlihub import verlihub_core
+        if verlihub_core is None:
+            pytest.skip("verlihub_core SWIG module not built")
 
         from verlihub.core import HubEventHandler
         cls._on_log_fn = HubEventHandler.OnLog

@@ -75,7 +75,7 @@ services:
   sqlite-memory-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       sqlite-memory-server:
         condition: service_healthy
@@ -114,7 +114,7 @@ services:
   sqlite-file-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       sqlite-file-server:
         condition: service_healthy
@@ -154,7 +154,7 @@ services:
   mysql-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       mysql-server:
         condition: service_healthy
@@ -194,7 +194,7 @@ services:
   postgres-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       postgres-server:
         condition: service_healthy
@@ -237,7 +237,7 @@ services:
   default-startup-test:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       default-startup-server:
         condition: service_healthy
@@ -256,7 +256,7 @@ services:
   all-smoke-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     depends_on:
       sqlite-memory-test:
         condition: service_completed_successfully

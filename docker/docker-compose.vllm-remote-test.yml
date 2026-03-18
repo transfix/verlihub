@@ -45,7 +45,7 @@ services:
   vllm-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.test
+      dockerfile: docker/Dockerfile.verlihub-py
     container_name: vllm-remote-test-runner
     depends_on:
       vllm-hub:

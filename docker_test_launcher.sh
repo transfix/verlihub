@@ -148,7 +148,9 @@ build_images() {
     log_info "Building Docker images..."
     cd "$PROJECT_DIR"
     
-    docker compose -f "$COMPOSE_TEST" build --quiet
+    # Build images sequentially to avoid containerd lock contention
+    docker compose -f "$COMPOSE_TEST" build --quiet mysql-tests
+    docker compose -f "$COMPOSE_TEST" build --quiet postgres-tests
 }
 
 cleanup_containers() {
@@ -395,16 +397,17 @@ run_llm_tests() {
     log_info "This pulls ~400 MB model on first run — subsequent runs use cache"
     cd "$PROJECT_DIR"
 
-    # Build images
+    # Build images sequentially to avoid containerd lock contention
     if [ "$NO_BUILD" != "1" ]; then
         log_info "Building Docker images..."
-        docker compose -f "$COMPOSE_LLM" build --quiet
+        docker compose -f "$COMPOSE_LLM" build --quiet llm-hub
+        docker compose -f "$COMPOSE_LLM" build --quiet llm-tests
     fi
 
     # Run tests (ollama-pull runs automatically via depends_on)
     local exit_code=0
     docker compose -f "$COMPOSE_LLM" up \
-        --build --abort-on-container-exit llm-tests \
+        --abort-on-container-exit llm-tests \
         || exit_code=$?
 
     if [ "$KEEP_RUNNING" != "1" ]; then
@@ -425,16 +428,17 @@ run_bot_chat_tests() {
     log_info "This tests PM + main chat → Hub-Security bot → LLM pipeline"
     cd "$PROJECT_DIR"
 
-    # Build images
+    # Build images sequentially to avoid containerd lock contention
     if [ "$NO_BUILD" != "1" ]; then
         log_info "Building Docker images..."
-        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet
+        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet bot-hub
+        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet bot-tests
     fi
 
     # Run tests
     local exit_code=0
     docker compose -f "$COMPOSE_BOT_CHAT" up \
-        --build --abort-on-container-exit bot-tests \
+        --abort-on-container-exit bot-tests \
         || exit_code=$?
 
     if [ "$KEEP_RUNNING" != "1" ]; then
@@ -462,16 +466,17 @@ run_vllm_remote_tests() {
         log_warning "Remote vLLM endpoint may be unreachable — tests may fail"
     fi
 
-    # Build images
+    # Build images sequentially to avoid containerd lock contention
     if [ "$NO_BUILD" != "1" ]; then
         log_info "Building Docker images..."
-        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet
+        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet vllm-hub
+        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet vllm-tests
     fi
 
     # Run tests
     local exit_code=0
     docker compose -f "$COMPOSE_VLLM_REMOTE" up \
-        --build --abort-on-container-exit vllm-tests \
+        --abort-on-container-exit vllm-tests \
         || exit_code=$?
 
     if [ "$KEEP_RUNNING" != "1" ]; then

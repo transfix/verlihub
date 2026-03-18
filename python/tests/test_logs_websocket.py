@@ -156,13 +156,58 @@ class TestHubEventHandlerOnLog:
         yield buf
         buf.clear()
 
+    @staticmethod
+    def _get_on_log():
+        """Get the OnLog method, stubbing the SWIG module if necessary.
+
+        Returns a callable(level: int, message: str) that exercises the
+        real OnLog logic from core.py without requiring the C++ extension.
+        """
+        import sys
+        import verlihub as _pkg
+
+        swig_available = True
+        try:
+            from verlihub import verlihub_core as _vc
+            if _vc is None:
+                swig_available = False
+        except ImportError:
+            swig_available = False
+
+        if not swig_available:
+            # Build a lightweight stub module with a real base class
+            # so HubEventHandler can subclass it normally.
+            import types
+            stub_mod = types.ModuleType("verlihub.verlihub_core")
+
+            class _IHubEventCallback:
+                """Minimal stand-in for the SWIG IHubEventCallback."""
+                pass
+
+            stub_mod.IHubEventCallback = _IHubEventCallback
+            stub_mod.HubContext = MagicMock()
+            stub_mod.UserInfoSnapshot = MagicMock()
+            sys.modules["verlihub.verlihub_core"] = stub_mod
+            _pkg.verlihub_core = stub_mod
+
+            # Evict a previously-cached failed import of verlihub.core
+            sys.modules.pop("verlihub.core", None)
+
+        from verlihub.core import HubEventHandler
+        return HubEventHandler.OnLog
+
+    def _make_handler(self):
+        """Return a plain object with OnLog bound to it."""
+        on_log = self._get_on_log()
+
+        class _FakeHandler:
+            OnLog = on_log
+
+        return _FakeHandler()
+
     def test_on_log_stores_in_buffer(self, fresh_buffer):
         """OnLog should store the C++ log entry in the ring buffer via emit_log."""
-        from verlihub.core import HubEventHandler
-
-        handler = MagicMock(spec=HubEventHandler)
-        handler.OnLog = HubEventHandler.OnLog.__get__(handler)
-
+        handler = self._make_handler()
         handler.OnLog(0, "[2025-01-01] [L0] [hub.cpp:42] Hub started")
 
         assert len(fresh_buffer) == 1
@@ -173,20 +218,13 @@ class TestHubEventHandlerOnLog:
 
     def test_on_log_no_double_storage(self, fresh_buffer):
         """OnLog should store exactly one entry per call (no double-store)."""
-        from verlihub.core import HubEventHandler
-
-        handler = MagicMock(spec=HubEventHandler)
-        handler.OnLog = HubEventHandler.OnLog.__get__(handler)
-
+        handler = self._make_handler()
         handler.OnLog(0, "single entry test")
         assert len(fresh_buffer) == 1
 
     def test_on_log_does_not_raise(self, fresh_buffer):
         """OnLog must swallow exceptions (called from C++ context)."""
-        from verlihub.core import HubEventHandler
-
-        handler = MagicMock(spec=HubEventHandler)
-        handler.OnLog = HubEventHandler.OnLog.__get__(handler)
+        handler = self._make_handler()
 
         with patch("verlihub.log_buffer.get_log_buffer", side_effect=RuntimeError("boom")):
             # Should not raise
@@ -194,10 +232,7 @@ class TestHubEventHandlerOnLog:
 
     def test_on_log_level_mapping(self, fresh_buffer):
         """Different C++ levels should map to correct string levels."""
-        from verlihub.core import HubEventHandler
-
-        handler = MagicMock(spec=HubEventHandler)
-        handler.OnLog = HubEventHandler.OnLog.__get__(handler)
+        handler = self._make_handler()
 
         handler.OnLog(0, "level-0")
         handler.OnLog(2, "level-2")

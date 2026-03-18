@@ -306,14 +306,15 @@ class VllmRemoteE2ETests:
             self.results.record(name, False, "no auth token", skip=True)
             return
         try:
-            # The MCP endpoint accepts Streamable HTTP; just check it doesn't 404
-            r = _get(f"{self.api_url}/api/v1/mcp/sse",
+            # MCP SDK v1.26+ uses Streamable HTTP transport (not SSE).
+            # A GET to the mount root returns 405 (Method Not Allowed) —
+            # that proves the endpoint is mounted.  A 404 means it isn't.
+            r = _get(f"{self.api_url}/api/v1/mcp",
                      headers=self._auth_header(), timeout=10)
-            # A 404 means MCP not mounted
             ok = r.status_code != 404
             self.results.record(name, ok, f"status={r.status_code}")
         except requests.exceptions.ReadTimeout:
-            # SSE/streaming would block — that's fine, means it's mounted
+            # Streaming would block — that's fine, means it's mounted
             self.results.record(name, True,
                                 "endpoint is streaming (timeout=ok)")
         except Exception as e:

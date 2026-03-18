@@ -156,13 +156,22 @@ class TestHubEventHandlerOnLog:
         yield buf
         buf.clear()
 
-    @staticmethod
-    def _get_on_log():
+    _on_log_fn = None  # cached across test methods
+
+    @classmethod
+    def _get_on_log(cls):
         """Get the OnLog method, stubbing the SWIG module if necessary.
 
         Returns a callable(level: int, message: str) that exercises the
         real OnLog logic from core.py without requiring the C++ extension.
+
+        The stub is installed temporarily and cleaned up afterwards so
+        it does not leak into other test modules (e.g. test_plugins.py)
+        that rely on ``verlihub_core`` being ``None`` to skip.
         """
+        if cls._on_log_fn is not None:
+            return cls._on_log_fn
+
         import sys
         import verlihub as _pkg
 
@@ -187,14 +196,33 @@ class TestHubEventHandlerOnLog:
             stub_mod.IHubEventCallback = _IHubEventCallback
             stub_mod.HubContext = MagicMock()
             stub_mod.UserInfoSnapshot = MagicMock()
+
+            # Save original state
+            orig_swig = sys.modules.get("verlihub.verlihub_core")
+            orig_attr = getattr(_pkg, "verlihub_core", None)
+
+            # Temporarily install stub so verlihub.core can be imported
             sys.modules["verlihub.verlihub_core"] = stub_mod
             _pkg.verlihub_core = stub_mod
-
-            # Evict a previously-cached failed import of verlihub.core
             sys.modules.pop("verlihub.core", None)
 
+            from verlihub.core import HubEventHandler
+            cls._on_log_fn = HubEventHandler.OnLog
+
+            # Restore original state — prevents stub from leaking into
+            # other test files that check ``verlihub_core is None``.
+            if orig_swig is None:
+                sys.modules.pop("verlihub.verlihub_core", None)
+            else:
+                sys.modules["verlihub.verlihub_core"] = orig_swig
+            _pkg.verlihub_core = orig_attr
+            sys.modules.pop("verlihub.core", None)
+
+            return cls._on_log_fn
+
         from verlihub.core import HubEventHandler
-        return HubEventHandler.OnLog
+        cls._on_log_fn = HubEventHandler.OnLog
+        return cls._on_log_fn
 
     def _make_handler(self):
         """Return a plain object with OnLog bound to it."""

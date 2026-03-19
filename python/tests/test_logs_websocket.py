@@ -160,13 +160,9 @@ class TestHubEventHandlerOnLog:
 
     @classmethod
     def _get_on_log(cls):
-        """Get the OnLog method, skipping if SWIG module unavailable."""
+        """Get the OnLog method from the real SWIG-backed core module."""
         if cls._on_log_fn is not None:
             return cls._on_log_fn
-
-        from verlihub import verlihub_core
-        if verlihub_core is None:
-            pytest.skip("verlihub_core SWIG module not built")
 
         from verlihub.core import HubEventHandler
         cls._on_log_fn = HubEventHandler.OnLog

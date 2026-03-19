@@ -409,20 +409,13 @@ def hub_context():
     
     Returns a temporary hub context that can be used to test
     plugin loading and management.
-    
-    Skips if verlihub_core module is not available.
     """
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    from verlihub import verlihub_core
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
         if ctx is None:
-            pytest.skip("Could not create HubContext")
+            pytest.fail("Could not create HubContext")
         yield ctx
 
 

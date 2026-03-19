@@ -22,13 +22,8 @@ if _build_python_dir.exists() and str(_build_python_dir) not in sys.path:
 
 
 def _require_swig():
-    """Import and return verlihub_core, skipping if SWIG module not available."""
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    """Import and return verlihub_core."""
+    from verlihub import verlihub_core
     return verlihub_core
 
 
@@ -40,17 +35,12 @@ def _require_swig():
 @pytest.fixture
 def hub_context():
     """Create a HubContext for testing."""
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    from verlihub import verlihub_core
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
         if ctx is None:
-            pytest.skip("Could not create HubContext")
+            pytest.fail("Could not create HubContext")
         yield ctx
 
 

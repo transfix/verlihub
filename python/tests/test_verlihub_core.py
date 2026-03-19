@@ -21,20 +21,7 @@ if BUILD_DIR.exists():
     sys.path.insert(0, str(BUILD_DIR))
 
 # Import SWIG module
-try:
-    from verlihub import verlihub_core
-    # verlihub/__init__.py catches ImportError and sets verlihub_core = None,
-    # so we must check the value rather than relying on ImportError.
-    SWIG_AVAILABLE = verlihub_core is not None
-except ImportError:
-    SWIG_AVAILABLE = False
-    verlihub_core = None
-
-
-pytestmark = pytest.mark.skipif(
-    not SWIG_AVAILABLE, 
-    reason="verlihub_core SWIG module not built"
-)
+from verlihub import verlihub_core
 
 
 class TestSwigModuleImport:

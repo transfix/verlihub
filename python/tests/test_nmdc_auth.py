@@ -31,12 +31,8 @@ from verlihub.api.auth import hash_password
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-# The core module requires the C++ SWIG bindings — skip entire module
-# when they're not available (e.g. local dev without a C++ build).
-verlihub_core = pytest.importorskip(
-    "verlihub.core",
-    reason="verlihub.core requires C++ SWIG bindings (not available outside Docker)",
-)
+# The core module requires the C++ SWIG bindings.
+import verlihub.core as verlihub_core
 
 
 # =============================================================================

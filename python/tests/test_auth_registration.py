@@ -64,7 +64,7 @@ class TestAdminSeeding:
                 masters=[UserEntry(nick="hub_admin", password="secret123")],
             ),
         )
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         result = await db_session.execute(
             select(RegUser).where(RegUser.nick == "hub_admin")
@@ -90,7 +90,7 @@ class TestAdminSeeding:
                 masters=[UserEntry(nick="hub_admin", password="original_pw")],
             ),
         )
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         result = await db_session.execute(
             select(RegUser).where(RegUser.nick == "hub_admin")
@@ -104,7 +104,7 @@ class TestAdminSeeding:
                 masters=[UserEntry(nick="hub_admin", password="new_password")],
             ),
         )
-        await apply_config_to_db(cfg2, force=False)
+        await apply_config_to_db(cfg2, force=False, session=db_session)
 
         await db_session.refresh(user)
         assert user.login_pwd == original_hash  # Unchanged
@@ -120,7 +120,7 @@ class TestAdminSeeding:
                 admins=[UserEntry(nick="hub_admin", password="original_pw")],
             ),
         )
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         # Second run with force
         cfg2 = VerlihubConfig(
@@ -128,7 +128,7 @@ class TestAdminSeeding:
                 admins=[UserEntry(nick="hub_admin", password="forced_new_pw")],
             ),
         )
-        await apply_config_to_db(cfg2, force=True)
+        await apply_config_to_db(cfg2, force=True, session=db_session)
 
         result = await db_session.execute(
             select(RegUser).where(RegUser.nick == "hub_admin")
@@ -142,7 +142,7 @@ class TestAdminSeeding:
         from verlihub.config import apply_config_to_db
 
         cfg = VerlihubConfig()
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         result = await db_session.execute(
             select(RegUser).where(RegUser.nick == "admin")
@@ -161,7 +161,7 @@ class TestAdminSeeding:
                 registered=[UserEntry(nick="user1", password="user_pw")],
             ),
         )
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         # Master should exist
         result = await db_session.execute(
@@ -201,7 +201,7 @@ class TestAdminSeeding:
                 masters=[UserEntry(nick="hub_admin", password="new_pw")],
             ),
         )
-        await apply_config_to_db(cfg, force=True)
+        await apply_config_to_db(cfg, force=True, session=db_session)
 
         await db_session.refresh(admin)
         assert admin.user_class == UserClass.MASTER
@@ -279,7 +279,7 @@ class TestDatabaseAuthentication:
                 admins=[UserEntry(nick="cfg_admin", password="cfg_pw")],
             ),
         )
-        await apply_config_to_db(cfg, force=False)
+        await apply_config_to_db(cfg, force=False, session=db_session)
 
         result = await authenticate_user("cfg_admin", "cfg_pw", db_session)
         assert result is not None

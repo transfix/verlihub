@@ -1192,7 +1192,11 @@ def _get_nested(obj: Any, dotted_path: str) -> Any:
     return current
 
 
-async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> None:
+async def apply_config_to_db(
+    config: VerlihubConfig,
+    force: bool = False,
+    session: "AsyncSession | None" = None,
+) -> None:
     """
     Synchronize YAML configuration with the database.
     
@@ -1210,6 +1214,8 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
     Args:
         config: The loaded VerlihubConfig
         force: If True, overwrite database values with YAML values
+        session: Optional externally-managed AsyncSession.  When provided the
+            caller is responsible for committing; no commit is issued here.
     """
     try:
         from sqlalchemy import select, text
@@ -1225,119 +1231,141 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
         logger.debug("Database not initialized, skipping config-to-DB sync")
         return
     
-    async with get_async_session() as session:
-        # --- Hub settings synchronization ---
-        applied = 0
-        skipped = 0
-        
-        for config_path, (file_key, var_key) in _HUB_SETTINGS_MAP.items():
-            value = _get_nested(config, config_path)
-            if value is None:
-                continue
-            
-            str_value = str(value)
-            
-            # Check if DB already has this setting
-            result = await session.execute(
-                select(SetupList).where(
-                    SetupList.file == file_key,
-                    SetupList.var == var_key,
-                )
+    owns_session = session is None
+
+    async def _run(session: "AsyncSession") -> None:
+        await _apply_config_to_db_inner(config, force, session)
+        if owns_session:
+            await session.commit()
+
+    if owns_session:
+        async with get_async_session() as session:
+            await _run(session)
+    else:
+        await _run(session)
+
+
+async def _apply_config_to_db_inner(
+    config: VerlihubConfig,
+    force: bool,
+    session: "AsyncSession",
+) -> None:
+    """Core logic for apply_config_to_db, operating on a provided session."""
+    from sqlalchemy import select
+    from verlihub.models import SetupList, RegUser, UserClass
+
+    # --- Hub settings synchronization ---
+    applied = 0
+    skipped = 0
+
+    for config_path, (file_key, var_key) in _HUB_SETTINGS_MAP.items():
+        value = _get_nested(config, config_path)
+        if value is None:
+            continue
+
+        str_value = str(value)
+
+        # Check if DB already has this setting
+        result = await session.execute(
+            select(SetupList).where(
+                SetupList.file == file_key,
+                SetupList.var == var_key,
             )
-            existing = result.scalars().first()
-            
-            if existing is not None:
-                if force:
-                    existing.val = str_value
-                    session.add(existing)
-                    applied += 1
-                    logger.debug("Forced %s.%s = %s", file_key, var_key, str_value)
-                else:
-                    skipped += 1
-                    logger.debug(
-                        "Kept DB value for %s.%s = %s (YAML had %s)",
-                        file_key, var_key, existing.val, str_value,
-                    )
-            else:
-                entry = SetupList(file=file_key, var=var_key, val=str_value)
-                session.add(entry)
+        )
+        existing = result.scalars().first()
+
+        if existing is not None:
+            if force:
+                existing.val = str_value
+                session.add(existing)
                 applied += 1
-                logger.debug("Set %s.%s = %s (new)", file_key, var_key, str_value)
-        
-        if applied or skipped:
-            logger.info(
-                "Hub settings: %d applied, %d kept from DB%s",
-                applied, skipped, " (--force)" if force else "",
-            )
-        
-        # --- User registration ---
-        users_created = 0
-        users_updated = 0
-        users_skipped = 0
-        
-        for class_name, user_class in _USER_CLASS_MAP.items():
-            user_list = getattr(config.users, class_name, [])
-            for user_entry in user_list:
-                if not user_entry.nick:
-                    continue
-                
-                # Check if user exists
-                result = await session.execute(
-                    select(RegUser).where(RegUser.nick == user_entry.nick)
+                logger.debug("Forced %s.%s = %s", file_key, var_key, str_value)
+            else:
+                skipped += 1
+                logger.debug(
+                    "Kept DB value for %s.%s = %s (YAML had %s)",
+                    file_key, var_key, existing.val, str_value,
                 )
-                existing_user = result.scalars().first()
-                
-                if existing_user is not None:
-                    if force:
-                        # Update password and class
-                        if user_entry.password:
-                            try:
-                                import bcrypt
-                                hashed = bcrypt.hashpw(
-                                    user_entry.password.encode("utf-8"),
-                                    bcrypt.gensalt(),
-                                ).decode("utf-8")
-                                existing_user.login_pwd = hashed
-                            except ImportError:
-                                existing_user.login_pwd = user_entry.password
-                        existing_user.user_class = user_class
-                        if user_entry.note:
-                            existing_user.note_op = user_entry.note
-                        session.add(existing_user)
-                        users_updated += 1
-                        logger.debug("Updated user %s (class %d)", user_entry.nick, user_class)
-                    else:
-                        users_skipped += 1
-                        logger.debug("User %s already exists, skipping", user_entry.nick)
-                else:
-                    # Create new user
-                    password = user_entry.password
-                    if password:
+        else:
+            entry = SetupList(file=file_key, var=var_key, val=str_value)
+            session.add(entry)
+            applied += 1
+            logger.debug("Set %s.%s = %s (new)", file_key, var_key, str_value)
+
+    if applied or skipped:
+        logger.info(
+            "Hub settings: %d applied, %d kept from DB%s",
+            applied, skipped, " (--force)" if force else "",
+        )
+
+    # --- User registration ---
+    users_created = 0
+    users_updated = 0
+    users_skipped = 0
+
+    for class_name, user_class in _USER_CLASS_MAP.items():
+        user_list = getattr(config.users, class_name, [])
+        for user_entry in user_list:
+            if not user_entry.nick:
+                continue
+
+            # Check if user exists
+            result = await session.execute(
+                select(RegUser).where(RegUser.nick == user_entry.nick)
+            )
+            existing_user = result.scalars().first()
+
+            if existing_user is not None:
+                if force:
+                    # Update password and class
+                    if user_entry.password:
                         try:
                             import bcrypt
-                            password = bcrypt.hashpw(
-                                password.encode("utf-8"),
+                            hashed = bcrypt.hashpw(
+                                user_entry.password.encode("utf-8"),
                                 bcrypt.gensalt(),
                             ).decode("utf-8")
+                            existing_user.login_pwd = hashed
                         except ImportError:
-                            pass  # Store plaintext if bcrypt not available
-                    
-                    new_user = RegUser(
-                        nick=user_entry.nick,
-                        login_pwd=password,
-                        user_class=user_class,
-                        reg_op="config",
-                        note_op=user_entry.note or "",
-                    )
-                    session.add(new_user)
-                    users_created += 1
-                    logger.info("Registered user %s (class %d)", user_entry.nick, user_class)
-        
-        if users_created or users_updated or users_skipped:
-            logger.info(
-                "Users: %d created, %d updated, %d skipped%s",
-                users_created, users_updated, users_skipped,
-                " (--force)" if force else "",
-            )
-        
-        await session.commit()
+                            existing_user.login_pwd = user_entry.password
+                    existing_user.user_class = user_class
+                    if user_entry.note:
+                        existing_user.note_op = user_entry.note
+                    session.add(existing_user)
+                    users_updated += 1
+                    logger.debug("Updated user %s (class %d)", user_entry.nick, user_class)
+                else:
+                    users_skipped += 1
+                    logger.debug("User %s already exists, skipping", user_entry.nick)
+            else:
+                # Create new user
+                password = user_entry.password
+                if password:
+                    try:
+                        import bcrypt
+                        password = bcrypt.hashpw(
+                            password.encode("utf-8"),
+                            bcrypt.gensalt(),
+                        ).decode("utf-8")
+                    except ImportError:
+                        pass  # Store plaintext if bcrypt not available
+
+                new_user = RegUser(
+                    nick=user_entry.nick,
+                    login_pwd=password,
+                    user_class=user_class,
+                    reg_op="config",
+                    note_op=user_entry.note or "",
+                )
+                session.add(new_user)
+                users_created += 1
+                logger.info("Registered user %s (class %d)", user_entry.nick, user_class)
+
+    if users_created or users_updated or users_skipped:
+        logger.info(
+            "Users: %d created, %d updated, %d skipped%s",
+            users_created, users_updated, users_skipped,
+            " (--force)" if force else "",
+        )
+
+    await session.flush()

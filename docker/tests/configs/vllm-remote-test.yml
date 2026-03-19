@@ -1,50 +1,5 @@
-# Remote vLLM integration test configuration# Remote vLLM integration test configuration
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  level: debuglogging:  admin_class: 5  min_class: 3  enabled: truemcp:  admin_class: 5  min_class: 3  max_tool_rounds: 5  max_tokens: 2048  temperature: 0.3  api_key: "none"  model: "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit"  base_url: "https://vllm-qwen35-35b.tinyhost.xyz/v1"  enabled: truellm:      note: "vLLM remote test admin"      password: admin123    - nick: admin  masters:users:  max_users: 100  port: 4111  name: "vLLM Remote Integration Test Hub"hub:    - "*"  cors_origins:  password: admin123  username: admin  port: 8000  host: "0.0.0.0"api:  type: sqlitedatabase:mode: apienvironment: development# Uses SQLite in-memory for speed; remote vLLM endpoint provides the LLM.# Uses SQLite in-memory for speed; external vLLM endpoint provides the LLM.
+# Remote vLLM integration test configuration
+# Uses SQLite in-memory for speed; remote vLLM endpoint provides the LLM.
 environment: development
 mode: api
 

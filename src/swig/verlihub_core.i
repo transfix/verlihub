@@ -403,16 +403,22 @@ Returns:
 // unique_ptr handling for HubContext::Create
 // ============================================================================
 
-// Don't ignore Create - we'll use a typemap instead
-// %ignore nVerliHub::HubContext::Create;
+// SWIG 4.0.x generates SwigValueWrapper for unique_ptr return types, which
+// tries to copy-construct the unique_ptr (a deleted operation).  SWIG 4.2+
+// has a move-aware SwigValueWrapper so it compiles, but 4.0.x doesn't.
+//
+// Work-around: hide the original Create() from SWIG and provide a raw-pointer
+// returning wrapper via %extend with a different name, then alias it back to
+// Create in Python.  %newobject tells SWIG that Python owns the returned
+// object and should call delete when done.
+%ignore nVerliHub::HubContext::Create;
 
-// Typemap for unique_ptr return value: release ownership to Python
-%typemap(out) std::unique_ptr<nVerliHub::HubContext> {
-    $result = SWIG_NewPointerObj($1.release(), $descriptor(nVerliHub::HubContext*), SWIG_POINTER_OWN);
+%extend nVerliHub::HubContext {
+    static nVerliHub::HubContext *_Create(const std::string &config_path) {
+        return nVerliHub::HubContext::Create(config_path).release();
+    }
 }
-
-// Tell SWIG that Create should transfer ownership
-%newobject nVerliHub::HubContext::Create;
+%newobject nVerliHub::HubContext::_Create;
 
 // Ignore internal methods not needed in Python
 %ignore nVerliHub::HubContext::GetServer;
@@ -503,6 +509,11 @@ Returns:
     def has_pending_shutdown(self):
         """Check if shutdown has been requested."""
         return self.HasPendingShutdown()
+    
+    @staticmethod
+    def Create(config_path):
+        """Create a new HubContext (caller owns the returned object)."""
+        return HubContext._Create(config_path)
     %}
 }
 

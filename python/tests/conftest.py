@@ -20,7 +20,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator, Generator, Optional
+from typing import AsyncGenerator, Optional
 
 import pytest
 import pytest_asyncio
@@ -94,18 +94,6 @@ def is_integration_tests_enabled() -> bool:
 def is_full_integration_enabled() -> bool:
     """Check if full integration tests are enabled."""
     return os.environ.get("VH_FULL_INTEGRATION") == "1"
-
-
-# =============================================================================
-# Event Loop Configuration
-# =============================================================================
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 # =============================================================================

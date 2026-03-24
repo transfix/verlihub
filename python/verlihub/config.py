@@ -795,6 +795,15 @@ class VerlihubConfig:
                 endpoints=endpoints,
             )
         
+        # MCP
+        if "mcp" in data:
+            mcp = data["mcp"]
+            config.mcp = McpConfig(
+                enabled=mcp.get("enabled", config.mcp.enabled),
+                min_class=mcp.get("min_class", config.mcp.min_class),
+                admin_class=mcp.get("admin_class", config.mcp.admin_class),
+            )
+
         # Logging
         if "logging" in data:
             log = data["logging"]

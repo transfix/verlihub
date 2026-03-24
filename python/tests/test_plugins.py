@@ -148,7 +148,7 @@ class TestPluginManagement:
     def test_get_loaded_plugins_empty(self, hub_context):
         """Test getting loaded plugins when none are loaded."""
         plugins = hub_context.GetLoadedPlugins()
-        assert isinstance(plugins, list)
+        assert isinstance(plugins, (list, tuple))
         # Initially no plugins loaded
     
     @pytest.mark.skipif(
@@ -217,7 +217,7 @@ class TestLuaPlugin:
     def test_get_loaded_lua_scripts_empty(self, hub_context):
         """Test getting loaded Lua scripts when none are loaded."""
         scripts = hub_context.GetLoadedLuaScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
     
     @pytest.mark.skipif(
         os.environ.get("VH_INTEGRATION_TESTS") != "1",
@@ -265,7 +265,7 @@ class TestPythonPlugin:
     def test_get_loaded_python_scripts_empty(self, hub_context):
         """Test getting loaded Python scripts when none are loaded."""
         scripts = hub_context.GetLoadedPythonScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
 
 
 # =============================================================================

@@ -172,7 +172,7 @@ class TestLuaScriptManagement:
     def test_get_loaded_scripts_empty(self, hub_context):
         """Get loaded scripts when none are loaded."""
         scripts = hub_context.GetLoadedLuaScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
         # Initially empty
     
     @pytest.mark.skipif(

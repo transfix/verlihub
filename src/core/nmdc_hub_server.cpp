@@ -127,6 +127,11 @@ int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
 
     std::string ip = conn->AddrIP();
 
+    // Fast-path ban cache check: reject known-banned IPs immediately
+    if (IsIPBanned(ip)) {
+        return -1;  // Reject silently
+    }
+
     // Check max users
     if (m_user_count.load(std::memory_order_relaxed) >= 
         static_cast<size_t>(m_max_users)) {
@@ -142,6 +147,7 @@ int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
     client.lock = NMDCProtocol::GenerateLock();
     client.state = NMDCConnState::WaitingKey;
     client.connect_time = std::chrono::steady_clock::now();
+    client.flood.Init(m_flood_limits);
 
     // Send $Lock
     std::string lock_msg = NMDCProtocol::MakeLock(client.lock);
@@ -184,16 +190,21 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
     } else if (NMDCProtocol::IsCommand(message, "$MyPass")) {
         HandleMyPass(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$MyINFO")) {
+        if (!CheckFlood(client, FloodType::MyINFO)) return;
         HandleMyINFO(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$GetNickList")) {
         HandleGetNickList(client);
     } else if (NMDCProtocol::IsCommand(message, "$To:")) {
+        if (!CheckFlood(client, FloodType::PM)) return;
         HandlePrivateMessage(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Search")) {
+        if (!CheckFlood(client, FloodType::Search)) return;
         HandleSearch(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$ConnectToMe")) {
+        if (!CheckFlood(client, FloodType::CTM)) return;
         HandleConnectToMe(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$RevConnectToMe")) {
+        if (!CheckFlood(client, FloodType::CTM)) return;
         HandleRevConnectToMe(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$SR")) {
         HandleSR(client, message);
@@ -208,6 +219,7 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
     } else if (NMDCProtocol::IsCommand(message, "$HubINFO")) {
         // Ignore hub info requests for now
     } else if (!message.empty() && message[0] == '<') {
+        if (!CheckFlood(client, FloodType::Chat)) return;
         HandleChat(client, message);
     }
     // Silently ignore unknown commands
@@ -286,6 +298,13 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
     std::string nick = NMDCProtocol::GetCommandParam(msg, "$ValidateNick");
     if (nick.empty()) {
         SendToConn(client.conn, NMDCProtocol::MakeValidateDenide(""));
+        client.state = NMDCConnState::Closing;
+        return;
+    }
+
+    // Fast-path ban cache check: reject known-banned nicks
+    if (IsNickBanned(nick)) {
+        SendToConn(client.conn, NMDCProtocol::MakeValidateDenide(nick));
         client.state = NMDCConnState::Closing;
         return;
     }
@@ -514,6 +533,18 @@ void NMDCHubServer::HandleConnectToMe(NMDCClient& client, const std::string& msg
     if (space == std::string::npos) return;
 
     std::string target_nick = params.substr(0, space);
+    std::string addr = params.substr(space + 1);
+
+    // Validate: the IP in the address must match the sender's actual IP
+    // to prevent connection spoofing
+    size_t colon = addr.find(':');
+    if (colon != std::string::npos) {
+        std::string claimed_ip = addr.substr(0, colon);
+        if (claimed_ip != client.ip) {
+            return;  // IP mismatch — silently drop
+        }
+    }
+
     auto it = m_nick_to_conn.find(target_nick);
     if (it != m_nick_to_conn.end()) {
         SendToConn(it->second, msg);
@@ -528,7 +559,12 @@ void NMDCHubServer::HandleRevConnectToMe(NMDCClient& client, const std::string& 
     size_t space = params.find(' ');
     if (space == std::string::npos) return;
 
+    std::string sender_nick = params.substr(0, space);
     std::string target_nick = params.substr(space + 1);
+
+    // Verify the sender nick matches the connection's nick
+    if (sender_nick != client.nick) return;
+
     auto it = m_nick_to_conn.find(target_nick);
     if (it != m_nick_to_conn.end()) {
         SendToConn(it->second, msg);
@@ -882,6 +918,178 @@ bool NMDCHubServer::DisconnectUser(const std::string& nick) {
     conn->CloseNice(100);
 
     return true;
+}
+
+// =============================================================================
+// Flood Protection
+// =============================================================================
+
+bool NMDCHubServer::CheckFlood(NMDCClient& client, FloodType type) {
+    // Operators (class >= 3) are exempt from flood checks
+    if (client.user_class >= 3) return true;
+
+    auto idx = static_cast<size_t>(type);
+    auto& bucket = client.flood.buckets[idx];
+    const auto& limit = m_flood_limits[idx];
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - bucket.last_refill).count();
+
+    // Refill tokens based on elapsed time
+    if (elapsed_ms >= limit.period_ms) {
+        int periods = static_cast<int>(elapsed_ms / limit.period_ms);
+        bucket.tokens = std::min(bucket.tokens + periods, limit.max_tokens);
+        bucket.last_refill += std::chrono::milliseconds(
+            static_cast<long long>(periods) * limit.period_ms);
+    }
+
+    // Consume a token
+    if (bucket.tokens > 0) {
+        --bucket.tokens;
+        // Reset warning counter on successful messages
+        if (client.flood_warnings > 0) {
+            client.flood_warnings = 0;
+        }
+        return true;  // Message allowed
+    }
+
+    // Flood detected — warn or disconnect
+    ++client.flood_warnings;
+    if (client.flood_warnings >= m_max_flood_warnings) {
+        // Disconnect the client
+        SendToConn(client.conn,
+            NMDCProtocol::MakeChat(m_hub_security,
+                "You have been disconnected for flooding."));
+        client.state = NMDCConnState::Closing;
+        client.conn->CloseNice(100);
+    } else {
+        // Warn
+        SendToConn(client.conn,
+            NMDCProtocol::MakeChat(m_hub_security,
+                "Warning: you are sending messages too fast."));
+    }
+    return false;  // Message blocked
+}
+
+void NMDCHubServer::SetFloodConfig(FloodType type, int period_ms, int max_tokens) {
+    auto idx = static_cast<size_t>(type);
+    if (idx >= m_flood_limits.size()) return;
+    m_flood_limits[idx].period_ms = std::max(100, period_ms);    // Min 100ms
+    m_flood_limits[idx].max_tokens = std::max(1, max_tokens);    // Min 1 token
+}
+
+FloodLimit NMDCHubServer::GetFloodConfig(FloodType type) const {
+    auto idx = static_cast<size_t>(type);
+    if (idx >= m_flood_limits.size()) return {};
+    return m_flood_limits[idx];
+}
+
+// =============================================================================
+// Ban Cache
+// =============================================================================
+
+void NMDCHubServer::LoadBanCache(const std::vector<std::string>& ips,
+                                  const std::vector<std::string>& nicks) {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_ips.clear();
+    m_banned_ips.insert(ips.begin(), ips.end());
+    m_banned_nicks.clear();
+    m_banned_nicks.insert(nicks.begin(), nicks.end());
+}
+
+void NMDCHubServer::AddBanCacheIP(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_ips.insert(ip);
+}
+
+void NMDCHubServer::AddBanCacheNick(const std::string& nick) {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_nicks.insert(nick);
+}
+
+void NMDCHubServer::RemoveBanCacheIP(const std::string& ip) {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_ips.erase(ip);
+}
+
+void NMDCHubServer::RemoveBanCacheNick(const std::string& nick) {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_nicks.erase(nick);
+}
+
+void NMDCHubServer::ClearBanCache() {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    m_banned_ips.clear();
+    m_banned_nicks.clear();
+}
+
+bool NMDCHubServer::IsIPBanned(const std::string& ip) const {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    return m_banned_ips.count(ip) > 0;
+}
+
+bool NMDCHubServer::IsNickBanned(const std::string& nick) const {
+    std::lock_guard<std::mutex> lock(m_ban_cache_mutex);
+    return m_banned_nicks.count(nick) > 0;
+}
+
+// =============================================================================
+// Active / Passive Messaging
+// =============================================================================
+
+void NMDCHubServer::SendToConnsFiltered(const std::string& data, char mode_filter,
+                                         int min_class, int max_class) {
+    std::string msg = data + "|";
+    for (auto& [conn, client] : m_clients) {
+        if (client.state == NMDCConnState::LoggedIn && conn && conn->ok &&
+            client.mode == mode_filter &&
+            client.user_class >= min_class && client.user_class <= max_class) {
+            conn->Write(msg, true);
+        }
+    }
+}
+
+void NMDCHubServer::SendToActive(const std::string& data) {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    SendToConnsFiltered(data, 'A');
+}
+
+void NMDCHubServer::SendToPassive(const std::string& data) {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    SendToConnsFiltered(data, 'P');
+}
+
+void NMDCHubServer::SendToActiveClass(const std::string& data,
+                                       int min_class, int max_class) {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    SendToConnsFiltered(data, 'A', min_class, max_class);
+}
+
+void NMDCHubServer::SendToPassiveClass(const std::string& data,
+                                        int min_class, int max_class) {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    SendToConnsFiltered(data, 'P', min_class, max_class);
+}
+
+size_t NMDCHubServer::GetActiveUserCount() const {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    size_t count = 0;
+    for (auto& [conn, client] : m_clients) {
+        if (client.state == NMDCConnState::LoggedIn && client.mode == 'A')
+            ++count;
+    }
+    return count;
+}
+
+size_t NMDCHubServer::GetPassiveUserCount() const {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    size_t count = 0;
+    for (auto& [conn, client] : m_clients) {
+        if (client.state == NMDCConnState::LoggedIn && client.mode == 'P')
+            ++count;
+    }
+    return count;
 }
 
 }  // namespace nVerliHub

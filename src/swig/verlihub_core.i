@@ -400,6 +400,159 @@ Returns:
 ";
 
 // ============================================================================
+// Phase 1: Active/Passive Messaging Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SendToActive "
+Send raw NMDC message to all active-mode users.
+
+Args:
+    message: NMDC message to send
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToPassive "
+Send raw NMDC message to all passive-mode users.
+
+Args:
+    message: NMDC message to send
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToActiveClass "
+Send raw NMDC message to active-mode users in a class range.
+
+Args:
+    message: NMDC message to send
+    min_class: Minimum user class (inclusive)
+    max_class: Maximum user class (inclusive)
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToPassiveClass "
+Send raw NMDC message to passive-mode users in a class range.
+
+Args:
+    message: NMDC message to send
+    min_class: Minimum user class (inclusive)
+    max_class: Maximum user class (inclusive)
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::GetActiveUserCount "
+Get count of active-mode online users.
+";
+
+%feature("docstring") nVerliHub::HubContext::GetPassiveUserCount "
+Get count of passive-mode online users.
+";
+
+// ============================================================================
+// Phase 1: Disconnect / PM / BroadcastChat Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::DisconnectUser "
+Disconnect a user silently (no kick message).
+
+Args:
+    nick: User nickname to disconnect
+
+Returns:
+    True if user was found and disconnected
+";
+
+%feature("docstring") nVerliHub::HubContext::SendPM "
+Send a private message.
+
+Args:
+    from_nick: Sender nickname
+    to_nick: Recipient nickname
+    message: Message content
+
+Returns:
+    True if recipient was found and message sent
+";
+
+%feature("docstring") nVerliHub::HubContext::BroadcastChat "
+Broadcast a chat message from a given sender to all users.
+
+Args:
+    from_nick: Sender nickname
+    message: Chat message content
+
+Returns:
+    True if hub is running
+";
+
+// ============================================================================
+// Phase 1: Flood Protection Configuration Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SetFloodConfig "
+Set the rate limit for a specific flood message type.
+
+Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM
+
+Args:
+    type: Flood type integer (0-4)
+    period_ms: Token refill period in milliseconds
+    max_tokens: Maximum tokens (burst capacity)
+";
+
+// ============================================================================
+// Phase 1: Ban Cache Management Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::LoadBanCache "
+Load the ban cache from Python-provided lists.
+Replaces the current cache atomically for fast-path rejection.
+
+Args:
+    ips: List of banned IP addresses
+    nicks: List of banned nicknames
+";
+
+%feature("docstring") nVerliHub::HubContext::AddBanCacheIP "
+Add a single IP to the ban cache.
+
+Args:
+    ip: IP address to ban
+";
+
+%feature("docstring") nVerliHub::HubContext::AddBanCacheNick "
+Add a single nick to the ban cache.
+
+Args:
+    nick: Nickname to ban
+";
+
+%feature("docstring") nVerliHub::HubContext::RemoveBanCacheIP "
+Remove a single IP from the ban cache.
+
+Args:
+    ip: IP address to unban
+";
+
+%feature("docstring") nVerliHub::HubContext::RemoveBanCacheNick "
+Remove a single nick from the ban cache.
+
+Args:
+    nick: Nickname to unban
+";
+
+%feature("docstring") nVerliHub::HubContext::ClearBanCache "
+Clear the entire ban cache.
+";
+
+// ============================================================================
 // unique_ptr handling for HubContext::Create
 // ============================================================================
 
@@ -504,6 +657,16 @@ Returns:
     def is_running(self):
         """Check if the hub is running."""
         return self.IsRunning()
+    
+    @property
+    def active_user_count(self):
+        """Get the count of active-mode users."""
+        return self.GetActiveUserCount()
+    
+    @property
+    def passive_user_count(self):
+        """Get the count of passive-mode users."""
+        return self.GetPassiveUserCount()
     
     @property 
     def has_pending_shutdown(self):

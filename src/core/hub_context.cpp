@@ -323,6 +323,109 @@ bool HubContext::SendToOpChat(std::string_view message, std::string_view from) {
 }
 
 // =============================================================================
+// Active / Passive Messaging
+// =============================================================================
+
+bool HubContext::SendToActive(std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToActive(std::string(message));
+    return true;
+}
+
+bool HubContext::SendToPassive(std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToPassive(std::string(message));
+    return true;
+}
+
+bool HubContext::SendToActiveClass(std::string_view message, int min_class, int max_class) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToActiveClass(std::string(message), min_class, max_class);
+    return true;
+}
+
+bool HubContext::SendToPassiveClass(std::string_view message, int min_class, int max_class) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToPassiveClass(std::string(message), min_class, max_class);
+    return true;
+}
+
+size_t HubContext::GetActiveUserCount() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetActiveUserCount();
+}
+
+size_t HubContext::GetPassiveUserCount() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetPassiveUserCount();
+}
+
+// =============================================================================
+// Disconnect / PM / BroadcastChat
+// =============================================================================
+
+bool HubContext::DisconnectUser(std::string_view nick) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->DisconnectUser(std::string(nick));
+}
+
+bool HubContext::SendPM(std::string_view from, std::string_view to, std::string_view message) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->SendPM(std::string(from), std::string(to), std::string(message));
+}
+
+bool HubContext::BroadcastChat(std::string_view from, std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendChatToAll(std::string(from), std::string(message));
+    return true;
+}
+
+// =============================================================================
+// Flood Protection Configuration
+// =============================================================================
+
+void HubContext::SetFloodConfig(int type, int period_ms, int max_tokens) {
+    if (!m_nmdc_server) return;
+    if (type < 0 || type >= static_cast<int>(FloodType::Count)) return;
+    m_nmdc_server->SetFloodConfig(static_cast<FloodType>(type), period_ms, max_tokens);
+}
+
+// =============================================================================
+// Ban Cache Management
+// =============================================================================
+
+void HubContext::LoadBanCache(const std::vector<std::string>& ips,
+                               const std::vector<std::string>& nicks) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->LoadBanCache(ips, nicks);
+}
+
+void HubContext::AddBanCacheIP(const std::string& ip) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->AddBanCacheIP(ip);
+}
+
+void HubContext::AddBanCacheNick(const std::string& nick) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->AddBanCacheNick(nick);
+}
+
+void HubContext::RemoveBanCacheIP(const std::string& ip) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->RemoveBanCacheIP(ip);
+}
+
+void HubContext::RemoveBanCacheNick(const std::string& nick) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->RemoveBanCacheNick(nick);
+}
+
+void HubContext::ClearBanCache() {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->ClearBanCache();
+}
+
+// =============================================================================
 // User Management
 // =============================================================================
 

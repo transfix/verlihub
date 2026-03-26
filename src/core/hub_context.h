@@ -547,6 +547,107 @@ public:
      * Send message to operator chat.
      */
     VH_NODISCARD bool SendToOpChat(std::string_view message, std::string_view from = "");
+
+    // =========================================================================
+    // Active / Passive Messaging
+    // =========================================================================
+
+    /**
+     * Send raw NMDC message to all active-mode users.
+     */
+    bool SendToActive(std::string_view message);
+
+    /**
+     * Send raw NMDC message to all passive-mode users.
+     */
+    bool SendToPassive(std::string_view message);
+
+    /**
+     * Send raw NMDC message to active-mode users in a class range.
+     */
+    bool SendToActiveClass(std::string_view message, int min_class, int max_class);
+
+    /**
+     * Send raw NMDC message to passive-mode users in a class range.
+     */
+    bool SendToPassiveClass(std::string_view message, int min_class, int max_class);
+
+    /**
+     * Get count of active-mode users.
+     */
+    VH_NODISCARD size_t GetActiveUserCount() const;
+
+    /**
+     * Get count of passive-mode users.
+     */
+    VH_NODISCARD size_t GetPassiveUserCount() const;
+
+    // =========================================================================
+    // Disconnect / PM / BroadcastChat
+    // =========================================================================
+
+    /**
+     * Disconnect a user silently (no kick message).
+     */
+    bool DisconnectUser(std::string_view nick);
+
+    /**
+     * Send a private message.
+     */
+    bool SendPM(std::string_view from, std::string_view to, std::string_view message);
+
+    /**
+     * Broadcast a chat message from a given sender to all users.
+     */
+    bool BroadcastChat(std::string_view from, std::string_view message);
+
+    // =========================================================================
+    // Flood Protection Configuration
+    // =========================================================================
+
+    /**
+     * Set the rate limit for a specific flood message type.
+     * @param type       Flood type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM)
+     * @param period_ms  Token refill period in milliseconds
+     * @param max_tokens Maximum tokens (burst capacity)
+     */
+    void SetFloodConfig(int type, int period_ms, int max_tokens);
+
+    // =========================================================================
+    // Ban Cache Management
+    // =========================================================================
+
+    /**
+     * Load the ban cache from Python-provided lists.
+     * Replaces the current cache atomically.
+     */
+    void LoadBanCache(const std::vector<std::string>& ips,
+                      const std::vector<std::string>& nicks);
+
+    /**
+     * Add a single IP to the ban cache.
+     */
+    void AddBanCacheIP(const std::string& ip);
+
+    /**
+     * Add a single nick to the ban cache.
+     */
+    void AddBanCacheNick(const std::string& nick);
+
+    /**
+     * Remove a single IP from the ban cache.
+     */
+    void RemoveBanCacheIP(const std::string& ip);
+
+    /**
+     * Remove a single nick from the ban cache.
+     */
+    void RemoveBanCacheNick(const std::string& nick);
+
+    /**
+     * Clear the entire ban cache.
+     */
+    void ClearBanCache();
     
     // =========================================================================
     // Thread-Safe User Management

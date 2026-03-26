@@ -42,11 +42,13 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <mutex>
 #include <atomic>
 #include <memory>
 #include <chrono>
+#include <array>
 
 namespace nVerliHub {
 
@@ -77,6 +79,45 @@ public:
 
 private:
     NMDCHubServer* m_server;
+};
+
+// ============================================================================
+// Flood Protection Types
+// ============================================================================
+
+/// Message types subject to rate limiting
+enum class FloodType : int {
+    Chat = 0,
+    PM,
+    Search,
+    MyINFO,
+    CTM,      ///< $ConnectToMe + $RevConnectToMe
+    Count     ///< Sentinel — number of flood types
+};
+
+/// Configuration for one flood type: token-bucket parameters
+struct FloodLimit {
+    int period_ms{1000};   ///< Refill period in milliseconds
+    int max_tokens{5};      ///< Max tokens (burst capacity)
+};
+
+/// Per-client token-bucket state for one flood type
+struct FloodBucket {
+    int tokens{0};
+    std::chrono::steady_clock::time_point last_refill;
+};
+
+/// Per-client aggregate flood state (all types)
+struct FloodState {
+    std::array<FloodBucket, static_cast<size_t>(FloodType::Count)> buckets;
+
+    void Init(const std::array<FloodLimit, static_cast<size_t>(FloodType::Count)>& limits) {
+        auto now = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < buckets.size(); ++i) {
+            buckets[i].tokens = limits[i].max_tokens;
+            buckets[i].last_refill = now;
+        }
+    }
 };
 
 // ============================================================================
@@ -125,6 +166,10 @@ struct NMDCClient {
     // ----- Parsed from $Supports / $MyINFO -----
     unsigned char status_flag{0}; ///< Status byte from MyINFO speed field
     std::string supports_text;    ///< Raw $Supports features string
+
+    // ----- Flood Protection -----
+    FloodState flood;              ///< Token-bucket state per message type
+    int flood_warnings{0};         ///< Consecutive flood warnings (disconnect threshold)
 };
 
 // ============================================================================
@@ -185,6 +230,57 @@ public:
     const std::string& GetHubSecurity() const { return m_hub_security; }
 
     // =========================================================================
+    // Flood Protection Configuration
+    // =========================================================================
+
+    /**
+     * Set the rate limit for a specific message type.
+     * @param type     Which message type to configure
+     * @param period_ms  Token refill period in milliseconds
+     * @param max_tokens Maximum tokens (burst capacity)
+     */
+    void SetFloodConfig(FloodType type, int period_ms, int max_tokens);
+
+    /**
+     * Get the current flood limit for a message type.
+     */
+    FloodLimit GetFloodConfig(FloodType type) const;
+
+    /**
+     * Set the maximum flood warnings before automatic disconnect.
+     * Default is 3.
+     */
+    void SetMaxFloodWarnings(int max) { m_max_flood_warnings = max; }
+
+    // =========================================================================
+    // Ban Cache (fast-path IP/nick rejection)
+    // =========================================================================
+
+    /**
+     * Load the ban cache from Python-provided sets.
+     * Replaces the current cache atomically.
+     */
+    void LoadBanCache(const std::vector<std::string>& ips,
+                      const std::vector<std::string>& nicks);
+
+    /**
+     * Add a single entry to the ban cache.
+     */
+    void AddBanCacheIP(const std::string& ip);
+    void AddBanCacheNick(const std::string& nick);
+
+    /**
+     * Remove a single entry from the ban cache.
+     */
+    void RemoveBanCacheIP(const std::string& ip);
+    void RemoveBanCacheNick(const std::string& nick);
+
+    /**
+     * Clear the entire ban cache.
+     */
+    void ClearBanCache();
+
+    // =========================================================================
     // Event Callback (Python bridge)
     // =========================================================================
 
@@ -220,6 +316,28 @@ public:
     /// Send private message
     bool SendPM(const std::string& from, const std::string& to,
                 const std::string& message);
+
+    // =========================================================================
+    // Active / Passive Messaging (thread-safe)
+    // =========================================================================
+
+    /// Send raw NMDC message to all active-mode users
+    void SendToActive(const std::string& data);
+
+    /// Send raw NMDC message to all passive-mode users
+    void SendToPassive(const std::string& data);
+
+    /// Send raw NMDC message to active-mode users in a class range
+    void SendToActiveClass(const std::string& data, int min_class, int max_class);
+
+    /// Send raw NMDC message to passive-mode users in a class range
+    void SendToPassiveClass(const std::string& data, int min_class, int max_class);
+
+    /// Get count of active-mode users
+    size_t GetActiveUserCount() const;
+
+    /// Get count of passive-mode users
+    size_t GetPassiveUserCount() const;
 
     // =========================================================================
     // User Information (thread-safe reads)
@@ -318,8 +436,21 @@ private:
     /// Send data to all logged-in connections (appends | delimiter)
     void SendToAllConns(const std::string& data);
 
+    /// Send data to connections matching a mode and optional class range
+    void SendToConnsFiltered(const std::string& data, char mode_filter,
+                             int min_class = 0, int max_class = 10);
+
     /// Remove a client from all maps and notify others
     void RemoveClient(nSocket::cAsyncConn* conn);
+
+    /// Check token-bucket flood limiter; returns true if message is allowed
+    bool CheckFlood(NMDCClient& client, FloodType type);
+
+    /// Check if an IP is in the ban cache
+    bool IsIPBanned(const std::string& ip) const;
+
+    /// Check if a nick is in the ban cache
+    bool IsNickBanned(const std::string& nick) const;
 
     /// Build $NickList and $OpList and send to a client
     void SendUserLists(NMDCClient& client);
@@ -374,6 +505,30 @@ private:
 
     std::atomic<size_t> m_user_count{0};
     std::atomic<uint64_t> m_total_share{0};
+
+    // =========================================================================
+    // Flood Protection State
+    // =========================================================================
+
+    /// Per-type flood limits (token bucket parameters)
+    std::array<FloodLimit, static_cast<size_t>(FloodType::Count)> m_flood_limits{{
+        {1000, 5},   // Chat:   5 msgs / 1s
+        {1000, 5},   // PM:     5 msgs / 1s
+        {5000, 5},   // Search: 5 searches / 5s
+        {5000, 2},   // MyINFO: 2 updates / 5s
+        {1000, 10},  // CTM:    10 CTM/RCTM / 1s
+    }};
+
+    /// Maximum flood warnings before auto-disconnect
+    int m_max_flood_warnings{3};
+
+    // =========================================================================
+    // Ban Cache State
+    // =========================================================================
+
+    std::unordered_set<std::string> m_banned_ips;
+    std::unordered_set<std::string> m_banned_nicks;
+    mutable std::mutex m_ban_cache_mutex;
 
     // =========================================================================
     // Connection Factory

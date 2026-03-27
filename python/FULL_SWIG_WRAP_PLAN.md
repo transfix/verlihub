@@ -959,3 +959,240 @@ Web Dashboard                —            —          —       ✅       ✅
 LLM Bot                      —            —          —       ✅       ✅ (new)
 Async Multi-DB               —            —          —       ✅       ✅ (new)
 ```
+
+---
+
+## Phase 4: Web Dashboard Integration (Post-Implementation)
+
+> **NOTE**: After all SWIG-wrapped features are implemented and working (Phases 1–3),
+> the new capabilities must be exposed through the REST API and surfaced in the
+> verlihub web dashboard. This includes but is not limited to:
+>
+> - **ForceMove / Redirect**: UI for redirecting users to another hub
+> - **Protocol Statistics**: Dashboard widget showing message counters (chat, PM, search, CTM, SR, MCTo, flood/ban blocked)
+> - **GeoIP Lookup**: Expose per-user country/city in user list + standalone IP lookup endpoint
+> - **Ban Management**: CRUD for IP range / CIDR bans, penalty entries; display active bans with expiry
+> - **Penalty System**: UI for applying/viewing/lifting temporary restrictions (chat gag, search ban, PM ban)
+> - **Flood Protection Config**: UI for tuning per-type rate limits (period, burst)
+> - **$MCTo**: No direct dashboard action needed (protocol-only), but MCTo stats visible in protocol stats widget
+> - **$UserIP / $WhoIP**: Operator IP lookup via dashboard (calls the same SWIG-backed method)
+> - **Trigger System**: CRUD for custom triggers/commands
+> - **Client Detection Rules**: CRUD for allowed/banned DC clients
+> - **Redirect Rules**: CRUD for custom redirect addresses
+>
+> This work is tracked separately and should begin once the C++/SWIG/Python core
+> is stable and all Phase 2 + Phase 3 items pass build/import tests.
+
+---
+
+## Phase 5: MCP & LLM Chatbot Full SWIG Integration
+
+> **Goal**: Make the totality of SWIG-wrapped verlihub C++ functionality
+> accessible from both the MCP protocol servers (in-process + standalone)
+> and the embedded LLM chatbot (dashboard chat + NMDC bot). After this
+> phase, every HubContext method reachable from Python has a corresponding
+> MCP tool and LLM function-call definition.
+
+### Current State (Pre-Phase 5)
+
+The MCP servers and LLM gateway currently expose **14 read-only tools** and
+**5 admin tools**, covering basic hub queries (info, users, stats, bans,
+geo) and simple actions (kick, broadcast, PM, ban, hub command). However,
+the majority of SWIG-exposed C++ APIs introduced in Phases 1–3 have **no
+MCP tool or LLM function-call equivalent**.
+
+### Gap Matrix: SWIG API → MCP/LLM Tool Coverage
+
+| SWIG API | Category | MCP Tool | LLM Tool | Status |
+|---|---|---|---|---|
+| `SendToUser` | Messaging | `send_message_to_user` | `send_message_to_user` | ✅ Covered |
+| `SendToAll` | Messaging | `send_broadcast` | `send_broadcast` | ✅ Covered |
+| `KickUser` | Admin | `kick_user` | `kick_user` | ✅ Covered |
+| `GetHubName/Topic` | Info | `get_hub_info` | `get_hub_info` | ✅ Covered |
+| `GetUserCount` | Info | `get_hub_info` | `get_hub_statistics` | ✅ Covered |
+| `GetTotalShare` | Info | `get_share_statistics` | `get_share_statistics` | ✅ Covered |
+| `GetConfig/SetConfig` | Config | — | `get_hub_config`/`set_hub_config` | ⚠️ LLM only |
+| `SetHubTopic` | Config | — | `set_topic` | ⚠️ LLM only |
+| `SetMOTD` | Config | — | `set_motd` | ⚠️ LLM only |
+| `SendToOpChat` | Messaging | — | — | ❌ Not exposed |
+| `SendToClass` | Messaging | — | — | ❌ Not exposed |
+| `SendToActive/Passive` | Messaging | — | — | ❌ Not exposed |
+| `SendToActiveClass/PassiveClass` | Messaging | — | — | ❌ Not exposed |
+| `BroadcastChat` | Messaging | — | — | ❌ Not exposed |
+| `SendPM` (as-nick) | Messaging | — | — | ❌ Not exposed |
+| `ForceMove` | Admin | — | — | ❌ Not exposed |
+| `DisconnectUser` | Admin | — | — | ❌ Not exposed |
+| `AddRobot/RemoveRobot` | Bot mgmt | — | — | ❌ Not exposed |
+| `GetProtocolStats` | Stats | — | — | ❌ Not exposed |
+| `LookupGeoIP` (per-IP) | Stats | — | — | ❌ Not exposed |
+| `GetActiveUserCount/PassiveUserCount` | Stats | — | — | ❌ Not exposed |
+| `LoadPlugin/UnloadPlugin/ReloadPlugin` | Plugins | — | — | ❌ Not exposed |
+| `GetLoadedPlugins/IsPluginLoaded` | Plugins | — | — | ❌ Not exposed |
+| `ExecuteLuaScript/UnloadLuaScript` | Scripts | — | — | ❌ Not exposed |
+| `ExecutePythonScript/UnloadPythonScript` | Scripts | — | — | ❌ Not exposed |
+| `GetLoadedLuaScripts/PythonScripts` | Scripts | — | — | ❌ Not exposed |
+| `SetFloodConfig` | Flood | — | — | ❌ Not exposed |
+| `LoadBanCache/AddBanCacheIP/Nick` | Ban cache | — | — | ❌ Not exposed |
+| `ClearBanCache` | Ban cache | — | — | ❌ Not exposed |
+| `RequestReload` | Lifecycle | — | — | ❌ Not exposed |
+
+### Phase 5 Work Items
+
+#### 5.1: New MCP + LLM Tools — Messaging (~120 LOC Python)
+
+Add to both in-process MCP (`api/routes/mcp.py`) and LLM gateway (`api/routes/llm.py`):
+
+| Tool Name | SWIG Method | Permission | Parameters |
+|---|---|---|---|
+| `send_to_opchat` | `SendToOpChat(msg, from)` | Admin | `message`, `from_nick?` |
+| `send_to_class` | `SendToClass(msg, min, max)` | Admin | `message`, `min_class`, `max_class` |
+| `send_to_active` | `SendToActive(msg)` | Admin | `message` |
+| `send_to_passive` | `SendToPassive(msg)` | Admin | `message` |
+| `broadcast_chat` | `BroadcastChat(from, msg)` | Admin | `from_nick`, `message` |
+| `send_pm_as` | `SendPM(from, to, msg)` | Admin | `from_nick`, `to_nick`, `message` |
+
+#### 5.2: New MCP + LLM Tools — Administration (~100 LOC Python)
+
+| Tool Name | SWIG Method | Permission | Parameters |
+|---|---|---|---|
+| `force_move` | `ForceMove(nick, addr)` | Admin | `nick`, `address` |
+| `disconnect_user` | `DisconnectUser(nick)` | Admin | `nick` |
+| `add_robot` | `AddRobot(nick, desc, class)` | Admin | `nick`, `description`, `user_class` |
+| `remove_robot` | `RemoveRobot(nick)` | Admin | `nick` |
+| `set_hub_topic` | `SetHubTopic(topic)` | Admin | `topic` |
+| `set_motd` | `SetMOTD(motd)` | Admin | `motd` |
+| `get_hub_config` | `GetConfig(s, k, d)` | Operator | `section`, `key` |
+| `set_hub_config` | `SetConfig(s, k, v)` | Admin | `section`, `key`, `value` |
+| `reload_config` | `RequestReload()` | Admin | (none) |
+
+#### 5.3: New MCP + LLM Tools — Statistics & GeoIP (~80 LOC Python)
+
+| Tool Name | SWIG Method | Permission | Parameters |
+|---|---|---|---|
+| `get_protocol_stats` | `GetProtocolStats()` | Operator | (none) |
+| `lookup_geoip` | `LookupGeoIP(ip)` | Operator | `ip` |
+| `get_active_passive_counts` | `GetActiveUserCount()`/`GetPassiveUserCount()` | Operator | (none) |
+
+#### 5.4: New MCP + LLM Tools — Plugin & Script Management (~150 LOC Python)
+
+| Tool Name | SWIG Method | Permission | Parameters |
+|---|---|---|---|
+| `list_plugins` | `GetLoadedPlugins()` | Operator | (none) |
+| `load_plugin` | `LoadPlugin(path)` | Admin | `plugin_path` |
+| `unload_plugin` | `UnloadPlugin(name)` | Admin | `plugin_name` |
+| `reload_plugin` | `ReloadPlugin(name)` | Admin | `plugin_name` |
+| `list_lua_scripts` | `GetLoadedLuaScripts()` | Operator | (none) |
+| `load_lua_script` | `ExecuteLuaScript(path)` | Admin | `script_path` |
+| `unload_lua_script` | `UnloadLuaScript(path)` | Admin | `script_path` |
+| `list_python_scripts` | `GetLoadedPythonScripts()` | Operator | (none) |
+| `load_python_script` | `ExecutePythonScript(path)` | Admin | `script_path` |
+| `unload_python_script` | `UnloadPythonScript(path)` | Admin | `script_path` |
+
+#### 5.5: New MCP + LLM Tools — Flood & Ban Cache (~80 LOC Python)
+
+| Tool Name | SWIG Method | Permission | Parameters |
+|---|---|---|---|
+| `set_flood_config` | `SetFloodConfig(type, period, tokens)` | Admin | `flood_type`, `period_ms`, `max_tokens` |
+| `sync_ban_cache` | `LoadBanCache(ips, nicks)` | Admin | (none — loads from DB) |
+| `add_ban_cache_ip` | `AddBanCacheIP(ip)` | Admin | `ip` |
+| `add_ban_cache_nick` | `AddBanCacheNick(nick)` | Admin | `nick` |
+| `clear_ban_cache` | `ClearBanCache()` | Admin | (none) |
+
+#### 5.6: New MCP + LLM Tools — Penalty Management (~80 LOC Python)
+
+| Tool Name | SWIG Method / Service | Permission | Parameters |
+|---|---|---|---|
+| `list_penalties` | `penalty_service.get_active_penalties()` | Operator | `nick?` |
+| `add_penalty` | `penalty_service.add_penalty()` | Admin | `nick`, `penalty_type`, `reason`, `duration_minutes?` |
+| `remove_penalty` | `penalty_service.remove_penalty()` | Admin | `nick`, `penalty_type?` |
+| `cleanup_penalties` | `penalty_service.cleanup_expired()` | Admin | (none) |
+
+#### 5.7: New MCP + LLM Tools — Triggers & Redirects (~80 LOC Python)
+
+| Tool Name | Service | Permission | Parameters |
+|---|---|---|---|
+| `list_triggers` | `trigger_service` | Operator | (none) |
+| `add_trigger` | `trigger_service` | Admin | `command`, `response`, `min_class?` |
+| `remove_trigger` | `trigger_service` | Admin | `trigger_id` |
+| `list_redirects` | `redirect_service` | Operator | (none) |
+| `add_redirect` | `redirect_service` | Admin | `address`, `trigger_type`, `enabled?` |
+| `remove_redirect` | `redirect_service` | Admin | `redirect_id` |
+
+#### 5.8: New MCP Resources (~40 LOC Python)
+
+| URI | Name | Description |
+|---|---|---|
+| `hub://plugins` | Loaded Plugins | List of loaded plugins and scripts |
+| `hub://penalties` | Active Penalties | Current penalty restrictions by user |
+| `hub://protocol_stats` | Protocol Statistics | Message counters and throughput |
+| `hub://triggers` | Triggers | Configured auto-response triggers |
+| `hub://flood_config` | Flood Config | Current flood protection settings |
+
+#### 5.9: New MCP Prompts (~30 LOC Python)
+
+| Prompt | Description | Arguments |
+|---|---|---|
+| `security_audit` | Analyze flood stats, ban cache, active penalties for threats | (none) |
+| `plugin_status` | Report on loaded plugins, scripts, and their health | (none) |
+| `traffic_analysis` | Analyze protocol stats for anomalies (flood, spam patterns) | (none) |
+
+#### 5.10: Standalone MCP Server Parity (`client/mcp.py`) (~200 LOC Python)
+
+Update the standalone MCP server (`verlihub-mcp serve`) to mirror all new
+tools from 5.1–5.7, making the same calls via `AsyncHubClient` REST endpoints.
+This requires corresponding REST API endpoints for each new tool (many already
+exist in the routes; others need thin wrappers).
+
+#### 5.11: Bot Chat Tool Integration (~60 LOC Python)
+
+Update `bot_chat.py` to include the new tools in the bot's LLM function-call
+definitions based on user class:
+
+- **Operators** (class 3+): all read-only + stats + plugins list + penalties list + triggers list
+- **Admins** (class 5+): all above + all write tools (kick, ban, force-move, flood config, plugin manage, penalty manage, trigger manage)
+
+### Phase 5 Summary
+
+| Item | Type | Est. LOC | Files Modified |
+|---|---|---|---|
+| 5.1 Messaging tools | Python | 120 | `mcp.py`, `llm.py` |
+| 5.2 Admin tools | Python | 100 | `mcp.py`, `llm.py` |
+| 5.3 Stats/GeoIP tools | Python | 80 | `mcp.py`, `llm.py` |
+| 5.4 Plugin/Script tools | Python | 150 | `mcp.py`, `llm.py` |
+| 5.5 Flood/Ban cache tools | Python | 80 | `mcp.py`, `llm.py` |
+| 5.6 Penalty tools | Python | 80 | `mcp.py`, `llm.py` |
+| 5.7 Trigger/Redirect tools | Python | 80 | `mcp.py`, `llm.py` |
+| 5.8 New MCP resources | Python | 40 | `mcp.py`, `client/mcp.py` |
+| 5.9 New MCP prompts | Python | 30 | `mcp.py`, `client/mcp.py` |
+| 5.10 Standalone MCP parity | Python | 200 | `client/mcp.py` |
+| 5.11 Bot chat tool integration | Python | 60 | `bot_chat.py` |
+| **Phase 5 Total** | | **~1,020** | |
+
+### Post-Phase 5: Complete Tool Inventory
+
+After Phase 5, the MCP and LLM gateways will expose:
+
+- **Read-only tools**: 14 existing + 3 new stats + 5 new list tools = **22 tools**
+- **Admin tools**: 5 existing + 6 messaging + 9 admin + 5 flood/ban + 4 penalty + 3 trigger/redirect + 10 plugin/script = **42 tools**
+- **Resources**: 4 existing + 5 new = **9 resources**
+- **Prompts**: 3 existing + 3 new = **6 prompts**
+- **Total tool coverage**: 100% of SWIG-exposed HubContext methods accessible via MCP
+
+### Intentionally Excluded from MCP/LLM
+
+| API | Reason |
+|---|---|
+| `RequestShutdown(signal)` | Too dangerous for AI-initiated shutdown — use CLI/dashboard only |
+| `HasPendingShutdown/Reload` | Internal state polling — no value as a tool |
+| `GetShutdownSignal` | Internal |
+| `GetConfigDir` | Filesystem path — security risk to expose |
+| `Initialize/Start/Stop` | Hub lifecycle — managed by server process, not tools |
+| `SetEventCallback` | Internal wiring, not an operational tool |
+
+### Dependencies
+
+Phase 5 requires all of Phases 1–4 to be complete:
+- Phase 1 (flood, ban cache, active/passive) → tools 5.5
+- Phase 2 (MCTo, ForceMove, stats, GeoIP, penalties) → tools 5.2, 5.3, 5.6
+- Phase 3 (triggers, redirects, client detection) → tools 5.7
+- Phase 4 (REST API endpoints) → item 5.10 (standalone MCP needs REST endpoints)

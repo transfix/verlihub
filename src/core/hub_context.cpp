@@ -381,6 +381,52 @@ bool HubContext::BroadcastChat(std::string_view from, std::string_view message) 
 }
 
 // =============================================================================
+// ForceMove
+// =============================================================================
+
+bool HubContext::ForceMove(std::string_view nick, std::string_view address) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->ForceMove(std::string(nick), std::string(address));
+}
+
+// =============================================================================
+// Protocol Statistics
+// =============================================================================
+
+ProtocolStatsSnapshot HubContext::GetProtocolStats() const {
+    ProtocolStatsSnapshot result;
+    if (!m_nmdc_server) return result;
+    auto s = m_nmdc_server->GetProtocolStats();
+    result.messages_in  = s.messages_in;
+    result.messages_out = s.messages_out;
+    result.chat_count   = s.chat_count;
+    result.pm_count     = s.pm_count;
+    result.search_count = s.search_count;
+    result.myinfo_count = s.myinfo_count;
+    result.ctm_count    = s.ctm_count;
+    result.sr_count     = s.sr_count;
+    result.mcto_count   = s.mcto_count;
+    result.flood_blocked= s.flood_blocked;
+    result.ban_blocked  = s.ban_blocked;
+    return result;
+}
+
+// =============================================================================
+// GeoIP Lookup
+// =============================================================================
+
+GeoIPInfo HubContext::LookupGeoIP(std::string_view ip) const {
+    GeoIPInfo info;
+    if (!m_geo_lookup) return info;
+    auto result = m_geo_lookup->Lookup(std::string(ip));
+    info.country_code = std::move(result.country_code);
+    info.country_name = std::move(result.country_name);
+    info.city = std::move(result.city);
+    info.available = (info.country_code != "--");
+    return info;
+}
+
+// =============================================================================
 // Flood Protection Configuration
 // =============================================================================
 

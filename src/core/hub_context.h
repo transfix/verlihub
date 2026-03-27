@@ -161,6 +161,35 @@ struct UserInfoSnapshot {
 };
 
 /**
+ * Snapshot of protocol-level message counters.
+ * Returned by HubContext::GetProtocolStats().
+ */
+struct ProtocolStatsSnapshot {
+    uint64_t messages_in{0};
+    uint64_t messages_out{0};
+    uint64_t chat_count{0};
+    uint64_t pm_count{0};
+    uint64_t search_count{0};
+    uint64_t myinfo_count{0};
+    uint64_t ctm_count{0};
+    uint64_t sr_count{0};
+    uint64_t mcto_count{0};
+    uint64_t flood_blocked{0};
+    uint64_t ban_blocked{0};
+};
+
+/**
+ * Result of a GeoIP lookup.
+ * Returned by HubContext::LookupGeoIP().
+ */
+struct GeoIPInfo {
+    std::string country_code;  ///< Two-letter ISO 3166-1 (e.g. "US")
+    std::string country_name;  ///< English country name
+    std::string city;          ///< City name
+    bool available{false};     ///< True if lookup succeeded
+};
+
+/**
  * Logging configuration
  */
 struct LogConfig {
@@ -600,6 +629,41 @@ public:
      * Broadcast a chat message from a given sender to all users.
      */
     bool BroadcastChat(std::string_view from, std::string_view message);
+
+    // =========================================================================
+    // ForceMove (Redirect)
+    // =========================================================================
+
+    /**
+     * Force-move (redirect) a user to another hub address.
+     * Sends $ForceMove and disconnects the user.
+     *
+     * @param nick    User to redirect
+     * @param address Hub address to redirect to (e.g. "other-hub.example.com:411")
+     * @return true if user was found and redirected
+     */
+    bool ForceMove(std::string_view nick, std::string_view address);
+
+    // =========================================================================
+    // Protocol Statistics
+    // =========================================================================
+
+    /**
+     * Get a snapshot of protocol-level statistics.
+     */
+    VH_NODISCARD ProtocolStatsSnapshot GetProtocolStats() const;
+
+    // =========================================================================
+    // GeoIP Lookup
+    // =========================================================================
+
+    /**
+     * Look up GeoIP data for an IP address.
+     *
+     * @param ip IPv4 or IPv6 address string
+     * @return GeoIPInfo with country/city data
+     */
+    VH_NODISCARD GeoIPInfo LookupGeoIP(std::string_view ip) const;
 
     // =========================================================================
     // Flood Protection Configuration

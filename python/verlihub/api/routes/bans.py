@@ -26,6 +26,7 @@ class BanCreateRequest(BaseModel):
     """Request to create a ban."""
     ip: str = ""
     nick: str = ""
+    cidr: str = ""  # CIDR notation for range bans (e.g. "192.168.1.0/24")
     ban_type: int = BanType.IP
     reason: str = ""
     duration_hours: Optional[int] = None  # None = permanent
@@ -108,14 +109,24 @@ async def get_ban(
 @router.get("/search/ip/{ip}", response_model=BanList)
 async def search_ban_by_ip(
     ip: str,
+    include_ranges: bool = Query(True, description="Also check CIDR/range bans"),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),
     session: AsyncSession = Depends(get_session),
 ) -> BanList:
-    """Search for bans by IP address."""
+    """Search for bans by IP address (exact match + range/CIDR match)."""
+    bans = []
+    # Exact match
     query = select(Ban).where(Ban.ip == ip)
     result = await session.execute(query)
-    bans = result.scalars().all()
-    
+    bans.extend(result.scalars().all())
+
+    # Range/CIDR match
+    if include_ranges:
+        from verlihub.ban_service import is_ip_banned
+        range_ban = await is_ip_banned(session, ip)
+        if range_ban and range_ban not in bans:
+            bans.append(range_ban)
+
     return BanList(
         count=len(bans),
         bans=[BanRead.model_validate(b) for b in bans],
@@ -145,32 +156,36 @@ async def create_ban(
     _user: TokenData = Depends(require_permission(Permission.CHEEF)),
     session: AsyncSession = Depends(get_session),
 ) -> BanRead:
-    """Create a new ban."""
-    if not request.ip and not request.nick:
+    """Create a new ban. Supports exact IP, nick, and CIDR range bans."""
+    if not request.ip and not request.nick and not request.cidr:
         raise HTTPException(
-            status_code=400, 
-            detail="Either IP or nick must be provided"
+            status_code=400,
+            detail="At least one of ip, nick, or cidr must be provided",
         )
-    
-    # Calculate expiry date if duration provided
-    date_limit = None
-    if request.duration_hours is not None:
-        date_limit = datetime.utcnow() + timedelta(hours=request.duration_hours)
-    
-    ban = Ban(
+
+    # Validate CIDR if provided
+    if request.cidr:
+        import ipaddress
+        try:
+            ipaddress.ip_network(request.cidr, strict=False)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid CIDR notation: {request.cidr}",
+            )
+
+    from verlihub.ban_service import create_ban as svc_create_ban
+    ban = await svc_create_ban(
+        session,
         ip=request.ip,
         nick=request.nick,
+        cidr=request.cidr,
         ban_type=request.ban_type,
         reason=request.reason,
         nick_op=request.nick_op,
-        date_start=datetime.utcnow(),
-        date_limit=date_limit,
+        duration_hours=request.duration_hours,
     )
-    
-    session.add(ban)
-    await session.commit()
-    await session.refresh(ban)
-    
+
     return BanRead.model_validate(ban)
 
 

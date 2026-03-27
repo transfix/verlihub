@@ -462,5 +462,52 @@ std::string MakeBotList(const std::vector<std::string>& nicks) {
     return result;
 }
 
+// ============================================================================
+// $MCTo — Multi-Chat To
+// ============================================================================
+
+MCToData ParseMCTo(const std::string& msg) {
+    MCToData data;
+    // Format: "$MCTo: <to_nick> $<from_nick> <message>"
+    const std::string prefix = "$MCTo: ";
+    if (msg.size() < prefix.size() || msg.substr(0, prefix.size()) != prefix)
+        return data;
+
+    std::string rest = msg.substr(prefix.size());
+
+    // Find the " $" separator between to_nick and from_nick
+    size_t sep = rest.find(" $");
+    if (sep == std::string::npos || sep == 0) return data;
+
+    data.to = rest.substr(0, sep);
+
+    // After " $" we have "<from_nick> <message>"
+    std::string after = rest.substr(sep + 2);
+    size_t space = after.find(' ');
+    if (space == std::string::npos || space == 0) return data;
+
+    data.from = after.substr(0, space);
+    data.message = after.substr(space + 1);
+
+    data.valid = !data.to.empty() && !data.from.empty();
+    return data;
+}
+
+std::string MakeMCTo(const std::string& from, const std::string& to,
+                     const std::string& message) {
+    return "$MCTo: " + to + " $" + from + " " + message;
+}
+
+std::string MakeUserIPList(const std::vector<std::pair<std::string, std::string>>& entries) {
+    std::string result = "$UserIP ";
+    for (const auto& [nick, ip] : entries) {
+        result += nick;
+        result += ' ';
+        result += ip;
+        result += "$$";
+    }
+    return result;
+}
+
 }  // namespace NMDCProtocol
 }  // namespace nVerliHub

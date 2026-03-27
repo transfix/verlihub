@@ -375,6 +375,45 @@ public:
     /// Disconnect a user by nick (no message, just close)
     bool DisconnectUser(const std::string& nick);
 
+    /// Force-move a user to another hub address
+    bool ForceMove(const std::string& nick, const std::string& address);
+
+    // =========================================================================
+    // Protocol Statistics
+    // =========================================================================
+
+    /// Message count per command type
+    struct ProtocolStats {
+        std::atomic<uint64_t> messages_in{0};   ///< Total messages received
+        std::atomic<uint64_t> messages_out{0};   ///< Total messages sent
+        std::atomic<uint64_t> chat_count{0};
+        std::atomic<uint64_t> pm_count{0};
+        std::atomic<uint64_t> search_count{0};
+        std::atomic<uint64_t> myinfo_count{0};
+        std::atomic<uint64_t> ctm_count{0};
+        std::atomic<uint64_t> sr_count{0};
+        std::atomic<uint64_t> mcto_count{0};
+        std::atomic<uint64_t> flood_blocked{0};  ///< Messages blocked by flood limiter
+        std::atomic<uint64_t> ban_blocked{0};     ///< Connections blocked by ban cache
+    };
+
+    /// Get protocol statistics (snapshot)
+    struct ProtocolStatsSnapshot {
+        uint64_t messages_in{0};
+        uint64_t messages_out{0};
+        uint64_t chat_count{0};
+        uint64_t pm_count{0};
+        uint64_t search_count{0};
+        uint64_t myinfo_count{0};
+        uint64_t ctm_count{0};
+        uint64_t sr_count{0};
+        uint64_t mcto_count{0};
+        uint64_t flood_blocked{0};
+        uint64_t ban_blocked{0};
+    };
+
+    ProtocolStatsSnapshot GetProtocolStats() const;
+
     // =========================================================================
     // Runtime Configuration Setters (thread-safe, called from Python)
     // =========================================================================
@@ -425,6 +464,10 @@ private:
     void HandleRevConnectToMe(NMDCClient& client, const std::string& msg);
     void HandleSR(NMDCClient& client, const std::string& msg);
     void HandleQuit(NMDCClient& client);
+    void HandleMCTo(NMDCClient& client, const std::string& msg);
+    void HandleUserIP(NMDCClient& client, const std::string& msg);
+    void HandleWhoIP(NMDCClient& client, const std::string& msg);
+    void HandleOpForceMove(NMDCClient& client, const std::string& msg);
 
     // =========================================================================
     // Internal Helpers
@@ -536,6 +579,12 @@ private:
 
     /// Our connection factory (owned, installed as mFactory on base class)
     std::unique_ptr<NMDCConnFactory> m_conn_factory;
+
+    // =========================================================================
+    // Protocol Statistics
+    // =========================================================================
+
+    ProtocolStats m_proto_stats;
 };
 
 }  // namespace nVerliHub

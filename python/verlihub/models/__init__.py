@@ -136,6 +136,10 @@ class BanBase(SQLModel):
     reason: str = Field(default="", max_length=512)
     last_hit: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     this_kick: bool = False
+    # IP range fields for subnet/CIDR bans (BanType.RANGE)
+    ip_range_min: str = Field(default="", max_length=45)
+    ip_range_max: str = Field(default="", max_length=45)
+    cidr: str = Field(default="", max_length=49)  # e.g. "192.168.1.0/24"
 
 
 class Ban(BanBase, table=True):
@@ -152,6 +156,48 @@ class BanCreate(BanBase):
 
 class BanRead(BanBase):
     """Schema for reading a ban."""
+    id: int
+
+
+# =============================================================================
+# Penalty Models (temporary per-user restrictions)
+# =============================================================================
+
+
+class PenaltyType(IntEnum):
+    """Penalty types — what capability is restricted."""
+    GAG = 1       # Cannot send main chat
+    NO_PM = 2     # Cannot send private messages
+    NO_SEARCH = 4 # Cannot search
+    NO_CTM = 8    # Cannot do file transfers
+    NO_MYINFO = 16 # Cannot update $MyINFO
+
+
+class PenaltyBase(SQLModel):
+    """Base model for penalties."""
+    nick: str = Field(max_length=64, index=True)
+    ip: str = Field(default="", max_length=45)
+    penalty_type: int = Field(default=PenaltyType.GAG)
+    reason: str = Field(default="", max_length=512)
+    op_nick: str = Field(default="", max_length=64)
+    date_start: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    date_end: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
+
+
+class Penalty(PenaltyBase, table=True):
+    """Active penalty (temporary restriction) on a user."""
+    __tablename__ = "penalties"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class PenaltyCreate(PenaltyBase):
+    """Schema for creating a penalty."""
+    pass
+
+
+class PenaltyRead(PenaltyBase):
+    """Schema for reading a penalty."""
     id: int
 
 
@@ -183,6 +229,16 @@ class Trigger(TriggerBase, table=True):
     __tablename__ = "trigger"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class TriggerCreate(TriggerBase):
+    """Schema for creating a trigger."""
+    pass
+
+
+class TriggerRead(TriggerBase):
+    """Schema for reading a trigger."""
+    id: int
 
 
 # =============================================================================
@@ -226,6 +282,16 @@ class Redirect(RedirectBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
 
+class RedirectCreate(RedirectBase):
+    """Schema for creating a redirect."""
+    pass
+
+
+class RedirectRead(RedirectBase):
+    """Schema for reading a redirect."""
+    id: int
+
+
 # =============================================================================
 # DC Client Models
 # =============================================================================
@@ -246,6 +312,16 @@ class DCClient(DCClientBase, table=True):
     __tablename__ = "dc_clients"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class DCClientCreate(DCClientBase):
+    """Schema for creating a DC client rule."""
+    pass
+
+
+class DCClientRead(DCClientBase):
+    """Schema for reading a DC client rule."""
+    id: int
 
 
 # =============================================================================

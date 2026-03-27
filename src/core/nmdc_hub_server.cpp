@@ -129,6 +129,7 @@ int NMDCHubServer::OnNewConn(cAsyncConn* conn) {
 
     // Fast-path ban cache check: reject known-banned IPs immediately
     if (IsIPBanned(ip)) {
+        m_proto_stats.ban_blocked.fetch_add(1, std::memory_order_relaxed);
         return -1;  // Reject silently
     }
 
@@ -173,6 +174,9 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
 
     if (message.empty()) return;
 
+    // Count incoming messages
+    m_proto_stats.messages_in.fetch_add(1, std::memory_order_relaxed);
+
     // Find the client
     std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
     auto it = m_clients.find(conn);
@@ -194,6 +198,9 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
         HandleMyINFO(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$GetNickList")) {
         HandleGetNickList(client);
+    } else if (NMDCProtocol::IsCommand(message, "$MCTo:")) {
+        if (!CheckFlood(client, FloodType::PM)) return;
+        HandleMCTo(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$To:")) {
         if (!CheckFlood(client, FloodType::PM)) return;
         HandlePrivateMessage(client, message);
@@ -210,6 +217,12 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
         HandleSR(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Quit")) {
         HandleQuit(client);
+    } else if (NMDCProtocol::IsCommand(message, "$UserIP")) {
+        HandleUserIP(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$WhoIP")) {
+        HandleWhoIP(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$OpForceMove")) {
+        HandleOpForceMove(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Version")) {
         // Ignore version announcements
     } else if (NMDCProtocol::IsCommand(message, "$GetINFO")) {
@@ -304,6 +317,7 @@ void NMDCHubServer::HandleValidateNick(NMDCClient& client, const std::string& ms
 
     // Fast-path ban cache check: reject known-banned nicks
     if (IsNickBanned(nick)) {
+        m_proto_stats.ban_blocked.fetch_add(1, std::memory_order_relaxed);
         SendToConn(client.conn, NMDCProtocol::MakeValidateDenide(nick));
         client.state = NMDCConnState::Closing;
         return;
@@ -385,6 +399,7 @@ void NMDCHubServer::HandleMyINFO(NMDCClient& client, const std::string& msg) {
         client.state != NMDCConnState::LoggedIn) {
         return;
     }
+    m_proto_stats.myinfo_count.fetch_add(1, std::memory_order_relaxed);
 
     auto info = NMDCProtocol::ParseMyINFO(msg);
     if (!info.valid) return;
@@ -473,6 +488,7 @@ void NMDCHubServer::HandleGetNickList(NMDCClient& client) {
 
 void NMDCHubServer::HandleChat(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.chat_count.fetch_add(1, std::memory_order_relaxed);
 
     auto chat = NMDCProtocol::ParseChat(msg);
     if (!chat.valid) return;
@@ -491,6 +507,7 @@ void NMDCHubServer::HandleChat(NMDCClient& client, const std::string& msg) {
 
 void NMDCHubServer::HandlePrivateMessage(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.pm_count.fetch_add(1, std::memory_order_relaxed);
 
     auto pm = NMDCProtocol::ParsePrivateMessage(msg);
     if (!pm.valid) return;
@@ -512,6 +529,7 @@ void NMDCHubServer::HandlePrivateMessage(NMDCClient& client, const std::string& 
 
 void NMDCHubServer::HandleSearch(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.search_count.fetch_add(1, std::memory_order_relaxed);
 
     // Ask Python callback
     std::string query = NMDCProtocol::GetCommandParam(msg, "$Search");
@@ -525,6 +543,7 @@ void NMDCHubServer::HandleSearch(NMDCClient& client, const std::string& msg) {
 
 void NMDCHubServer::HandleConnectToMe(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.ctm_count.fetch_add(1, std::memory_order_relaxed);
 
     // $ConnectToMe <remote_nick> <ip>:<port>
     // Forward to the target user
@@ -573,6 +592,7 @@ void NMDCHubServer::HandleRevConnectToMe(NMDCClient& client, const std::string& 
 
 void NMDCHubServer::HandleSR(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.sr_count.fetch_add(1, std::memory_order_relaxed);
 
     // Parse the search result
     auto sr = NMDCProtocol::ParseSR(msg);
@@ -606,6 +626,7 @@ void NMDCHubServer::HandleQuit(NMDCClient& client) {
 void NMDCHubServer::SendToConn(cAsyncConn* conn, const std::string& data) {
     if (!conn || !conn->ok) return;
     conn->Write(data + "|", true);
+    m_proto_stats.messages_out.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NMDCHubServer::SendToAllConns(const std::string& data) {
@@ -956,6 +977,7 @@ bool NMDCHubServer::CheckFlood(NMDCClient& client, FloodType type) {
 
     // Flood detected — warn or disconnect
     ++client.flood_warnings;
+    m_proto_stats.flood_blocked.fetch_add(1, std::memory_order_relaxed);
     if (client.flood_warnings >= m_max_flood_warnings) {
         // Disconnect the client
         SendToConn(client.conn,
@@ -1090,6 +1112,172 @@ size_t NMDCHubServer::GetPassiveUserCount() const {
             ++count;
     }
     return count;
+}
+
+// =============================================================================
+// ForceMove
+// =============================================================================
+
+bool NMDCHubServer::ForceMove(const std::string& nick, const std::string& address) {
+    std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+    auto it = m_nick_to_conn.find(nick);
+    if (it == m_nick_to_conn.end()) return false;
+
+    cAsyncConn* conn = it->second;
+    auto client_it = m_clients.find(conn);
+    if (client_it == m_clients.end()) return false;
+
+    SendToConn(conn, NMDCProtocol::MakeForceMove(address));
+    client_it->second.state = NMDCConnState::Closing;
+    conn->CloseNice(500);
+    return true;
+}
+
+// =============================================================================
+// New Protocol Handlers (Phase 2)
+// =============================================================================
+
+void NMDCHubServer::HandleMCTo(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+    m_proto_stats.mcto_count.fetch_add(1, std::memory_order_relaxed);
+
+    auto mcto = NMDCProtocol::ParseMCTo(msg);
+    if (!mcto.valid) return;
+
+    // Verify sender nick matches connection's nick
+    if (mcto.from != client.nick) return;
+
+    // Ask Python callback (treat as PM for filtering purposes)
+    if (!m_callback->OnPrivateMessage(mcto.from, mcto.to, mcto.message)) {
+        return;
+    }
+
+    // Deliver to target only
+    auto it = m_nick_to_conn.find(mcto.to);
+    if (it != m_nick_to_conn.end()) {
+        SendToConn(it->second, msg);
+    }
+}
+
+void NMDCHubServer::HandleUserIP(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    // Operator-only: class >= 3
+    if (client.user_class < 3) return;
+
+    // Format: "$UserIP nick1$$nick2$$"
+    std::string params = NMDCProtocol::GetCommandParam(msg, "$UserIP");
+    if (params.empty()) return;
+
+    // Parse nick list (separated by $$)
+    std::vector<std::pair<std::string, std::string>> results;
+    size_t pos = 0;
+    while (pos < params.size()) {
+        size_t end = params.find("$$", pos);
+        std::string nick;
+        if (end == std::string::npos) {
+            nick = params.substr(pos);
+            pos = params.size();
+        } else {
+            nick = params.substr(pos, end - pos);
+            pos = end + 2;
+        }
+        if (nick.empty()) continue;
+
+        auto it = m_nick_to_conn.find(nick);
+        if (it != m_nick_to_conn.end()) {
+            auto cit = m_clients.find(it->second);
+            if (cit != m_clients.end() && cit->second.state == NMDCConnState::LoggedIn) {
+                results.emplace_back(nick, cit->second.ip);
+            }
+        }
+    }
+
+    if (!results.empty()) {
+        SendToConn(client.conn, NMDCProtocol::MakeUserIPList(results));
+    }
+}
+
+void NMDCHubServer::HandleWhoIP(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    // Operator-only: class >= 3
+    if (client.user_class < 3) return;
+
+    // Format: "$WhoIP <ip>"
+    std::string ip = NMDCProtocol::GetCommandParam(msg, "$WhoIP");
+    if (ip.empty()) return;
+
+    // Find all users with this IP
+    std::vector<std::pair<std::string, std::string>> results;
+    for (auto& [conn, c] : m_clients) {
+        if (c.state == NMDCConnState::LoggedIn && c.ip == ip) {
+            results.emplace_back(c.nick, c.ip);
+        }
+    }
+
+    if (!results.empty()) {
+        SendToConn(client.conn, NMDCProtocol::MakeUserIPList(results));
+    }
+}
+
+void NMDCHubServer::HandleOpForceMove(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    // Operator-only: class >= 3
+    if (client.user_class < 3) return;
+
+    // Format: "$OpForceMove $Who:<nick>$Where:<address>$Msg:<reason>"
+    std::string params = NMDCProtocol::GetCommandParam(msg, "$OpForceMove");
+    if (params.empty()) return;
+
+    // Parse $Who:<nick>$Where:<address>$Msg:<reason>
+    std::string nick, address, reason;
+
+    size_t who_pos = params.find("$Who:");
+    size_t where_pos = params.find("$Where:");
+    size_t msg_pos = params.find("$Msg:");
+
+    if (who_pos == std::string::npos || where_pos == std::string::npos) return;
+
+    nick = params.substr(who_pos + 5, where_pos - (who_pos + 5));
+    if (msg_pos != std::string::npos) {
+        address = params.substr(where_pos + 7, msg_pos - (where_pos + 7));
+        reason = params.substr(msg_pos + 5);
+    } else {
+        address = params.substr(where_pos + 7);
+    }
+
+    if (nick.empty() || address.empty()) return;
+
+    // Send reason message if provided
+    if (!reason.empty()) {
+        SendToNick(nick, NMDCProtocol::MakeChat(m_hub_security,
+            "You are being redirected: " + reason));
+    }
+
+    // Force move the target
+    ForceMove(nick, address);
+}
+
+// =============================================================================
+// Protocol Statistics
+// =============================================================================
+
+NMDCHubServer::ProtocolStatsSnapshot NMDCHubServer::GetProtocolStats() const {
+    ProtocolStatsSnapshot s;
+    s.messages_in  = m_proto_stats.messages_in.load(std::memory_order_relaxed);
+    s.messages_out = m_proto_stats.messages_out.load(std::memory_order_relaxed);
+    s.chat_count   = m_proto_stats.chat_count.load(std::memory_order_relaxed);
+    s.pm_count     = m_proto_stats.pm_count.load(std::memory_order_relaxed);
+    s.search_count = m_proto_stats.search_count.load(std::memory_order_relaxed);
+    s.myinfo_count = m_proto_stats.myinfo_count.load(std::memory_order_relaxed);
+    s.ctm_count    = m_proto_stats.ctm_count.load(std::memory_order_relaxed);
+    s.sr_count     = m_proto_stats.sr_count.load(std::memory_order_relaxed);
+    s.mcto_count   = m_proto_stats.mcto_count.load(std::memory_order_relaxed);
+    s.flood_blocked= m_proto_stats.flood_blocked.load(std::memory_order_relaxed);
+    s.ban_blocked  = m_proto_stats.ban_blocked.load(std::memory_order_relaxed);
+    return s;
 }
 
 }  // namespace nVerliHub

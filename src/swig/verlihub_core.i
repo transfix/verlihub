@@ -50,6 +50,7 @@
 %{
 // Include headers needed for compilation
 #include "core/hub_context.h"
+#include "core/nmdc_protocol.h"
 #include "core/thread_safe_collections.h"
 
 using namespace nVerliHub;
@@ -553,6 +554,74 @@ Clear the entire ban cache.
 ";
 
 // ============================================================================
+// Phase 2: ForceMove Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::ForceMove "
+Force-move (redirect) a user to another hub address.
+Sends $ForceMove and disconnects the user.
+
+Args:
+    nick: User to redirect
+    address: Hub address to redirect to (e.g. 'other-hub.example.com:411')
+
+Returns:
+    True if user was found and redirected
+";
+
+// ============================================================================
+// Phase 2: Protocol Statistics Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::GetProtocolStats "
+Get a snapshot of protocol-level statistics.
+
+Returns:
+    ProtocolStatsSnapshot with message counters
+";
+
+%feature("docstring") nVerliHub::HubContext::ProtocolStatsSnapshot "
+Snapshot of protocol-level message counters.
+
+Attributes:
+    messages_in: Total messages received
+    messages_out: Total messages sent
+    chat_count: Chat messages processed
+    pm_count: Private messages processed
+    search_count: Search requests processed
+    myinfo_count: MyINFO updates processed
+    ctm_count: ConnectToMe requests processed
+    sr_count: Search results relayed
+    mcto_count: MCTo messages processed
+    flood_blocked: Messages blocked by flood limiter
+    ban_blocked: Connections/nicks blocked by ban cache
+";
+
+// ============================================================================
+// Phase 2: GeoIP Lookup Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::LookupGeoIP "
+Look up GeoIP data for an IP address.
+
+Args:
+    ip: IPv4 or IPv6 address string
+
+Returns:
+    GeoIPInfo with country_code, country_name, city, and available flag
+";
+
+%feature("docstring") nVerliHub::HubContext::GeoIPInfo "
+Result of a GeoIP lookup.
+
+Attributes:
+    country_code: Two-letter ISO 3166-1 code (e.g. 'US')
+    country_name: English country name
+    city: City name
+    available: True if the lookup succeeded
+";
+
+// ============================================================================
 // unique_ptr handling for HubContext::Create
 // ============================================================================
 
@@ -597,6 +666,51 @@ Clear the entire ban cache.
 
 %include "core/hub_context.h"
 // Don't include thread_safe_collections.h - internal implementation detail
+
+// ============================================================================
+// NMDCProtocol — expose parsing and message construction utilities
+// ============================================================================
+
+%feature("docstring") nVerliHub::NMDCProtocol::ParseTag
+"Parse an NMDC tag string like '<ClientName V:x.y,M:A,H:1/0/0,S:3>' into a TagData struct.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::ParseMyINFO
+"Parse a $MyINFO protocol message into a MyINFOData struct.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeForceMove
+"Construct a $ForceMove <address>| protocol message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeChat
+"Construct a main chat protocol message: <from> message|";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakePrivateMessage
+"Construct a PM: $To: <to> From: <from> $<<from>> <message>|";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeBotMyINFO
+"Construct a $MyINFO for a hub bot with default speed/share.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeBotList
+"Construct a $BotList nick1$$nick2$$| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeMCTo
+"Construct a $MCTo: <to> $<from> <message>| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeHubTopic
+"Construct a $HubTopic <topic>| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::Escape
+"Escape special NMDC characters as /%DCNnnn%/ sequences.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::UnEscape
+"Unescape /%DCNnnn%/ sequences in a string.";
+
+// Rename 'from' fields in protocol structs to avoid Python keyword clash.
+// SWIG would auto-rename to '_from' with a warning; we make it explicit.
+%rename("from_nick") nVerliHub::NMDCProtocol::PrivateMessageData::from;
+%rename("from_nick") nVerliHub::NMDCProtocol::MCToData::from;
+
+// Expose the full NMDCProtocol namespace — structs + free functions
+%include "core/nmdc_protocol.h"
 
 // ============================================================================
 // Additional Python-friendly methods
@@ -677,6 +791,47 @@ Clear the entire ban cache.
     def Create(config_path):
         """Create a new HubContext (caller owns the returned object)."""
         return HubContext._Create(config_path)
+    
+    def lookup_geoip(self, ip):
+        """
+        Look up GeoIP data for an IP address.
+
+        Args:
+            ip: IPv4 or IPv6 address string
+
+        Returns:
+            dict with country_code, country_name, city, available keys
+            or None if GeoIP is not available
+        """
+        info = self.LookupGeoIP(ip)
+        return {
+            'country_code': info.country_code,
+            'country_name': info.country_name,
+            'city': info.city,
+            'available': info.available,
+        }
+
+    def get_protocol_stats(self):
+        """
+        Get protocol-level message counters.
+
+        Returns:
+            dict with messages_in, messages_out, chat_count, pm_count, etc.
+        """
+        s = self.GetProtocolStats()
+        return {
+            'messages_in': s.messages_in,
+            'messages_out': s.messages_out,
+            'chat_count': s.chat_count,
+            'pm_count': s.pm_count,
+            'search_count': s.search_count,
+            'myinfo_count': s.myinfo_count,
+            'ctm_count': s.ctm_count,
+            'sr_count': s.sr_count,
+            'mcto_count': s.mcto_count,
+            'flood_blocked': s.flood_blocked,
+            'ban_blocked': s.ban_blocked,
+        }
     %}
 }
 

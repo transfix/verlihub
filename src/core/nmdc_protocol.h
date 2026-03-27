@@ -212,6 +212,24 @@ std::string MakeForceMove(const std::string& address);
 /// "$BotList nick1$$nick2$$|" — list of bots
 std::string MakeBotList(const std::vector<std::string>& nicks);
 
+/// Parsed $MCTo data (multi-chat to — PM visible in main chat of target)
+struct MCToData {
+    std::string to;       ///< Target nick
+    std::string from;     ///< Sender nick
+    std::string message;  ///< Message content
+    bool valid{false};
+};
+
+/// Parse "$MCTo: <to_nick> $<from_nick> <message>"
+MCToData ParseMCTo(const std::string& msg);
+
+/// "$MCTo: <to_nick> $<from_nick> <message>|"
+std::string MakeMCTo(const std::string& from, const std::string& to,
+                     const std::string& message);
+
+/// "$UserIP <nick> <ip>$$...$$|" for multiple users
+std::string MakeUserIPList(const std::vector<std::pair<std::string, std::string>>& entries);
+
 }  // namespace NMDCProtocol
 }  // namespace nVerliHub
 

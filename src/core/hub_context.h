@@ -696,6 +696,13 @@ public:
      */
     void SetFloodConfig(int type, int period_ms, int max_tokens);
 
+    /**
+     * Get the current flood limit for a message type.
+     * @param type Flood type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM,5=ExtJSON)
+     * @return FloodLimit with period_ms and max_tokens, or {0,0} if invalid type
+     */
+    VH_NODISCARD std::pair<int, int> GetFloodConfig(int type) const;
+
     // =========================================================================
     // Ban Cache Management
     // =========================================================================

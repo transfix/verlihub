@@ -456,6 +456,31 @@
                 <a class="navbar-item" href="/dashboard/invites">
                     <i class="fas fa-ticket-alt mr-2"></i> Invites
                 </a>
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">
+                        <i class="fas fa-toolbox mr-2"></i> Tools
+                    </a>
+                    <div class="navbar-dropdown">
+                        <a class="navbar-item" href="/dashboard/triggers">
+                            <i class="fas fa-bolt mr-2"></i> Triggers
+                        </a>
+                        <a class="navbar-item" href="/dashboard/redirects">
+                            <i class="fas fa-directions mr-2"></i> Redirects
+                        </a>
+                        <a class="navbar-item" href="/dashboard/clients">
+                            <i class="fas fa-desktop mr-2"></i> Client Rules
+                        </a>
+                        <a class="navbar-item" href="/dashboard/penalties">
+                            <i class="fas fa-gavel mr-2"></i> Penalties
+                        </a>
+                        <a class="navbar-item" href="/dashboard/flood-config">
+                            <i class="fas fa-shield-alt mr-2"></i> Flood Config
+                        </a>
+                        <a class="navbar-item" href="/dashboard/protocol-stats">
+                            <i class="fas fa-chart-bar mr-2"></i> Protocol Stats
+                        </a>
+                    </div>
+                </div>
                 {% if user and user.user_class >= 10 %}
                 <a class="navbar-item" href="/dashboard/hublist">
                     <i class="fas fa-network-wired mr-2"></i> Hub List

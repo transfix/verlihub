@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Flood Config - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title"><i class="fas fa-shield-alt mr-2"></i> Flood Protection Config</h1>
+        </div>
+    </div>
+</div>
+
+<div class="notification is-info is-light">
+    <p>Configure rate limits for different message types. Each type uses a token-bucket algorithm:</p>
+    <ul>
+        <li><strong>Period (ms)</strong>: How often a new token is added</li>
+        <li><strong>Max tokens</strong>: Maximum burst capacity</li>
+    </ul>
+</div>
+
+<div class="columns is-multiline" id="flood-cards">
+    <div class="column is-12 has-text-centered"><p>Loading...</p></div>
+</div>
+
+<script>
+const API = '/api/v1/hub/flood-config';
+const token = document.cookie.split(';').find(c => c.trim().startsWith('access_token='))?.split('=')[1] || '';
+const headers = {'Content-Type': 'application/json', 'Authorization': token};
+
+const ICONS = {
+    chat: 'fa-comments', pm: 'fa-envelope', search: 'fa-search',
+    myinfo: 'fa-id-card', ctm: 'fa-plug', extjson: 'fa-code'
+};
+const LABELS = {
+    chat: 'Chat Messages', pm: 'Private Messages', search: 'Search Queries',
+    myinfo: 'MyINFO Updates', ctm: 'Connect-to-Me', extjson: 'ExtJSON'
+};
+
+async function loadConfig() {
+    const resp = await fetch(API, {headers});
+    if (!resp.ok) { document.getElementById('flood-cards').innerHTML = '<div class="column">Error loading config</div>'; return; }
+    const data = await resp.json();
+    const container = document.getElementById('flood-cards');
+    container.innerHTML = Object.entries(data).map(([type, cfg]) => `
+        <div class="column is-4">
+            <div class="box">
+                <h5 class="title is-5">
+                    <i class="fas ${ICONS[type] || 'fa-shield-alt'} mr-2"></i>
+                    ${LABELS[type] || type}
+                </h5>
+                <div class="field">
+                    <label class="label">Period (ms)</label>
+                    <input class="input" type="number" id="period-${type}" value="${cfg.period_ms}" min="100">
+                </div>
+                <div class="field">
+                    <label class="label">Max Tokens</label>
+                    <input class="input" type="number" id="tokens-${type}" value="${cfg.max_tokens}" min="1">
+                </div>
+                <button class="button is-primary is-fullwidth" onclick="saveType('${type}')">
+                    <i class="fas fa-save mr-2"></i> Save
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function saveType(type) {
+    const body = {
+        flood_type: type,
+        period_ms: parseInt(document.getElementById('period-' + type).value),
+        max_tokens: parseInt(document.getElementById('tokens-' + type).value),
+    };
+    const resp = await fetch(API, {method: 'PUT', headers, body: JSON.stringify(body)});
+    if (resp.ok) {
+        const btn = event.target.closest('button');
+        btn.classList.add('is-success');
+        btn.textContent = 'Saved!';
+        setTimeout(() => { btn.classList.remove('is-success'); btn.innerHTML = '<i class="fas fa-save mr-2"></i> Save'; }, 1500);
+    } else { alert('Error: ' + (await resp.text())); }
+}
+
+loadConfig();
+</script>
+{% endblock %}

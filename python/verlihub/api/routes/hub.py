@@ -14,6 +14,7 @@ from verlihub.api.auth import (
     Permission,
     RequireAdmin,
     RequireMaster,
+    RequireOperator,
     TokenData,
     get_current_user_optional,
     require_permission,
@@ -565,3 +566,175 @@ def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
         "max_nick": stats.max_nick,
         "zero_share_count": stats.zero_share_count,
     }
+
+
+# =============================================================================
+# Phase 4: ForceMove / Redirect
+# =============================================================================
+
+
+class ForceMoveRequest(BaseModel):
+    nick: str
+    address: str
+
+
+@router.post("/force-move")
+def force_move_user(
+    request: ForceMoveRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Force-move a user to another hub. Requires ADMIN."""
+    if not request.nick or not request.address:
+        raise HTTPException(400, "nick and address are required")
+    ok = ctx.force_move(request.nick, request.address)
+    if not ok:
+        raise HTTPException(404, f"User '{request.nick}' not found or already disconnected")
+    return {"success": True, "nick": request.nick, "address": request.address}
+
+
+# =============================================================================
+# Phase 4: Protocol Statistics
+# =============================================================================
+
+
+@router.get("/protocol-stats")
+def get_protocol_stats(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get protocol-level message counters. Requires OPERATOR."""
+    return ctx.get_protocol_stats()
+
+
+# =============================================================================
+# Phase 4: GeoIP Lookup
+# =============================================================================
+
+
+@router.get("/geoip/{ip}")
+def geoip_lookup(
+    ip: str,
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Look up GeoIP data for an IP address. Requires OPERATOR."""
+    result = ctx.lookup_geoip(ip)
+    if not result.get("available"):
+        raise HTTPException(404, f"No GeoIP data for '{ip}'")
+    return result
+
+
+# =============================================================================
+# Phase 4: User IP Lookup (WhoIP)
+# =============================================================================
+
+
+@router.get("/whoip/{ip}")
+def who_ip(
+    ip: str,
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Find users by IP address. Requires OPERATOR."""
+    users = ctx.get_user_list()
+    matches = [
+        {"nick": u["nick"], "user_class": u["user_class"], "share": u["share"]}
+        for u in users
+        if u.get("ip") == ip
+    ]
+    return {"ip": ip, "count": len(matches), "users": matches}
+
+
+# =============================================================================
+# Phase 4: Flood Protection Config
+# =============================================================================
+
+FLOOD_TYPES = {
+    "chat": 0, "pm": 1, "search": 2, "myinfo": 3, "ctm": 4, "extjson": 5,
+}
+FLOOD_TYPE_NAMES = {v: k for k, v in FLOOD_TYPES.items()}
+
+
+class FloodConfigUpdate(BaseModel):
+    flood_type: str  # "chat", "pm", "search", "myinfo", "ctm", "extjson"
+    period_ms: int
+    max_tokens: int
+
+
+@router.get("/flood-config")
+def get_flood_config(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get all flood protection settings. Requires OPERATOR."""
+    configs = {}
+    for name, type_id in FLOOD_TYPES.items():
+        period_ms, max_tokens = ctx.get_flood_config(type_id)
+        configs[name] = {"period_ms": period_ms, "max_tokens": max_tokens}
+    return configs
+
+
+@router.put("/flood-config")
+def set_flood_config(
+    request: FloodConfigUpdate,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Update flood protection for a message type. Requires ADMIN."""
+    type_id = FLOOD_TYPES.get(request.flood_type.lower())
+    if type_id is None:
+        raise HTTPException(400, f"Unknown flood type '{request.flood_type}'. Valid: {list(FLOOD_TYPES.keys())}")
+    if request.period_ms < 100:
+        raise HTTPException(400, "period_ms must be >= 100")
+    if request.max_tokens < 1:
+        raise HTTPException(400, "max_tokens must be >= 1")
+    ctx.set_flood_config(type_id, request.period_ms, request.max_tokens)
+    return {"success": True, "flood_type": request.flood_type, "period_ms": request.period_ms, "max_tokens": request.max_tokens}
+
+
+# =============================================================================
+# Phase 4: OpChat
+# =============================================================================
+
+
+class OpChatRequest(BaseModel):
+    message: str
+    from_nick: str = ""
+
+
+@router.post("/opchat")
+def send_opchat(
+    request: OpChatRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to OpChat. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ok = ctx.send_to_opchat(request.message, request.from_nick)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 4: Disconnect User
+# =============================================================================
+
+
+class DisconnectRequest(BaseModel):
+    nick: str
+
+
+@router.post("/disconnect")
+def disconnect_user(
+    request: DisconnectRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Disconnect a user without redirect. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.disconnect_user(request.nick)
+    if not ok:
+        raise HTTPException(404, f"User '{request.nick}' not found")
+    return {"success": True, "nick": request.nick}

@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Penalties - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title"><i class="fas fa-gavel mr-2"></i> Penalty Management</h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-warning" onclick="openAddModal()">
+                <i class="fas fa-plus mr-2"></i> Add Penalty
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Stats -->
+<div class="columns">
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Active Penalties</p>
+            <p class="title" id="active-count">—</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Chat Gags</p>
+            <p class="title" id="gag-count">—</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Search Bans</p>
+            <p class="title" id="search-count">—</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">PM Bans</p>
+            <p class="title" id="pm-count">—</p>
+        </div>
+    </div>
+</div>
+
+<div class="box">
+    <div class="field">
+        <input class="input" type="text" id="nick-filter" placeholder="Filter by nick...">
+    </div>
+    <table class="table is-fullwidth is-striped is-hoverable">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nick</th>
+                <th>Type</th>
+                <th>Reason</th>
+                <th>Operator</th>
+                <th>Expires</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="penalty-table-body">
+            <tr><td colspan="7" class="has-text-centered">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Modal -->
+<div class="modal" id="penalty-modal">
+    <div class="modal-background" onclick="closeModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Add Penalty</p>
+            <button class="delete" onclick="closeModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label">Nick</label>
+                <input class="input" type="text" id="nick-input" placeholder="username">
+            </div>
+            <div class="field">
+                <label class="label">Penalty Type</label>
+                <div class="select is-fullwidth">
+                    <select id="type-input">
+                        <option value="1">Chat Gag</option>
+                        <option value="2">Search Ban</option>
+                        <option value="4">PM Ban</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Reason</label>
+                <input class="input" type="text" id="reason-input" placeholder="Spamming">
+            </div>
+            <div class="field">
+                <label class="label">Duration (hours, 0 = permanent)</label>
+                <input class="input" type="number" id="duration-input" value="24">
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-warning" onclick="savePenalty()">Apply</button>
+            <button class="button" onclick="closeModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<script>
+const API = '/api/v1/penalties';
+const token = document.cookie.split(';').find(c => c.trim().startsWith('access_token='))?.split('=')[1] || '';
+const headers = {'Content-Type': 'application/json', 'Authorization': token};
+const TYPES = {1: 'Chat Gag', 2: 'Search Ban', 4: 'PM Ban'};
+
+async function loadPenalties() {
+    const nick = document.getElementById('nick-filter').value;
+    const qs = nick ? '?nick=' + encodeURIComponent(nick) : '';
+    const resp = await fetch(API + qs, {headers});
+    if (!resp.ok) { document.getElementById('penalty-table-body').innerHTML = '<tr><td colspan="7">Error</td></tr>'; return; }
+    const data = await resp.json();
+    const items = data.items || data;
+
+    document.getElementById('active-count').textContent = items.length;
+    document.getElementById('gag-count').textContent = items.filter(p => p.penalty_type === 1).length;
+    document.getElementById('search-count').textContent = items.filter(p => p.penalty_type === 2).length;
+    document.getElementById('pm-count').textContent = items.filter(p => p.penalty_type === 4).length;
+
+    const tbody = document.getElementById('penalty-table-body');
+    if (!items.length) { tbody.innerHTML = '<tr><td colspan="7" class="has-text-centered">No active penalties</td></tr>'; return; }
+    tbody.innerHTML = items.map(p => `<tr>
+        <td>${p.id}</td>
+        <td><strong>${esc(p.nick)}</strong></td>
+        <td><span class="tag is-warning">${TYPES[p.penalty_type] || p.penalty_type}</span></td>
+        <td>${esc(p.reason || '-')}</td>
+        <td>${esc(p.op_nick || '-')}</td>
+        <td>${p.expires ? new Date(p.expires).toLocaleString() : '<span class="tag is-danger">Permanent</span>'}</td>
+        <td><button class="button is-small is-danger" onclick="deletePenalty(${p.id})"><i class="fas fa-times"></i></button></td>
+    </tr>`).join('');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function openAddModal() { document.getElementById('penalty-modal').classList.add('is-active'); }
+function closeModal() { document.getElementById('penalty-modal').classList.remove('is-active'); }
+
+async function savePenalty() {
+    const body = {
+        nick: document.getElementById('nick-input').value,
+        penalty_type: parseInt(document.getElementById('type-input').value),
+        reason: document.getElementById('reason-input').value,
+        duration_hours: parseInt(document.getElementById('duration-input').value) || 0,
+    };
+    const resp = await fetch(API, {method: 'POST', headers, body: JSON.stringify(body)});
+    if (resp.ok) { closeModal(); loadPenalties(); } else { alert('Error: ' + (await resp.text())); }
+}
+
+async function deletePenalty(id) {
+    if (!confirm('Remove penalty #' + id + '?')) return;
+    await fetch(API + '/' + id, {method: 'DELETE', headers});
+    loadPenalties();
+}
+
+document.getElementById('nick-filter').addEventListener('input', loadPenalties);
+loadPenalties();
+</script>
+{% endblock %}

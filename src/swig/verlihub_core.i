@@ -500,12 +500,24 @@ Returns:
 %feature("docstring") nVerliHub::HubContext::SetFloodConfig "
 Set the rate limit for a specific flood message type.
 
-Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM
+Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM, 5=ExtJSON
 
 Args:
-    type: Flood type integer (0-4)
+    type: Flood type integer (0-5)
     period_ms: Token refill period in milliseconds
     max_tokens: Maximum tokens (burst capacity)
+";
+
+%feature("docstring") nVerliHub::HubContext::GetFloodConfig "
+Get the current flood limit for a message type.
+
+Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM, 5=ExtJSON
+
+Args:
+    type: Flood type integer (0-5)
+
+Returns:
+    Tuple of (period_ms, max_tokens), or (0, 0) for invalid type
 ";
 
 // ============================================================================

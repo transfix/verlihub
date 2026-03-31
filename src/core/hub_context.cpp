@@ -436,6 +436,13 @@ void HubContext::SetFloodConfig(int type, int period_ms, int max_tokens) {
     m_nmdc_server->SetFloodConfig(static_cast<FloodType>(type), period_ms, max_tokens);
 }
 
+std::pair<int, int> HubContext::GetFloodConfig(int type) const {
+    if (!m_nmdc_server) return {0, 0};
+    if (type < 0 || type >= static_cast<int>(FloodType::Count)) return {0, 0};
+    auto fl = m_nmdc_server->GetFloodConfig(static_cast<FloodType>(type));
+    return {fl.period_ms, fl.max_tokens};
+}
+
 // =============================================================================
 // Ban Cache Management
 // =============================================================================

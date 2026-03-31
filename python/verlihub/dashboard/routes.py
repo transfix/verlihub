@@ -793,6 +793,83 @@ async def plugins_page(
 
 
 # =============================================================================
+# Phase 4: Tool Dashboard Pages
+# =============================================================================
+
+
+@dashboard_router.get("/triggers", response_class=HTMLResponse)
+async def triggers_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Trigger management dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/triggers", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "triggers.html", context)
+
+
+@dashboard_router.get("/redirects", response_class=HTMLResponse)
+async def redirects_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Redirect rules dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/redirects", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "redirects.html", context)
+
+
+@dashboard_router.get("/clients", response_class=HTMLResponse)
+async def clients_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Client detection rules dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/clients", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "clients.html", context)
+
+
+@dashboard_router.get("/penalties", response_class=HTMLResponse)
+async def penalties_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Penalty management dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/penalties", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "penalties.html", context)
+
+
+@dashboard_router.get("/flood-config", response_class=HTMLResponse)
+async def flood_config_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Flood protection configuration dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/flood-config", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "flood_config.html", context)
+
+
+@dashboard_router.get("/protocol-stats", response_class=HTMLResponse)
+async def protocol_stats_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Protocol statistics dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/protocol-stats", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "protocol_stats.html", context)
+
+
+# =============================================================================
 # SPA Dashboard (Single Page Application)
 # =============================================================================
 

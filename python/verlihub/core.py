@@ -637,6 +637,53 @@ class HubContext:
     def kick_user(self, op_nick: str, nick: str, reason: str) -> bool:
         """Kick a user from the hub."""
         return self._cpp.KickUser(op_nick, nick, reason)
+
+    def force_move(self, nick: str, address: str) -> bool:
+        """Force-move (redirect) a user to another hub address."""
+        return self._cpp.ForceMove(nick, address)
+
+    def disconnect_user(self, nick: str) -> bool:
+        """Disconnect a user without redirect."""
+        return self._cpp.DisconnectUser(nick)
+
+    def send_to_opchat(self, message: str, from_nick: str = "") -> bool:
+        """Send a message to OpChat."""
+        return self._cpp.SendToOpChat(message, from_nick)
+
+    def get_protocol_stats(self) -> dict:
+        """Get protocol-level message counters."""
+        snap = self._cpp.GetProtocolStats()
+        return {
+            "messages_in": snap.messages_in,
+            "messages_out": snap.messages_out,
+            "chat_count": snap.chat_count,
+            "pm_count": snap.pm_count,
+            "search_count": snap.search_count,
+            "myinfo_count": snap.myinfo_count,
+            "ctm_count": snap.ctm_count,
+            "sr_count": snap.sr_count,
+            "mcto_count": snap.mcto_count,
+            "flood_blocked": snap.flood_blocked,
+            "ban_blocked": snap.ban_blocked,
+        }
+
+    def lookup_geoip(self, ip: str) -> dict:
+        """Look up GeoIP data for an IP address."""
+        info = self._cpp.LookupGeoIP(ip)
+        return {
+            "country_code": info.country_code,
+            "country_name": info.country_name,
+            "city": info.city,
+            "available": info.available,
+        }
+
+    def set_flood_config(self, flood_type: int, period_ms: int, max_tokens: int) -> None:
+        """Set flood protection config for a message type."""
+        self._cpp.SetFloodConfig(flood_type, period_ms, max_tokens)
+
+    def get_flood_config(self, flood_type: int) -> tuple[int, int]:
+        """Get flood protection config (period_ms, max_tokens) for a type."""
+        return self._cpp.GetFloodConfig(flood_type)
     
     # Configuration
     

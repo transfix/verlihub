@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Protocol Stats - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title"><i class="fas fa-chart-bar mr-2"></i> Protocol Statistics</h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-info" onclick="loadStats()">
+                <i class="fas fa-sync-alt mr-2"></i> Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Message counters -->
+<div class="columns is-multiline" id="stat-cards">
+    <div class="column is-12 has-text-centered"><p>Loading...</p></div>
+</div>
+
+<!-- Security counters -->
+<div class="columns mt-4">
+    <div class="column is-6">
+        <div class="box" style="border-left: 4px solid #f14668;">
+            <h5 class="title is-5"><i class="fas fa-shield-alt mr-2 has-text-danger"></i> Flood Blocked</h5>
+            <p class="title is-2" id="flood-blocked">—</p>
+            <p class="subtitle is-6">Messages blocked by flood protection</p>
+        </div>
+    </div>
+    <div class="column is-6">
+        <div class="box" style="border-left: 4px solid #f14668;">
+            <h5 class="title is-5"><i class="fas fa-ban mr-2 has-text-danger"></i> Ban Blocked</h5>
+            <p class="title is-2" id="ban-blocked">—</p>
+            <p class="subtitle is-6">Messages blocked by ban rules</p>
+        </div>
+    </div>
+</div>
+
+<script>
+const API = '/api/v1/hub/protocol-stats';
+const token = document.cookie.split(';').find(c => c.trim().startsWith('access_token='))?.split('=')[1] || '';
+const headers = {'Authorization': token};
+
+const STAT_META = [
+    {key: 'messages_in', label: 'Messages In', icon: 'fa-arrow-down', color: 'is-info'},
+    {key: 'messages_out', label: 'Messages Out', icon: 'fa-arrow-up', color: 'is-primary'},
+    {key: 'chat_count', label: 'Chat', icon: 'fa-comments', color: 'is-success'},
+    {key: 'pm_count', label: 'PMs', icon: 'fa-envelope', color: 'is-link'},
+    {key: 'search_count', label: 'Searches', icon: 'fa-search', color: 'is-warning'},
+    {key: 'myinfo_count', label: 'MyINFO', icon: 'fa-id-card', color: 'is-info'},
+    {key: 'ctm_count', label: 'CTM', icon: 'fa-plug', color: 'is-primary'},
+    {key: 'sr_count', label: 'SR', icon: 'fa-file', color: 'is-success'},
+    {key: 'mcto_count', label: 'MCTo', icon: 'fa-users', color: 'is-link'},
+];
+
+function fmt(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+}
+
+async function loadStats() {
+    const resp = await fetch(API, {headers});
+    if (!resp.ok) { document.getElementById('stat-cards').innerHTML = '<div class="column">Error loading stats</div>'; return; }
+    const data = await resp.json();
+
+    const container = document.getElementById('stat-cards');
+    container.innerHTML = STAT_META.map(m => `
+        <div class="column is-4">
+            <div class="box has-text-centered">
+                <p class="heading"><i class="fas ${m.icon} mr-1"></i> ${m.label}</p>
+                <p class="title ${m.color}">${fmt(data[m.key] || 0)}</p>
+            </div>
+        </div>
+    `).join('');
+
+    document.getElementById('flood-blocked').textContent = fmt(data.flood_blocked || 0);
+    document.getElementById('ban-blocked').textContent = fmt(data.ban_blocked || 0);
+}
+
+loadStats();
+setInterval(loadStats, 10000);
+</script>
+{% endblock %}

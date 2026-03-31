@@ -262,7 +262,26 @@ public:
     
     // Search
     virtual bool OnSearch(std::string_view nick, std::string_view query) { return true; }
-    
+
+    // Protocol extensions
+    /**
+     * Called when a client sends $ExtJSON.
+     * @return false to block forwarding to other clients
+     */
+    virtual bool OnExtJSON(std::string_view nick, std::string_view json) { return true; }
+
+    /**
+     * Called when a client sends $MyHubURL.
+     * @return false to reject and disconnect
+     */
+    virtual bool OnMyHubURL(std::string_view nick, std::string_view url) { return true; }
+
+    /**
+     * Called when a client sends $IN (incremental info update).
+     * @return false to block forwarding
+     */
+    virtual bool OnUserINUpdate(std::string_view nick, std::string_view data) { return true; }
+
     // Timer
     virtual void OnTimer(std::int64_t timestamp) {}
     
@@ -712,6 +731,22 @@ public:
      * Clear the entire ban cache.
      */
     void ClearBanCache();
+
+    // =========================================================================
+    // ZLib Compression Configuration
+    // =========================================================================
+
+    /**
+     * Enable/disable ZLib compression for clients that support ZPipe0.
+     */
+    void SetZLibEnabled(bool enabled);
+    VH_NODISCARD bool IsZLibEnabled() const;
+
+    /**
+     * Set minimum data size before compression is attempted.
+     */
+    void SetZLibMinSize(size_t min_size);
+    VH_NODISCARD size_t GetZLibMinSize() const;
     
     // =========================================================================
     // Thread-Safe User Management

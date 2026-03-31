@@ -472,6 +472,30 @@ void HubContext::ClearBanCache() {
 }
 
 // =============================================================================
+// ZLib Compression
+// =============================================================================
+
+void HubContext::SetZLibEnabled(bool enabled) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->SetZLibEnabled(enabled);
+}
+
+bool HubContext::IsZLibEnabled() const {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->IsZLibEnabled();
+}
+
+void HubContext::SetZLibMinSize(size_t min_size) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->SetZLibMinSize(min_size);
+}
+
+size_t HubContext::GetZLibMinSize() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetZLibMinSize();
+}
+
+// =============================================================================
 // User Management
 // =============================================================================
 

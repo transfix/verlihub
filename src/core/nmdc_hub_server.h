@@ -39,6 +39,7 @@
 #include "casyncconn.h"
 #include "nmdc_protocol.h"
 #include "geo_ip_lookup.h"
+#include "czlib.h"
 
 #include <string>
 #include <unordered_map>
@@ -92,6 +93,7 @@ enum class FloodType : int {
     Search,
     MyINFO,
     CTM,      ///< $ConnectToMe + $RevConnectToMe
+    ExtJSON,  ///< $ExtJSON protocol extensions
     Count     ///< Sentinel — number of flood types
 };
 
@@ -166,6 +168,12 @@ struct NMDCClient {
     // ----- Parsed from $Supports / $MyINFO -----
     unsigned char status_flag{0}; ///< Status byte from MyINFO speed field
     std::string supports_text;    ///< Raw $Supports features string
+    bool supports_extjson{false}; ///< Client supports ExtJSON2
+    bool supports_huburl{false};  ///< Client supports HubURL
+    bool supports_in{false};      ///< Client supports IN (incremental info)
+    bool supports_zlib{false};    ///< Client supports ZPipe0 (ZLib compression)
+    std::string hub_url;          ///< Reported hub URL from $MyHubURL
+    std::string ext_json;         ///< Last $ExtJSON payload
 
     // ----- Flood Protection -----
     FloodState flood;              ///< Token-bucket state per message type
@@ -279,6 +287,24 @@ public:
      * Clear the entire ban cache.
      */
     void ClearBanCache();
+
+    // =========================================================================
+    // ZLib Compression Configuration
+    // =========================================================================
+
+    /**
+     * Enable/disable ZLib compression for clients that support ZPipe0.
+     * When enabled, large outbound data is compressed before sending.
+     */
+    void SetZLibEnabled(bool enabled) { m_zlib_enabled = enabled; }
+    bool IsZLibEnabled() const { return m_zlib_enabled; }
+
+    /**
+     * Set minimum data size (bytes) before compression is attempted.
+     * Default is 128 bytes.
+     */
+    void SetZLibMinSize(size_t min_size) { m_zlib_min_size = min_size; }
+    size_t GetZLibMinSize() const { return m_zlib_min_size; }
 
     // =========================================================================
     // Event Callback (Python bridge)
@@ -468,6 +494,9 @@ private:
     void HandleUserIP(NMDCClient& client, const std::string& msg);
     void HandleWhoIP(NMDCClient& client, const std::string& msg);
     void HandleOpForceMove(NMDCClient& client, const std::string& msg);
+    void HandleExtJSON(NMDCClient& client, const std::string& msg);
+    void HandleMyHubURL(NMDCClient& client, const std::string& msg);
+    void HandleIN(NMDCClient& client, const std::string& msg);
 
     // =========================================================================
     // Internal Helpers
@@ -475,6 +504,9 @@ private:
 
     /// Send data to a specific connection (appends | delimiter)
     void SendToConn(nSocket::cAsyncConn* conn, const std::string& data);
+
+    /// Send data with optional ZLib compression for clients that support ZPipe0
+    void SendToConnCompressed(NMDCClient& client, const std::string& data);
 
     /// Send data to all logged-in connections (appends | delimiter)
     void SendToAllConns(const std::string& data);
@@ -555,11 +587,12 @@ private:
 
     /// Per-type flood limits (token bucket parameters)
     std::array<FloodLimit, static_cast<size_t>(FloodType::Count)> m_flood_limits{{
-        {1000, 5},   // Chat:   5 msgs / 1s
-        {1000, 5},   // PM:     5 msgs / 1s
-        {5000, 5},   // Search: 5 searches / 5s
-        {5000, 2},   // MyINFO: 2 updates / 5s
-        {1000, 10},  // CTM:    10 CTM/RCTM / 1s
+        {1000, 5},   // Chat:    5 msgs / 1s
+        {1000, 5},   // PM:      5 msgs / 1s
+        {5000, 5},   // Search:  5 searches / 5s
+        {5000, 2},   // MyINFO:  2 updates / 5s
+        {1000, 10},  // CTM:     10 CTM/RCTM / 1s
+        {5000, 3},   // ExtJSON: 3 updates / 5s
     }};
 
     /// Maximum flood warnings before auto-disconnect
@@ -572,6 +605,19 @@ private:
     std::unordered_set<std::string> m_banned_ips;
     std::unordered_set<std::string> m_banned_nicks;
     mutable std::mutex m_ban_cache_mutex;
+
+    // =========================================================================
+    // ZLib Compression State
+    // =========================================================================
+
+    /// Whether ZLib compression is enabled for clients that support ZPipe0
+    bool m_zlib_enabled{false};
+
+    /// Minimum data size (bytes) before compression is attempted
+    size_t m_zlib_min_size{128};
+
+    /// ZLib compressor instance (lazy-initialized)
+    std::unique_ptr<nUtils::cZLib> m_zlib;
 
     // =========================================================================
     // Connection Factory

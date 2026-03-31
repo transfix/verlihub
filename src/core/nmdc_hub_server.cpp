@@ -20,6 +20,7 @@
 
 #include "nmdc_hub_server.h"
 #include "hub_context.h"  // For IHubEventCallback
+#include <zlib.h>
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -223,6 +224,14 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
         HandleWhoIP(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$OpForceMove")) {
         HandleOpForceMove(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$ExtJSON")) {
+        if (!CheckFlood(client, FloodType::ExtJSON)) return;
+        HandleExtJSON(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$MyHubURL")) {
+        HandleMyHubURL(client, message);
+    } else if (NMDCProtocol::IsCommand(message, "$IN")) {
+        if (!CheckFlood(client, FloodType::ExtJSON)) return;
+        HandleIN(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Version")) {
         // Ignore version announcements
     } else if (NMDCProtocol::IsCommand(message, "$GetINFO")) {
@@ -283,6 +292,12 @@ void NMDCHubServer::HandleSupports(NMDCClient& client, const std::string& msg) {
     // Store the client's supported features
     std::string features = NMDCProtocol::GetCommandParam(msg, "$Supports");
     client.supports_text = features;
+
+    // Parse individual feature flags
+    client.supports_extjson = (features.find("ExtJSON2") != std::string::npos);
+    client.supports_huburl  = (features.find("HubURL")   != std::string::npos);
+    client.supports_in      = (features.find("IN")        != std::string::npos);
+    client.supports_zlib    = (features.find("ZPipe0")    != std::string::npos);
 
     // Send our supports back
     SendToConn(client.conn, NMDCProtocol::MakeSupports());
@@ -626,6 +641,36 @@ void NMDCHubServer::HandleQuit(NMDCClient& client) {
 void NMDCHubServer::SendToConn(cAsyncConn* conn, const std::string& data) {
     if (!conn || !conn->ok) return;
     conn->Write(data + "|", true);
+    m_proto_stats.messages_out.fetch_add(1, std::memory_order_relaxed);
+}
+
+void NMDCHubServer::SendToConnCompressed(NMDCClient& client, const std::string& data) {
+    if (!client.conn || !client.conn->ok) return;
+
+    std::string msg = data + "|";
+
+    // Compress if ZLib is enabled, client supports it, and data is large enough
+    if (m_zlib_enabled && client.supports_zlib && msg.size() >= m_zlib_min_size) {
+        if (!m_zlib) {
+            m_zlib = std::make_unique<nUtils::cZLib>();
+        }
+
+        size_t out_len = 0;
+        int err = 0;
+        char* compressed = m_zlib->Compress(msg.c_str(), msg.size(), out_len, err, Z_DEFAULT_COMPRESSION);
+
+        if (compressed && err == Z_OK && out_len > 0 && out_len < msg.size()) {
+            // Send $ZOn| header followed by compressed data
+            std::string zon = "$ZOn|";
+            zon.append(compressed, out_len);
+            client.conn->Write(zon, true);
+            m_proto_stats.messages_out.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+
+    // Fallback: send uncompressed
+    client.conn->Write(msg, true);
     m_proto_stats.messages_out.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1258,6 +1303,110 @@ void NMDCHubServer::HandleOpForceMove(NMDCClient& client, const std::string& msg
 
     // Force move the target
     ForceMove(nick, address);
+}
+
+// =============================================================================
+// Phase 3.6: $ExtJSON Handler
+// =============================================================================
+
+void NMDCHubServer::HandleExtJSON(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    // Client must have declared ExtJSON2 support
+    if (!client.supports_extjson) return;
+
+    // Format: "$ExtJSON <nick> <json_data>"
+    std::string params = NMDCProtocol::GetCommandParam(msg, "$ExtJSON");
+    if (params.empty()) return;
+
+    // First token is the nick, rest is JSON
+    size_t space = params.find(' ');
+    if (space == std::string::npos) return;
+
+    std::string nick = params.substr(0, space);
+    if (nick != client.nick) return;  // Nick must match sender
+
+    std::string json = params.substr(space + 1);
+    if (json.empty()) return;
+
+    // Notify Python callback
+    if (m_callback) {
+        if (!m_callback->OnExtJSON(client.nick, json)) return;
+    }
+
+    // Store and forward to clients that support ExtJSON2 (if changed)
+    if (json != client.ext_json) {
+        client.ext_json = json;
+        // Forward the raw message to all clients with ExtJSON2 support
+        std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+        for (auto& [conn, other] : m_clients) {
+            if (other.state == NMDCConnState::LoggedIn && other.supports_extjson) {
+                SendToConn(conn, msg);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Phase 3.6: $MyHubURL Handler
+// =============================================================================
+
+void NMDCHubServer::HandleMyHubURL(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    if (!client.supports_huburl) return;
+
+    // Format: "$MyHubURL <url>"
+    std::string url = NMDCProtocol::GetCommandParam(msg, "$MyHubURL");
+    if (url.empty()) return;
+
+    // Notify Python callback
+    if (m_callback) {
+        if (!m_callback->OnMyHubURL(client.nick, url)) {
+            client.state = NMDCConnState::Closing;
+            if (client.conn) client.conn->CloseNice(1000);
+            return;
+        }
+    }
+
+    client.hub_url = url;
+}
+
+// =============================================================================
+// Phase 3.6: $IN Handler (Incremental Info Update)
+// =============================================================================
+
+void NMDCHubServer::HandleIN(NMDCClient& client, const std::string& msg) {
+    if (client.state != NMDCConnState::LoggedIn) return;
+
+    if (!client.supports_in) return;
+
+    // Format: "$IN <nick> <data>" where data is key/value pairs separated by $$
+    std::string params = NMDCProtocol::GetCommandParam(msg, "$IN");
+    if (params.empty()) return;
+
+    size_t space = params.find(' ');
+    if (space == std::string::npos) return;
+
+    std::string nick = params.substr(0, space);
+    if (nick != client.nick) return;  // Nick must match sender
+
+    std::string data = params.substr(space + 1);
+
+    // Notify Python callback
+    if (m_callback) {
+        if (!m_callback->OnUserINUpdate(client.nick, data)) return;
+    }
+
+    // Forward to clients that support IN
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_clients_mutex);
+        for (auto& [conn, other] : m_clients) {
+            if (other.state == NMDCConnState::LoggedIn && other.supports_in) {
+                SendToConn(conn, msg);
+            }
+        }
+    }
 }
 
 // =============================================================================

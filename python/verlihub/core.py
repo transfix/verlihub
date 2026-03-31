@@ -70,6 +70,9 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
             'timer': [],
             'hub_started': [],
             'hub_stopping': [],
+            'ext_json': [],
+            'my_hub_url': [],
+            'user_in_update': [],
         }
         self._lock = threading.Lock()
         # Config dict for OnGetConfig callback — populated before Initialize().
@@ -166,6 +169,15 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
     
     def OnHubStopping(self) -> None:
         self._dispatch('hub_stopping')
+
+    def OnExtJSON(self, nick: str, json: str) -> bool:
+        return self._dispatch('ext_json', nick, json)
+
+    def OnMyHubURL(self, nick: str, url: str) -> bool:
+        return self._dispatch('my_hub_url', nick, url)
+
+    def OnUserINUpdate(self, nick: str, data: str) -> bool:
+        return self._dispatch('user_in_update', nick, data)
 
     # ------------------------------------------------------------------
     # C++ log callback (called from C++ while m_log_mutex is held)

@@ -661,6 +661,79 @@ Attributes:
 // Make enum values accessible as verlihub_core.HubEventType_UserConnect etc.
 
 // ============================================================================
+// Phase 3.6: Protocol Extension Callback Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnExtJSON "
+Called when a client sends $ExtJSON.
+Return false to block forwarding to other clients.
+
+Args:
+    nick: Sender's nickname
+    json: JSON data payload
+";
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnMyHubURL "
+Called when a client sends $MyHubURL.
+Return false to reject and disconnect.
+
+Args:
+    nick: Sender's nickname
+    url: Reported hub URL
+";
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnUserINUpdate "
+Called when a client sends $IN (incremental info update).
+Return false to block forwarding.
+
+Args:
+    nick: Sender's nickname
+    data: Update data payload
+";
+
+// ============================================================================
+// Phase 3.6: SendToOpChat Docstring
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SendToOpChat "
+Send a message to the operator chat channel.
+All online operators receive the message as a PM from OpChat.
+
+Args:
+    message: Message content
+    from: Optional sender name (default: empty for hub)
+
+Returns:
+    True if hub is running
+";
+
+// ============================================================================
+// Phase 3.7: ZLib Compression Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SetZLibEnabled "
+Enable or disable ZLib compression for clients supporting ZPipe0.
+
+Args:
+    enabled: True to enable compression
+";
+
+%feature("docstring") nVerliHub::HubContext::IsZLibEnabled "
+Check if ZLib compression is enabled.
+";
+
+%feature("docstring") nVerliHub::HubContext::SetZLibMinSize "
+Set minimum data size (bytes) before compression is attempted.
+
+Args:
+    min_size: Minimum size in bytes (default: 128)
+";
+
+%feature("docstring") nVerliHub::HubContext::GetZLibMinSize "
+Get minimum data size for compression.
+";
+
+// ============================================================================
 // Include the headers to generate wrappers
 // ============================================================================
 

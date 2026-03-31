@@ -92,6 +92,38 @@ def _mock_hub_context() -> MagicMock:
     ctx.get_bot_list = MagicMock(return_value=[
         {"nick": "HubBot", "class": 10},
     ])
+    # Phase 5 methods
+    ctx.send_to_opchat = MagicMock(return_value=True)
+    ctx.send_to_active = MagicMock()
+    ctx.send_to_passive = MagicMock()
+    ctx.broadcast_chat = MagicMock()
+    ctx.send_pm_as = MagicMock()
+    ctx.force_move = MagicMock(return_value=True)
+    ctx.disconnect_user = MagicMock(return_value=True)
+    ctx.add_robot = MagicMock(return_value=True)
+    ctx.remove_robot = MagicMock(return_value=True)
+    ctx.request_reload = MagicMock()
+    ctx.get_protocol_stats = MagicMock(return_value={"bytes_in": 1000, "bytes_out": 2000})
+    ctx.lookup_geoip = MagicMock(return_value={"country": "US", "city": "NYC"})
+    ctx.get_active_user_count = MagicMock(return_value=2)
+    ctx.get_passive_user_count = MagicMock(return_value=1)
+    ctx.get_loaded_plugins = MagicMock(return_value=["plugin_a"])
+    ctx.is_plugin_loaded = MagicMock(return_value=True)
+    ctx.load_plugin = MagicMock(return_value=True)
+    ctx.unload_plugin = MagicMock(return_value=True)
+    ctx.reload_plugin = MagicMock(return_value=True)
+    ctx.get_loaded_lua_scripts = MagicMock(return_value=["test.lua"])
+    ctx.execute_lua_script = MagicMock(return_value=True)
+    ctx.unload_lua_script = MagicMock(return_value=True)
+    ctx.get_loaded_python_scripts = MagicMock(return_value=["test.py"])
+    ctx.execute_python_script = MagicMock(return_value=True)
+    ctx.unload_python_script = MagicMock(return_value=True)
+    ctx.set_flood_config = MagicMock()
+    ctx.get_flood_config = MagicMock(return_value=(1000, 5))
+    ctx.load_ban_cache = MagicMock()
+    ctx.add_ban_cache_ip = MagicMock()
+    ctx.add_ban_cache_nick = MagicMock()
+    ctx.clear_ban_cache = MagicMock()
     return ctx
 
 
@@ -230,20 +262,31 @@ class TestToolDefinitions:
     def test_readonly_tools_count(self):
         from verlihub.api.routes.llm import _build_readonly_tools
         tools = _build_readonly_tools()
-        assert len(tools) == 9
+        assert len(tools) == 18
         names = {t["function"]["name"] for t in tools}
         assert "get_hub_info" in names
         assert "list_online_users" in names
         assert "search_bans" in names
+        # Phase 5 readonly
+        assert "get_protocol_stats" in names
+        assert "lookup_geoip" in names
+        assert "list_plugins" in names
+        assert "list_triggers" in names
 
     def test_admin_tools_count(self):
         from verlihub.api.routes.llm import _build_admin_tools
         tools = _build_admin_tools()
-        assert len(tools) == 8
+        assert len(tools) == 38
         names = {t["function"]["name"] for t in tools}
         assert "kick_user" in names
         assert "send_broadcast" in names
         assert "set_hub_config" in names
+        # Phase 5 admin
+        assert "send_to_opchat" in names
+        assert "broadcast_chat" in names
+        assert "load_plugin" in names
+        assert "set_flood_config" in names
+        assert "add_penalty" in names
 
     def test_all_tools_have_correct_schema(self):
         from verlihub.api.routes.llm import _build_readonly_tools, _build_admin_tools
@@ -390,6 +433,167 @@ class TestExecuteTool:
             result = await _execute_tool("get_hub_info", {}, self.admin_user, True)
         data = json.loads(result)
         assert "error" in data
+
+    # --- Phase 5: Messaging tools ---
+
+    async def test_send_to_opchat(self):
+        data = await self._exec("send_to_opchat", {"message": "hello ops", "from_nick": "bot"})
+        assert data["success"] is True
+        self.ctx.send_to_opchat.assert_called_once_with("hello ops", "bot")
+
+    async def test_send_to_active(self):
+        data = await self._exec("send_to_active", {"message": "active msg"})
+        assert data["success"] is True
+        self.ctx.send_to_active.assert_called_once_with("active msg")
+
+    async def test_send_to_passive(self):
+        data = await self._exec("send_to_passive", {"message": "passive msg"})
+        assert data["success"] is True
+        self.ctx.send_to_passive.assert_called_once_with("passive msg")
+
+    async def test_broadcast_chat(self):
+        data = await self._exec("broadcast_chat", {"from_nick": "Bot", "message": "hi"})
+        assert data["success"] is True
+        self.ctx.broadcast_chat.assert_called_once_with("Bot", "hi")
+
+    async def test_send_pm_as(self):
+        data = await self._exec("send_pm_as", {"from_nick": "Bot", "to_nick": "Alice", "message": "hi"})
+        assert data["success"] is True
+        self.ctx.send_pm_as.assert_called_once_with("Bot", "Alice", "hi")
+
+    async def test_messaging_denied_for_non_admin(self):
+        for tool in ("send_to_opchat", "send_to_active", "send_to_passive", "broadcast_chat"):
+            data = await self._exec(tool, {"message": "x", "from_nick": "y", "min_class": 0, "max_class": 10},
+                                    user=self.regular_user, is_admin=False)
+            assert "Permission denied" in data["error"], f"{tool} should deny non-admin"
+
+    # --- Phase 5: Admin tools ---
+
+    async def test_force_move(self):
+        data = await self._exec("force_move", {"nick": "Bob", "address": "dchub://other:411"})
+        assert data["success"] is True
+        self.ctx.force_move.assert_called_once_with("Bob", "dchub://other:411")
+
+    async def test_disconnect_user(self):
+        data = await self._exec("disconnect_user", {"nick": "Bob"})
+        assert data["success"] is True
+        self.ctx.disconnect_user.assert_called_once_with("Bob")
+
+    async def test_add_robot(self):
+        data = await self._exec("add_robot", {"nick": "NewBot", "description": "test", "user_class": 3})
+        assert data["success"] is True
+        self.ctx.add_robot.assert_called_once_with("NewBot", "test", 3)
+
+    async def test_remove_robot(self):
+        data = await self._exec("remove_robot", {"nick": "OldBot"})
+        assert data["success"] is True
+        self.ctx.remove_robot.assert_called_once_with("OldBot")
+
+    async def test_reload_config(self):
+        data = await self._exec("reload_config", {})
+        assert data["success"] is True
+        self.ctx.request_reload.assert_called_once()
+
+    # --- Phase 5: Statistics ---
+
+    async def test_get_protocol_stats(self):
+        data = await self._exec("get_protocol_stats")
+        assert data["bytes_in"] == 1000
+        assert data["bytes_out"] == 2000
+
+    async def test_lookup_geoip(self):
+        data = await self._exec("lookup_geoip", {"ip": "8.8.8.8"})
+        assert data["country"] == "US"
+        self.ctx.lookup_geoip.assert_called_once_with("8.8.8.8")
+
+    async def test_get_active_passive_counts(self):
+        data = await self._exec("get_active_passive_counts")
+        assert data["active"] == 2
+        assert data["passive"] == 1
+
+    # --- Phase 5: Plugin Management ---
+
+    async def test_list_plugins(self):
+        data = await self._exec("list_plugins")
+        assert data == ["plugin_a"]
+
+    async def test_load_plugin(self):
+        data = await self._exec("load_plugin", {"plugin_path": "/usr/lib/vh_plug.so"})
+        assert data["success"] is True
+        self.ctx.load_plugin.assert_called_once_with("/usr/lib/vh_plug.so")
+
+    async def test_unload_plugin(self):
+        data = await self._exec("unload_plugin", {"plugin_name": "vh_plug"})
+        assert data["success"] is True
+        self.ctx.unload_plugin.assert_called_once_with("vh_plug")
+
+    async def test_reload_plugin(self):
+        data = await self._exec("reload_plugin", {"plugin_name": "vh_plug"})
+        assert data["success"] is True
+        self.ctx.reload_plugin.assert_called_once_with("vh_plug")
+
+    async def test_list_lua_scripts(self):
+        data = await self._exec("list_lua_scripts")
+        assert data == ["test.lua"]
+
+    async def test_load_lua_script(self):
+        data = await self._exec("load_lua_script", {"script_path": "/scripts/test.lua"})
+        assert data["success"] is True
+        self.ctx.execute_lua_script.assert_called_once_with("/scripts/test.lua")
+
+    async def test_unload_lua_script(self):
+        data = await self._exec("unload_lua_script", {"script_path": "/scripts/test.lua"})
+        assert data["success"] is True
+        self.ctx.unload_lua_script.assert_called_once_with("/scripts/test.lua")
+
+    async def test_list_python_scripts(self):
+        data = await self._exec("list_python_scripts")
+        assert data == ["test.py"]
+
+    async def test_load_python_script(self):
+        data = await self._exec("load_python_script", {"script_path": "/scripts/test.py"})
+        assert data["success"] is True
+        self.ctx.execute_python_script.assert_called_once_with("/scripts/test.py")
+
+    async def test_unload_python_script(self):
+        data = await self._exec("unload_python_script", {"script_path": "/scripts/test.py"})
+        assert data["success"] is True
+        self.ctx.unload_python_script.assert_called_once_with("/scripts/test.py")
+
+    # --- Phase 5: Flood & Ban Cache ---
+
+    async def test_set_flood_config(self):
+        data = await self._exec("set_flood_config", {"flood_type": "chat", "period_ms": 1000, "max_tokens": 5})
+        assert data["success"] is True
+        self.ctx.set_flood_config.assert_called_once_with("chat", 1000, 5)
+
+    async def test_sync_ban_cache(self):
+        data = await self._exec("sync_ban_cache")
+        assert data["success"] is True
+        self.ctx.load_ban_cache.assert_called_once()
+
+    async def test_add_ban_cache_ip(self):
+        data = await self._exec("add_ban_cache_ip", {"ip": "10.0.0.99"})
+        assert data["success"] is True
+        self.ctx.add_ban_cache_ip.assert_called_once_with("10.0.0.99")
+
+    async def test_add_ban_cache_nick(self):
+        data = await self._exec("add_ban_cache_nick", {"nick": "spammer"})
+        assert data["success"] is True
+        self.ctx.add_ban_cache_nick.assert_called_once_with("spammer")
+
+    async def test_clear_ban_cache(self):
+        data = await self._exec("clear_ban_cache")
+        assert data["success"] is True
+        self.ctx.clear_ban_cache.assert_called_once()
+
+    async def test_plugin_tools_denied_for_non_admin(self):
+        for tool in ("load_plugin", "unload_plugin", "reload_plugin",
+                      "load_lua_script", "unload_lua_script",
+                      "load_python_script", "unload_python_script"):
+            data = await self._exec(tool, {"plugin_path": "x", "plugin_name": "x", "script_path": "x"},
+                                    user=self.regular_user, is_admin=False)
+            assert "Permission denied" in data["error"], f"{tool} should deny non-admin"
 
 
 # ======================================================================

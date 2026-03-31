@@ -684,6 +684,115 @@ class HubContext:
     def get_flood_config(self, flood_type: int) -> tuple[int, int]:
         """Get flood protection config (period_ms, max_tokens) for a type."""
         return self._cpp.GetFloodConfig(flood_type)
+
+    # Targeted messaging
+
+    def send_to_active(self, message: str) -> bool:
+        """Send a message to all active-mode users."""
+        return self._cpp.SendToActive(message)
+
+    def send_to_passive(self, message: str) -> bool:
+        """Send a message to all passive-mode users."""
+        return self._cpp.SendToPassive(message)
+
+    def broadcast_chat(self, from_nick: str, message: str) -> bool:
+        """Broadcast a chat message as a specific nick."""
+        return self._cpp.BroadcastChat(from_nick, message)
+
+    # Bot management
+
+    def add_robot(self, nick: str, description: str, user_class: int) -> bool:
+        """Register a bot nick on the hub."""
+        return self._cpp.AddRobot(nick, description, user_class)
+
+    def remove_robot(self, nick: str) -> bool:
+        """Remove a bot from the hub."""
+        return self._cpp.RemoveRobot(nick)
+
+    # Active/passive counts
+
+    def get_active_user_count(self) -> int:
+        """Return the number of users in active mode."""
+        return self._cpp.GetActiveUserCount()
+
+    def get_passive_user_count(self) -> int:
+        """Return the number of users in passive mode."""
+        return self._cpp.GetPassiveUserCount()
+
+    # Plugin management
+
+    def load_plugin(self, path: str) -> bool:
+        """Load a native plugin from the given path."""
+        return self._cpp.LoadPlugin(path)
+
+    def unload_plugin(self, name: str) -> bool:
+        """Unload a native plugin by name."""
+        return self._cpp.UnloadPlugin(name)
+
+    def reload_plugin(self, name: str) -> bool:
+        """Reload a native plugin by name."""
+        return self._cpp.ReloadPlugin(name)
+
+    def get_loaded_plugins(self) -> list[dict]:
+        """Return info about loaded native plugins."""
+        infos = self._cpp.GetLoadedPlugins()
+        return [{"name": p.name, "path": p.path, "version": p.version} for p in infos]
+
+    def is_plugin_loaded(self, name: str) -> bool:
+        """Check if a plugin is currently loaded."""
+        return self._cpp.IsPluginLoaded(name)
+
+    # Lua script management
+
+    def execute_lua_script(self, path: str) -> bool:
+        """Load and execute a Lua script."""
+        return self._cpp.ExecuteLuaScript(path)
+
+    def unload_lua_script(self, path: str) -> bool:
+        """Unload a Lua script."""
+        return self._cpp.UnloadLuaScript(path)
+
+    def get_loaded_lua_scripts(self) -> list[str]:
+        """Return paths of loaded Lua scripts."""
+        return list(self._cpp.GetLoadedLuaScripts())
+
+    # Python script management
+
+    def execute_python_script(self, path: str) -> bool:
+        """Load and execute a Python script."""
+        return self._cpp.ExecutePythonScript(path)
+
+    def unload_python_script(self, path: str) -> bool:
+        """Unload a Python script."""
+        return self._cpp.UnloadPythonScript(path)
+
+    def get_loaded_python_scripts(self) -> list[str]:
+        """Return paths of loaded Python scripts."""
+        return list(self._cpp.GetLoadedPythonScripts())
+
+    # Ban cache management
+
+    def load_ban_cache(self) -> None:
+        """Reload ban cache from DB."""
+        self._cpp.LoadBanCache([], [])
+
+    def add_ban_cache_ip(self, ip: str) -> None:
+        """Add an IP to the ban cache."""
+        self._cpp.AddBanCacheIP(ip)
+
+    def add_ban_cache_nick(self, nick: str) -> None:
+        """Add a nick to the ban cache."""
+        self._cpp.AddBanCacheNick(nick)
+
+    def clear_ban_cache(self) -> None:
+        """Clear all ban cache entries."""
+        self._cpp.ClearBanCache()
+
+    # Reload
+
+    def request_reload(self) -> None:
+        """Request a configuration reload."""
+        self._cpp.RequestReload()
     
     # Configuration
     

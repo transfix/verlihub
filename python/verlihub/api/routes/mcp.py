@@ -100,6 +100,22 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
             Resource(uri="hub://bans", name="Active Bans",
                      description="List of currently active bans",
                      mimeType="application/json"),
+            # --- Phase 5.8: New MCP Resources ---
+            Resource(uri="hub://plugins", name="Loaded Plugins",
+                     description="List of loaded plugins and scripts",
+                     mimeType="application/json"),
+            Resource(uri="hub://penalties", name="Active Penalties",
+                     description="Current penalty restrictions by user",
+                     mimeType="application/json"),
+            Resource(uri="hub://protocol_stats", name="Protocol Statistics",
+                     description="Message counters and throughput",
+                     mimeType="application/json"),
+            Resource(uri="hub://triggers", name="Triggers",
+                     description="Configured auto-response triggers",
+                     mimeType="application/json"),
+            Resource(uri="hub://flood_config", name="Flood Config",
+                     description="Current flood protection settings",
+                     mimeType="application/json"),
         ]
 
     @server.read_resource()
@@ -169,6 +185,47 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
                     ], default=str)
             except Exception as exc:
                 text = json.dumps({"error": f"Failed to read bans: {exc}"})
+
+        elif uri_str == "hub://plugins":
+            plugins = ctx.get_loaded_plugins() if ctx else []
+            lua = ctx.get_loaded_lua_scripts() if ctx else []
+            py = ctx.get_loaded_python_scripts() if ctx else []
+            text = json.dumps({"plugins": plugins, "lua_scripts": lua, "python_scripts": py}, default=str)
+
+        elif uri_str == "hub://penalties":
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                penalties = svc.get_active_penalties()
+                text = json.dumps([p.to_dict() if hasattr(p, "to_dict") else vars(p) for p in penalties], default=str)
+            except Exception as exc:
+                text = json.dumps({"error": f"Failed to read penalties: {exc}"})
+
+        elif uri_str == "hub://protocol_stats":
+            if ctx is None:
+                text = json.dumps({"error": "Hub not running"})
+            else:
+                text = json.dumps(ctx.get_protocol_stats(), default=str)
+
+        elif uri_str == "hub://triggers":
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                text = json.dumps([t.to_dict() if hasattr(t, "to_dict") else vars(t) for t in cache.get_all()], default=str)
+            except Exception as exc:
+                text = json.dumps({"error": f"Failed to read triggers: {exc}"})
+
+        elif uri_str == "hub://flood_config":
+            if ctx is None:
+                text = json.dumps({"error": "Hub not running"})
+            else:
+                flood_types = ["Chat", "PM", "Search", "MyINFO", "CTM", "ExtJSON"]
+                config = {}
+                for i, name in enumerate(flood_types):
+                    period, tokens = ctx.get_flood_config(i)
+                    config[name] = {"period_ms": period, "max_tokens": tokens}
+                text = json.dumps(config)
+
         else:
             text = json.dumps({"error": f"Unknown resource: {uri_str}"})
 
@@ -249,6 +306,236 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
                                       "nick": {"type": "string", "description": "Nickname to ban"},
                                       "reason": {"type": "string", "description": "Reason for the ban"},
                                   }, "required": ["nick", "reason"]}),
+                # --- Phase 5.1: Messaging tools ---
+                Tool(name="send_to_opchat",
+                     description="Send a message to the operator chat channel",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "message": {"type": "string", "description": "Message text"},
+                                      "from_nick": {"type": "string", "description": "Sender nick (optional)"},
+                                  }, "required": ["message"]}),
+                Tool(name="send_to_class",
+                     description="Send a message to users in a user-class range",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "message": {"type": "string", "description": "Message text"},
+                                      "min_class": {"type": "integer", "description": "Minimum user class"},
+                                      "max_class": {"type": "integer", "description": "Maximum user class"},
+                                  }, "required": ["message", "min_class", "max_class"]}),
+                Tool(name="send_to_active",
+                     description="Send a message to all active-mode users",
+                     inputSchema={"type": "object",
+                                  "properties": {"message": {"type": "string", "description": "Message text"}},
+                                  "required": ["message"]}),
+                Tool(name="send_to_passive",
+                     description="Send a message to all passive-mode users",
+                     inputSchema={"type": "object",
+                                  "properties": {"message": {"type": "string", "description": "Message text"}},
+                                  "required": ["message"]}),
+                Tool(name="broadcast_chat",
+                     description="Broadcast a chat message appearing as a specific nick",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "from_nick": {"type": "string", "description": "Nick the message appears from"},
+                                      "message": {"type": "string", "description": "Message text"},
+                                  }, "required": ["from_nick", "message"]}),
+                Tool(name="send_pm_as",
+                     description="Send a private message from one nick to another",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "from_nick": {"type": "string", "description": "Sender nick"},
+                                      "to_nick": {"type": "string", "description": "Recipient nick"},
+                                      "message": {"type": "string", "description": "Message text"},
+                                  }, "required": ["from_nick", "to_nick", "message"]}),
+                # --- Phase 5.2: Administration tools ---
+                Tool(name="force_move",
+                     description="Redirect a user to another hub address",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "nick": {"type": "string", "description": "User to redirect"},
+                                      "address": {"type": "string", "description": "Target hub address"},
+                                  }, "required": ["nick", "address"]}),
+                Tool(name="disconnect_user",
+                     description="Disconnect a user from the hub without redirect",
+                     inputSchema={"type": "object",
+                                  "properties": {"nick": {"type": "string", "description": "User to disconnect"}},
+                                  "required": ["nick"]}),
+                Tool(name="add_robot",
+                     description="Register a bot on the hub",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "nick": {"type": "string", "description": "Bot nickname"},
+                                      "description": {"type": "string", "description": "Bot description"},
+                                      "user_class": {"type": "integer", "description": "Bot user class (default 3)"},
+                                  }, "required": ["nick"]}),
+                Tool(name="remove_robot",
+                     description="Remove a bot from the hub",
+                     inputSchema={"type": "object",
+                                  "properties": {"nick": {"type": "string", "description": "Bot name to remove"}},
+                                  "required": ["nick"]}),
+                Tool(name="set_hub_topic",
+                     description="Set the hub topic shown in client title bars",
+                     inputSchema={"type": "object",
+                                  "properties": {"topic": {"type": "string", "description": "New hub topic"}},
+                                  "required": ["topic"]}),
+                Tool(name="get_hub_config",
+                     description="Read a hub configuration value",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "section": {"type": "string", "description": "Config section"},
+                                      "key": {"type": "string", "description": "Config key"},
+                                  }, "required": ["section", "key"]}),
+                Tool(name="set_hub_config",
+                     description="Set a hub configuration value",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "section": {"type": "string", "description": "Config section"},
+                                      "key": {"type": "string", "description": "Config key"},
+                                      "value": {"type": "string", "description": "New value"},
+                                  }, "required": ["section", "key", "value"]}),
+                Tool(name="reload_config",
+                     description="Request a hub configuration reload",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                # --- Phase 5.3: Statistics & GeoIP ---
+                Tool(name="get_protocol_stats",
+                     description="Get protocol-level message counters (chat, PM, search, flood, ban blocked)",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="lookup_geoip",
+                     description="Look up GeoIP data for a specific IP address",
+                     inputSchema={"type": "object",
+                                  "properties": {"ip": {"type": "string", "description": "IP address to look up"}},
+                                  "required": ["ip"]}),
+                Tool(name="get_active_passive_counts",
+                     description="Get active and passive user counts",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                # --- Phase 5.4: Plugin & Script Management ---
+                Tool(name="list_plugins",
+                     description="List loaded native plugins",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="load_plugin",
+                     description="Load a native plugin from a file path",
+                     inputSchema={"type": "object",
+                                  "properties": {"plugin_path": {"type": "string", "description": "Path to plugin"}},
+                                  "required": ["plugin_path"]}),
+                Tool(name="unload_plugin",
+                     description="Unload a native plugin by name",
+                     inputSchema={"type": "object",
+                                  "properties": {"plugin_name": {"type": "string", "description": "Plugin name"}},
+                                  "required": ["plugin_name"]}),
+                Tool(name="reload_plugin",
+                     description="Reload a native plugin by name",
+                     inputSchema={"type": "object",
+                                  "properties": {"plugin_name": {"type": "string", "description": "Plugin name"}},
+                                  "required": ["plugin_name"]}),
+                Tool(name="list_lua_scripts",
+                     description="List loaded Lua scripts",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="load_lua_script",
+                     description="Load a Lua script",
+                     inputSchema={"type": "object",
+                                  "properties": {"script_path": {"type": "string", "description": "Path to Lua script"}},
+                                  "required": ["script_path"]}),
+                Tool(name="unload_lua_script",
+                     description="Unload a Lua script",
+                     inputSchema={"type": "object",
+                                  "properties": {"script_path": {"type": "string", "description": "Path to Lua script"}},
+                                  "required": ["script_path"]}),
+                Tool(name="list_python_scripts",
+                     description="List loaded Python scripts",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="load_python_script",
+                     description="Load a Python script",
+                     inputSchema={"type": "object",
+                                  "properties": {"script_path": {"type": "string", "description": "Path to Python script"}},
+                                  "required": ["script_path"]}),
+                Tool(name="unload_python_script",
+                     description="Unload a Python script",
+                     inputSchema={"type": "object",
+                                  "properties": {"script_path": {"type": "string", "description": "Path to Python script"}},
+                                  "required": ["script_path"]}),
+                # --- Phase 5.5: Flood & Ban Cache ---
+                Tool(name="set_flood_config",
+                     description="Set flood protection for a message type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM,5=ExtJSON)",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "flood_type": {"type": "integer", "description": "Type index (0-5)"},
+                                      "period_ms": {"type": "integer", "description": "Period in milliseconds"},
+                                      "max_tokens": {"type": "integer", "description": "Max tokens (burst)"},
+                                  }, "required": ["flood_type", "period_ms", "max_tokens"]}),
+                Tool(name="sync_ban_cache",
+                     description="Reload the ban cache from the database",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="add_ban_cache_ip",
+                     description="Add an IP address to the ban cache",
+                     inputSchema={"type": "object",
+                                  "properties": {"ip": {"type": "string", "description": "IP to ban-cache"}},
+                                  "required": ["ip"]}),
+                Tool(name="add_ban_cache_nick",
+                     description="Add a nickname to the ban cache",
+                     inputSchema={"type": "object",
+                                  "properties": {"nick": {"type": "string", "description": "Nick to ban-cache"}},
+                                  "required": ["nick"]}),
+                Tool(name="clear_ban_cache",
+                     description="Clear all entries from the ban cache",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                # --- Phase 5.6: Penalty Management ---
+                Tool(name="list_penalties",
+                     description="List active penalties (optional nick filter)",
+                     inputSchema={"type": "object",
+                                  "properties": {"nick": {"type": "string", "description": "Filter by nick (optional)"}},
+                                  "required": []}),
+                Tool(name="add_penalty",
+                     description="Apply a penalty to a user",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "nick": {"type": "string", "description": "Target nick"},
+                                      "penalty_type": {"type": "string", "description": "Type: chat_gag, search_ban, pm_ban, ctm_ban"},
+                                      "reason": {"type": "string", "description": "Reason"},
+                                      "duration_minutes": {"type": "integer", "description": "Duration in minutes (0=permanent)"},
+                                  }, "required": ["nick", "penalty_type"]}),
+                Tool(name="remove_penalty",
+                     description="Remove a penalty from a user",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "nick": {"type": "string", "description": "Target nick"},
+                                      "penalty_type": {"type": "string", "description": "Type to remove (optional, removes all if empty)"},
+                                  }, "required": ["nick"]}),
+                Tool(name="cleanup_penalties",
+                     description="Remove all expired penalties",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                # --- Phase 5.7: Triggers & Redirects ---
+                Tool(name="list_triggers",
+                     description="List configured auto-response triggers",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="add_trigger",
+                     description="Add a new trigger",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "command": {"type": "string", "description": "Trigger command (e.g. !rules)"},
+                                      "response": {"type": "string", "description": "Response text"},
+                                      "min_class": {"type": "integer", "description": "Minimum class to trigger (default 0)"},
+                                  }, "required": ["command", "response"]}),
+                Tool(name="remove_trigger",
+                     description="Remove a trigger by its command",
+                     inputSchema={"type": "object",
+                                  "properties": {"command": {"type": "string", "description": "Trigger command to remove"}},
+                                  "required": ["command"]}),
+                Tool(name="list_redirects",
+                     description="List configured redirect rules",
+                     inputSchema={"type": "object", "properties": {}, "required": []}),
+                Tool(name="add_redirect",
+                     description="Add a redirect rule",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "address": {"type": "string", "description": "Target hub address"},
+                                      "flag": {"type": "integer", "description": "Redirect trigger bitmask"},
+                                      "enabled": {"type": "boolean", "description": "Whether enabled (default true)"},
+                                  }, "required": ["address"]}),
+                Tool(name="remove_redirect",
+                     description="Remove a redirect rule by address",
+                     inputSchema={"type": "object",
+                                  "properties": {"address": {"type": "string", "description": "Address to remove"}},
+                                  "required": ["address"]}),
             ])
 
         return tools
@@ -458,6 +745,364 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
             except Exception as exc:
                 return {"error": f"Ban failed: {exc}"}
 
+        # --- Phase 5.1: Messaging ---
+        elif name == "send_to_opchat":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_opchat(args.get("message", ""), args.get("from_nick", ""))
+            return {"success": True}
+
+        elif name == "send_to_class":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_class(args["message"], args["min_class"], args["max_class"])
+            return {"success": True}
+
+        elif name == "send_to_active":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_active(args["message"])
+            return {"success": True}
+
+        elif name == "send_to_passive":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_passive(args["message"])
+            return {"success": True}
+
+        elif name == "broadcast_chat":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.broadcast_chat(args["from_nick"], args["message"])
+            return {"success": True}
+
+        elif name == "send_pm_as":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_pm_as(args["from_nick"], args["to_nick"], args["message"])
+            return {"success": True}
+
+        # --- Phase 5.2: Administration ---
+        elif name == "force_move":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.force_move(args["nick"], args["address"])
+            return {"success": ok, "nick": args["nick"], "address": args["address"]}
+
+        elif name == "disconnect_user":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.disconnect_user(args["nick"])
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "add_robot":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.add_robot(args["nick"], args.get("description", ""), args.get("user_class", 3))
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "remove_robot":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.remove_robot(args["nick"])
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "set_hub_topic":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.hub_topic = args["topic"]
+            return {"success": True, "topic": args["topic"]}
+
+        elif name == "get_hub_config":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            val = ctx.get_config(args["section"], args["key"])
+            return {"section": args["section"], "key": args["key"], "value": val}
+
+        elif name == "set_hub_config":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.set_config(args["section"], args["key"], args["value"])
+            return {"success": True}
+
+        elif name == "reload_config":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.request_reload()
+            return {"success": True}
+
+        # --- Phase 5.3: Statistics & GeoIP ---
+        elif name == "get_protocol_stats":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return ctx.get_protocol_stats()
+
+        elif name == "lookup_geoip":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return ctx.lookup_geoip(args["ip"])
+
+        elif name == "get_active_passive_counts":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return {"active": ctx.get_active_user_count(), "passive": ctx.get_passive_user_count()}
+
+        # --- Phase 5.4: Plugin & Script Management ---
+        elif name == "list_plugins":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return ctx.get_loaded_plugins()
+
+        elif name == "load_plugin":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.load_plugin(args["plugin_path"])
+            return {"success": ok}
+
+        elif name == "unload_plugin":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.unload_plugin(args["plugin_name"])
+            return {"success": ok}
+
+        elif name == "reload_plugin":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.reload_plugin(args["plugin_name"])
+            return {"success": ok}
+
+        elif name == "list_lua_scripts":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return ctx.get_loaded_lua_scripts()
+
+        elif name == "load_lua_script":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.execute_lua_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "unload_lua_script":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.unload_lua_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "list_python_scripts":
+            if ctx is None:
+                return {"error": "Hub not running"}
+            return ctx.get_loaded_python_scripts()
+
+        elif name == "load_python_script":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.execute_python_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "unload_python_script":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ok = ctx.unload_python_script(args["script_path"])
+            return {"success": ok}
+
+        # --- Phase 5.5: Flood & Ban Cache ---
+        elif name == "set_flood_config":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.set_flood_config(args["flood_type"], args["period_ms"], args["max_tokens"])
+            return {"success": True}
+
+        elif name == "sync_ban_cache":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.load_ban_cache()
+            return {"success": True}
+
+        elif name == "add_ban_cache_ip":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.add_ban_cache_ip(args["ip"])
+            return {"success": True}
+
+        elif name == "add_ban_cache_nick":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.add_ban_cache_nick(args["nick"])
+            return {"success": True}
+
+        elif name == "clear_ban_cache":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.clear_ban_cache()
+            return {"success": True}
+
+        # --- Phase 5.6: Penalty Management ---
+        elif name == "list_penalties":
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                penalties = svc.get_active_penalties(nick=args.get("nick"))
+                return [p.to_dict() if hasattr(p, "to_dict") else vars(p) for p in penalties]
+            except Exception as exc:
+                return {"error": f"Penalty list failed: {exc}"}
+
+        elif name == "add_penalty":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                svc.add_penalty(
+                    nick=args["nick"],
+                    penalty_type=args["penalty_type"],
+                    reason=args.get("reason", ""),
+                    duration_minutes=args.get("duration_minutes", 0),
+                )
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Add penalty failed: {exc}"}
+
+        elif name == "remove_penalty":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                svc.remove_penalty(nick=args["nick"], penalty_type=args.get("penalty_type"))
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Remove penalty failed: {exc}"}
+
+        elif name == "cleanup_penalties":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                count = svc.cleanup_expired()
+                return {"success": True, "removed": count}
+            except Exception as exc:
+                return {"error": f"Cleanup failed: {exc}"}
+
+        # --- Phase 5.7: Triggers & Redirects ---
+        elif name == "list_triggers":
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                return [t.to_dict() if hasattr(t, "to_dict") else vars(t) for t in cache.get_all()]
+            except Exception as exc:
+                return {"error": f"Trigger list failed: {exc}"}
+
+        elif name == "add_trigger":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                cache.add(
+                    command=args["command"],
+                    response=args["response"],
+                    min_class=args.get("min_class", 0),
+                )
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Add trigger failed: {exc}"}
+
+        elif name == "remove_trigger":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                cache.remove(command=args["command"])
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Remove trigger failed: {exc}"}
+
+        elif name == "list_redirects":
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                return [r.to_dict() if hasattr(r, "to_dict") else vars(r) for r in cache.get_all()]
+            except Exception as exc:
+                return {"error": f"Redirect list failed: {exc}"}
+
+        elif name == "add_redirect":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                cache.add(
+                    address=args["address"],
+                    flag=args.get("flag", 0),
+                    enabled=args.get("enabled", True),
+                )
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Add redirect failed: {exc}"}
+
+        elif name == "remove_redirect":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                cache.remove(address=args["address"])
+                return {"success": True}
+            except Exception as exc:
+                return {"error": f"Remove redirect failed: {exc}"}
+
         else:
             return {"error": f"Unknown tool: {name}"}
 
@@ -478,6 +1123,16 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
                    description="Diagnose potential hub issues",
                    arguments=[PromptArgument(
                        name="symptom", description="Describe the issue (slow, drops, errors...)", required=True)]),
+            # --- Phase 5.9: New MCP Prompts ---
+            Prompt(name="security_audit",
+                   description="Analyze flood stats, ban cache, and active penalties for threats",
+                   arguments=[]),
+            Prompt(name="plugin_status",
+                   description="Report on loaded plugins, scripts, and their health",
+                   arguments=[]),
+            Prompt(name="traffic_analysis",
+                   description="Analyze protocol stats for anomalies (flood, spam patterns)",
+                   arguments=[]),
         ]
 
     @server.get_prompt()
@@ -514,6 +1169,38 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
                 f"2. Connectivity (hub running, health endpoint)\n"
                 f"3. Abuse (ban spikes, repeated kicks)\n"
                 f"4. Configuration problems"
+            )))]
+        elif name == "security_audit":
+            messages = [PromptMessage(role="user", content=TextContent(type="text", text=(
+                "Perform a security audit of this Verlihub DC++ hub. "
+                "Use get_protocol_stats to check flood/ban blocked counters, "
+                "list_penalties to review active restrictions, "
+                "search_bans to examine recent bans, and get_hub_statistics for anomalies. "
+                "Report:\n"
+                "1. Flood protection effectiveness (blocked counts vs total traffic)\n"
+                "2. Active penalties and their justification\n"
+                "3. Recent ban patterns (targeted attacks, repeat offenders)\n"
+                "4. Recommendations for tightening security"
+            )))]
+        elif name == "plugin_status":
+            messages = [PromptMessage(role="user", content=TextContent(type="text", text=(
+                "Report on the plugin and script ecosystem of this Verlihub DC++ hub. "
+                "Use list_plugins, list_lua_scripts, and list_python_scripts to gather data. "
+                "Report:\n"
+                "1. Loaded native plugins (names, versions)\n"
+                "2. Active Lua scripts\n"
+                "3. Active Python scripts\n"
+                "4. Any potential issues (missing plugins, version mismatches)"
+            )))]
+        elif name == "traffic_analysis":
+            messages = [PromptMessage(role="user", content=TextContent(type="text", text=(
+                "Analyze protocol traffic for this Verlihub DC++ hub. "
+                "Use get_protocol_stats and get_active_passive_counts to gather data. "
+                "Report:\n"
+                "1. Message volume breakdown (chat, PM, search, CTM, SR, MCTo)\n"
+                "2. Flood blocked rate vs total messages\n"
+                "3. Active vs passive user ratio\n"
+                "4. Any anomalies suggesting abuse (high search/CTM ratios, spam patterns)"
             )))]
         return GetPromptResult(messages=messages)
 

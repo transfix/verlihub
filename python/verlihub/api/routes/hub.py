@@ -738,3 +738,294 @@ def disconnect_user(
     if not ok:
         raise HTTPException(404, f"User '{request.nick}' not found")
     return {"success": True, "nick": request.nick}
+
+
+# =============================================================================
+# Phase 5: Messaging – send_to_active / send_to_passive / broadcast_chat
+# =============================================================================
+
+
+class ClassMessageRequest(BaseModel):
+    message: str
+    min_class: int = 0
+    max_class: int = 10
+
+
+@router.post("/send-to-active")
+def send_to_active(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message only to active-mode users. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_active(request.message)
+    return {"success": True}
+
+
+@router.post("/send-to-passive")
+def send_to_passive(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message only to passive-mode users. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_passive(request.message)
+    return {"success": True}
+
+
+class BroadcastChatRequest(BaseModel):
+    from_nick: str
+    message: str
+
+
+@router.post("/broadcast-chat")
+def broadcast_chat(
+    request: BroadcastChatRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Broadcast a main-chat message as a specific nick. Requires ADMIN."""
+    if not request.from_nick or not request.message:
+        raise HTTPException(400, "from_nick and message are required")
+    ctx.broadcast_chat(request.from_nick, request.message)
+    return {"success": True}
+
+
+# =============================================================================
+# Phase 5: Robot Management
+# =============================================================================
+
+
+class AddRobotRequest(BaseModel):
+    nick: str
+    description: str = ""
+    user_class: int = 3
+
+
+@router.post("/robot")
+def add_robot(
+    request: AddRobotRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add a bot/robot nick to the hub. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.add_robot(request.nick, request.description, request.user_class)
+    return {"success": ok, "nick": request.nick}
+
+
+class RemoveRobotRequest(BaseModel):
+    nick: str
+
+
+@router.delete("/robot")
+def remove_robot(
+    request: RemoveRobotRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Remove a bot/robot nick from the hub. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.remove_robot(request.nick)
+    return {"success": ok, "nick": request.nick}
+
+
+# =============================================================================
+# Phase 5: Active/Passive User Counts
+# =============================================================================
+
+
+@router.get("/active-passive-counts")
+def get_active_passive_counts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get active and passive user counts. Requires OPERATOR."""
+    return {"active": ctx.get_active_user_count(), "passive": ctx.get_passive_user_count()}
+
+
+# =============================================================================
+# Phase 5: Plugin Management
+# =============================================================================
+
+
+@router.get("/plugins")
+def list_plugins(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded plugins. Requires OPERATOR."""
+    return ctx.get_loaded_plugins()
+
+
+class PluginPathRequest(BaseModel):
+    plugin_path: str
+
+
+class PluginNameRequest(BaseModel):
+    plugin_name: str
+
+
+@router.post("/plugins/load")
+def load_plugin(
+    request: PluginPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a plugin by path. Requires ADMIN."""
+    ok = ctx.load_plugin(request.plugin_path)
+    return {"success": ok}
+
+
+@router.post("/plugins/unload")
+def unload_plugin(
+    request: PluginNameRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a plugin by name. Requires ADMIN."""
+    ok = ctx.unload_plugin(request.plugin_name)
+    return {"success": ok}
+
+
+@router.post("/plugins/reload")
+def reload_plugin(
+    request: PluginNameRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Reload a plugin by name. Requires ADMIN."""
+    ok = ctx.reload_plugin(request.plugin_name)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 5: Script Management (Lua / Python)
+# =============================================================================
+
+
+@router.get("/lua-scripts")
+def list_lua_scripts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded Lua scripts. Requires OPERATOR."""
+    return ctx.get_loaded_lua_scripts()
+
+
+class ScriptPathRequest(BaseModel):
+    script_path: str
+
+
+@router.post("/lua-scripts/load")
+def load_lua_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a Lua script. Requires ADMIN."""
+    ok = ctx.execute_lua_script(request.script_path)
+    return {"success": ok}
+
+
+@router.post("/lua-scripts/unload")
+def unload_lua_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a Lua script. Requires ADMIN."""
+    ok = ctx.unload_lua_script(request.script_path)
+    return {"success": ok}
+
+
+@router.get("/python-scripts")
+def list_python_scripts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded Python scripts. Requires OPERATOR."""
+    return ctx.get_loaded_python_scripts()
+
+
+@router.post("/python-scripts/load")
+def load_python_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a Python script. Requires ADMIN."""
+    ok = ctx.execute_python_script(request.script_path)
+    return {"success": ok}
+
+
+@router.post("/python-scripts/unload")
+def unload_python_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a Python script. Requires ADMIN."""
+    ok = ctx.unload_python_script(request.script_path)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 5: Ban Cache Operations
+# =============================================================================
+
+
+@router.post("/ban-cache/sync")
+def sync_ban_cache(
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Reload ban cache from database. Requires ADMIN."""
+    ctx.load_ban_cache()
+    return {"success": True}
+
+
+class BanCacheIpRequest(BaseModel):
+    ip: str
+
+
+class BanCacheNickRequest(BaseModel):
+    nick: str
+
+
+@router.post("/ban-cache/add-ip")
+def add_ban_cache_ip(
+    request: BanCacheIpRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add an IP to the in-memory ban cache. Requires ADMIN."""
+    ctx.add_ban_cache_ip(request.ip)
+    return {"success": True}
+
+
+@router.post("/ban-cache/add-nick")
+def add_ban_cache_nick(
+    request: BanCacheNickRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add a nick to the in-memory ban cache. Requires ADMIN."""
+    ctx.add_ban_cache_nick(request.nick)
+    return {"success": True}
+
+
+@router.post("/ban-cache/clear")
+def clear_ban_cache(
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Clear the entire in-memory ban cache. Requires ADMIN."""
+    ctx.clear_ban_cache()
+    return {"success": True}

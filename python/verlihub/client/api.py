@@ -957,3 +957,178 @@ class AsyncHubClient:
     async def get_llm_status(self) -> dict[str, Any]:
         """Get LLM backend status."""
         return await self._request("GET", "/llm/status")
+
+    # =========================================================================
+    # Phase 5: Messaging
+    # =========================================================================
+
+    async def send_to_opchat(self, message: str, from_nick: str = "") -> bool:
+        result = await self._request("POST", "/hub/opchat", json={"message": message, "from_nick": from_nick})
+        return result.get("success", False)
+
+    async def send_to_active(self, message: str) -> bool:
+        result = await self._request("POST", "/hub/send-to-active", json={"message": message})
+        return result.get("success", False)
+
+    async def send_to_passive(self, message: str) -> bool:
+        result = await self._request("POST", "/hub/send-to-passive", json={"message": message})
+        return result.get("success", False)
+
+    async def broadcast_chat(self, from_nick: str, message: str) -> bool:
+        result = await self._request("POST", "/hub/broadcast-chat", json={"from_nick": from_nick, "message": message})
+        return result.get("success", False)
+
+    async def force_move(self, nick: str, address: str) -> bool:
+        result = await self._request("POST", "/hub/force-move", json={"nick": nick, "address": address})
+        return result.get("success", False)
+
+    async def disconnect_user(self, nick: str) -> bool:
+        result = await self._request("POST", "/hub/disconnect", json={"nick": nick})
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Robot Management
+    # =========================================================================
+
+    async def add_robot(self, nick: str, description: str = "", user_class: int = 3) -> bool:
+        result = await self._request("POST", "/hub/robot", json={"nick": nick, "description": description, "user_class": user_class})
+        return result.get("success", False)
+
+    async def remove_robot(self, nick: str) -> bool:
+        result = await self._request("DELETE", "/hub/robot", json={"nick": nick})
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Statistics
+    # =========================================================================
+
+    async def get_protocol_stats(self) -> dict[str, Any]:
+        return await self._request("GET", "/hub/protocol-stats")
+
+    async def lookup_geoip(self, ip: str) -> dict[str, Any]:
+        return await self._request("GET", f"/hub/geoip/{ip}")
+
+    async def get_active_passive_counts(self) -> dict[str, Any]:
+        return await self._request("GET", "/hub/active-passive-counts")
+
+    # =========================================================================
+    # Phase 5: Plugin Management
+    # =========================================================================
+
+    async def get_plugins(self) -> list:
+        return await self._request("GET", "/hub/plugins")
+
+    async def load_plugin(self, plugin_path: str) -> bool:
+        result = await self._request("POST", "/hub/plugins/load", json={"plugin_path": plugin_path})
+        return result.get("success", False)
+
+    async def unload_plugin(self, plugin_name: str) -> bool:
+        result = await self._request("POST", "/hub/plugins/unload", json={"plugin_name": plugin_name})
+        return result.get("success", False)
+
+    async def reload_plugin(self, plugin_name: str) -> bool:
+        result = await self._request("POST", "/hub/plugins/reload", json={"plugin_name": plugin_name})
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Script Management
+    # =========================================================================
+
+    async def get_lua_scripts(self) -> list:
+        return await self._request("GET", "/hub/lua-scripts")
+
+    async def load_lua_script(self, script_path: str) -> bool:
+        result = await self._request("POST", "/hub/lua-scripts/load", json={"script_path": script_path})
+        return result.get("success", False)
+
+    async def unload_lua_script(self, script_path: str) -> bool:
+        result = await self._request("POST", "/hub/lua-scripts/unload", json={"script_path": script_path})
+        return result.get("success", False)
+
+    async def get_python_scripts(self) -> list:
+        return await self._request("GET", "/hub/python-scripts")
+
+    async def load_python_script(self, script_path: str) -> bool:
+        result = await self._request("POST", "/hub/python-scripts/load", json={"script_path": script_path})
+        return result.get("success", False)
+
+    async def unload_python_script(self, script_path: str) -> bool:
+        result = await self._request("POST", "/hub/python-scripts/unload", json={"script_path": script_path})
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Flood Config
+    # =========================================================================
+
+    async def get_flood_config(self) -> dict[str, Any]:
+        return await self._request("GET", "/hub/flood-config")
+
+    async def set_flood_config(self, flood_type: str, period_ms: int, max_tokens: int) -> bool:
+        result = await self._request("PUT", "/hub/flood-config", json={
+            "flood_type": flood_type, "period_ms": period_ms, "max_tokens": max_tokens,
+        })
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Ban Cache
+    # =========================================================================
+
+    async def sync_ban_cache(self) -> bool:
+        result = await self._request("POST", "/hub/ban-cache/sync")
+        return result.get("success", False)
+
+    async def add_ban_cache_ip(self, ip: str) -> bool:
+        result = await self._request("POST", "/hub/ban-cache/add-ip", json={"ip": ip})
+        return result.get("success", False)
+
+    async def add_ban_cache_nick(self, nick: str) -> bool:
+        result = await self._request("POST", "/hub/ban-cache/add-nick", json={"nick": nick})
+        return result.get("success", False)
+
+    async def clear_ban_cache(self) -> bool:
+        result = await self._request("POST", "/hub/ban-cache/clear")
+        return result.get("success", False)
+
+    # =========================================================================
+    # Phase 5: Penalties
+    # =========================================================================
+
+    async def get_penalties(self, nick: str | None = None) -> list:
+        params = {"nick": nick} if nick else {}
+        return await self._request("GET", "/penalties", params=params)
+
+    async def add_penalty(self, nick: str, penalty_type: str, reason: str = "", duration_minutes: int = 0) -> dict:
+        return await self._request("POST", "/penalties", json={
+            "nick": nick, "penalty_type": penalty_type, "reason": reason, "duration_minutes": duration_minutes,
+        })
+
+    async def remove_penalty(self, nick: str, penalty_type: str | None = None) -> dict:
+        if penalty_type:
+            return await self._request("DELETE", f"/penalties/nick/{nick}", params={"penalty_type": penalty_type})
+        return await self._request("DELETE", f"/penalties/nick/{nick}")
+
+    # =========================================================================
+    # Phase 5: Triggers & Redirects
+    # =========================================================================
+
+    async def get_triggers(self) -> list:
+        return await self._request("GET", "/triggers")
+
+    async def add_trigger(self, command: str, response: str, min_class: int = 0) -> dict:
+        return await self._request("POST", "/triggers", json={
+            "command": command, "response": response, "min_class": min_class,
+        })
+
+    async def remove_trigger(self, trigger_id: int) -> dict:
+        return await self._request("DELETE", f"/triggers/{trigger_id}")
+
+    async def get_redirects(self) -> list:
+        return await self._request("GET", "/redirects")
+
+    async def add_redirect(self, address: str, flag: int = 0, enabled: bool = True) -> dict:
+        return await self._request("POST", "/redirects", json={
+            "address": address, "flag": flag, "enabled": enabled,
+        })
+
+    async def remove_redirect(self, redirect_id: int) -> dict:
+        return await self._request("DELETE", f"/redirects/{redirect_id}")

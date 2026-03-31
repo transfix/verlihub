@@ -172,6 +172,36 @@ def build_mcp_server(
                 description="List of currently active bans",
                 mimeType="application/json",
             ),
+            Resource(
+                uri="hub://plugins",
+                name="Loaded Plugins",
+                description="List of currently loaded hub plugins",
+                mimeType="application/json",
+            ),
+            Resource(
+                uri="hub://penalties",
+                name="Active Penalties",
+                description="List of currently active penalties",
+                mimeType="application/json",
+            ),
+            Resource(
+                uri="hub://protocol_stats",
+                name="Protocol Statistics",
+                description="NMDC protocol-level statistics",
+                mimeType="application/json",
+            ),
+            Resource(
+                uri="hub://triggers",
+                name="Trigger Commands",
+                description="List of configured trigger commands",
+                mimeType="application/json",
+            ),
+            Resource(
+                uri="hub://flood_config",
+                name="Flood Protection",
+                description="Current flood protection settings",
+                mimeType="application/json",
+            ),
         ]
 
     @server.read_resource()
@@ -187,6 +217,16 @@ def build_mcp_server(
         elif uri == "hub://bans":
             bans = await hub.get_bans(limit=200)
             return json.dumps(bans, indent=2, default=str)
+        elif uri == "hub://plugins":
+            return json.dumps(await hub.get_plugins(), indent=2, default=str)
+        elif uri == "hub://penalties":
+            return json.dumps(await hub.get_penalties(), indent=2, default=str)
+        elif uri == "hub://protocol_stats":
+            return json.dumps(await hub.get_protocol_stats(), indent=2, default=str)
+        elif uri == "hub://triggers":
+            return json.dumps(await hub.get_triggers(), indent=2, default=str)
+        elif uri == "hub://flood_config":
+            return json.dumps(await hub.get_flood_config(), indent=2, default=str)
         else:
             return json.dumps({"error": f"Unknown resource: {uri}"})
 
@@ -340,6 +380,336 @@ def build_mcp_server(
                     "required": ["nick", "password"],
                 },
             ),
+            # --- Phase 5: Messaging ---
+            Tool(
+                name="send_to_opchat",
+                description="Send a message to operator chat",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "from_nick": {"type": "string", "description": "Optional sender nick"},
+                    },
+                    "required": ["message"],
+                },
+            ),
+            Tool(
+                name="send_to_active",
+                description="Send a message only to active-mode users",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+            ),
+            Tool(
+                name="send_to_passive",
+                description="Send a message only to passive-mode users",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+            ),
+            Tool(
+                name="broadcast_chat",
+                description="Broadcast a main-chat message as a specific nick",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "from_nick": {"type": "string"},
+                        "message": {"type": "string"},
+                    },
+                    "required": ["from_nick", "message"],
+                },
+            ),
+            # --- Phase 5: Admin ---
+            Tool(
+                name="force_move",
+                description="Force-move a user to another hub address",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string"},
+                        "address": {"type": "string", "description": "Target hub address"},
+                    },
+                    "required": ["nick", "address"],
+                },
+            ),
+            Tool(
+                name="disconnect_user",
+                description="Disconnect a user from the hub",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"nick": {"type": "string"}},
+                    "required": ["nick"],
+                },
+            ),
+            Tool(
+                name="add_robot",
+                description="Add a bot/robot nick to the hub",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string"},
+                        "description": {"type": "string"},
+                        "user_class": {"type": "integer"},
+                    },
+                    "required": ["nick"],
+                },
+            ),
+            Tool(
+                name="remove_robot",
+                description="Remove a bot/robot nick from the hub",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"nick": {"type": "string"}},
+                    "required": ["nick"],
+                },
+            ),
+            Tool(
+                name="reload_config",
+                description="Reload hub configuration from disk",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            # --- Phase 5: Statistics ---
+            Tool(
+                name="get_protocol_stats",
+                description="Get NMDC protocol statistics (bytes in/out, messages, etc.)",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="lookup_geoip",
+                description="Look up GeoIP information for an IP address",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"ip": {"type": "string"}},
+                    "required": ["ip"],
+                },
+            ),
+            Tool(
+                name="get_active_passive_counts",
+                description="Get counts of active-mode and passive-mode users",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            # --- Phase 5: Plugin Management ---
+            Tool(
+                name="list_plugins",
+                description="List currently loaded hub plugins",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="load_plugin",
+                description="Load a plugin by file path",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"plugin_path": {"type": "string"}},
+                    "required": ["plugin_path"],
+                },
+            ),
+            Tool(
+                name="unload_plugin",
+                description="Unload a plugin by name",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"plugin_name": {"type": "string"}},
+                    "required": ["plugin_name"],
+                },
+            ),
+            Tool(
+                name="reload_plugin",
+                description="Reload a plugin by name",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"plugin_name": {"type": "string"}},
+                    "required": ["plugin_name"],
+                },
+            ),
+            # --- Phase 5: Script Management ---
+            Tool(
+                name="list_lua_scripts",
+                description="List loaded Lua scripts",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="load_lua_script",
+                description="Load a Lua script by path",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string"}},
+                    "required": ["script_path"],
+                },
+            ),
+            Tool(
+                name="unload_lua_script",
+                description="Unload a Lua script by path",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string"}},
+                    "required": ["script_path"],
+                },
+            ),
+            Tool(
+                name="list_python_scripts",
+                description="List loaded Python scripts",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="load_python_script",
+                description="Load a Python script by path",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string"}},
+                    "required": ["script_path"],
+                },
+            ),
+            Tool(
+                name="unload_python_script",
+                description="Unload a Python script by path",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string"}},
+                    "required": ["script_path"],
+                },
+            ),
+            # --- Phase 5: Flood & Ban ---
+            Tool(
+                name="get_flood_config",
+                description="Get flood protection settings for all message types",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="set_flood_config",
+                description="Set flood protection for a message type",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "flood_type": {"type": "string", "description": "chat, pm, search, myinfo, ctm, extjson"},
+                        "period_ms": {"type": "integer"},
+                        "max_tokens": {"type": "integer"},
+                    },
+                    "required": ["flood_type", "period_ms", "max_tokens"],
+                },
+            ),
+            Tool(
+                name="sync_ban_cache",
+                description="Reload the in-memory ban cache from the database",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="add_ban_cache_ip",
+                description="Add an IP to the in-memory ban cache",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"ip": {"type": "string"}},
+                    "required": ["ip"],
+                },
+            ),
+            Tool(
+                name="add_ban_cache_nick",
+                description="Add a nick to the in-memory ban cache",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"nick": {"type": "string"}},
+                    "required": ["nick"],
+                },
+            ),
+            Tool(
+                name="clear_ban_cache",
+                description="Clear the entire in-memory ban cache",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            # --- Phase 5: Penalties ---
+            Tool(
+                name="list_penalties",
+                description="List active penalties, optionally filtered by nick",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "Filter by nick (optional)"}},
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="add_penalty",
+                description="Add a penalty for a user",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string"},
+                        "penalty_type": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "duration_minutes": {"type": "integer"},
+                    },
+                    "required": ["nick", "penalty_type"],
+                },
+            ),
+            Tool(
+                name="remove_penalty",
+                description="Remove a penalty for a user",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string"},
+                        "penalty_type": {"type": "string"},
+                    },
+                    "required": ["nick"],
+                },
+            ),
+            # --- Phase 5: Triggers & Redirects ---
+            Tool(
+                name="list_triggers",
+                description="List all trigger commands",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="add_trigger",
+                description="Add a trigger command",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "response": {"type": "string"},
+                        "min_class": {"type": "integer"},
+                    },
+                    "required": ["command", "response"],
+                },
+            ),
+            Tool(
+                name="remove_trigger",
+                description="Remove a trigger command by ID",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"trigger_id": {"type": "integer"}},
+                    "required": ["trigger_id"],
+                },
+            ),
+            Tool(
+                name="list_redirects",
+                description="List all redirect addresses",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="add_redirect",
+                description="Add a redirect address",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "address": {"type": "string"},
+                        "flag": {"type": "integer"},
+                        "enabled": {"type": "boolean"},
+                    },
+                    "required": ["address"],
+                },
+            ),
+            Tool(
+                name="remove_redirect",
+                description="Remove a redirect by ID",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"redirect_id": {"type": "integer"}},
+                    "required": ["redirect_id"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -430,6 +800,161 @@ def build_mcp_server(
                 user_class=args.get("user_class", 1),
             )
 
+        # Phase 5: Messaging
+        elif name == "send_to_opchat":
+            ok = await hub.send_to_opchat(args["message"], args.get("from_nick", ""))
+            return {"status": "sent" if ok else "failed"}
+
+        elif name == "send_to_active":
+            ok = await hub.send_to_active(args["message"])
+            return {"status": "sent" if ok else "failed"}
+
+        elif name == "send_to_passive":
+            ok = await hub.send_to_passive(args["message"])
+            return {"status": "sent" if ok else "failed"}
+
+        elif name == "broadcast_chat":
+            ok = await hub.broadcast_chat(args["from_nick"], args["message"])
+            return {"status": "sent" if ok else "failed"}
+
+        # Phase 5: Admin
+        elif name == "force_move":
+            ok = await hub.force_move(args["nick"], args["address"])
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "disconnect_user":
+            ok = await hub.disconnect_user(args["nick"])
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "add_robot":
+            ok = await hub.add_robot(args["nick"], args.get("description", ""), args.get("user_class", 3))
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "remove_robot":
+            ok = await hub.remove_robot(args["nick"])
+            return {"success": ok, "nick": args["nick"]}
+
+        elif name == "reload_config":
+            return await hub.reload_config()
+
+        # Phase 5: Statistics
+        elif name == "get_protocol_stats":
+            return await hub.get_protocol_stats()
+
+        elif name == "lookup_geoip":
+            return await hub.lookup_geoip(args["ip"])
+
+        elif name == "get_active_passive_counts":
+            return await hub.get_active_passive_counts()
+
+        # Phase 5: Plugin Management
+        elif name == "list_plugins":
+            return await hub.get_plugins()
+
+        elif name == "load_plugin":
+            ok = await hub.load_plugin(args["plugin_path"])
+            return {"success": ok}
+
+        elif name == "unload_plugin":
+            ok = await hub.unload_plugin(args["plugin_name"])
+            return {"success": ok}
+
+        elif name == "reload_plugin":
+            ok = await hub.reload_plugin(args["plugin_name"])
+            return {"success": ok}
+
+        # Phase 5: Script Management
+        elif name == "list_lua_scripts":
+            return await hub.get_lua_scripts()
+
+        elif name == "load_lua_script":
+            ok = await hub.load_lua_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "unload_lua_script":
+            ok = await hub.unload_lua_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "list_python_scripts":
+            return await hub.get_python_scripts()
+
+        elif name == "load_python_script":
+            ok = await hub.load_python_script(args["script_path"])
+            return {"success": ok}
+
+        elif name == "unload_python_script":
+            ok = await hub.unload_python_script(args["script_path"])
+            return {"success": ok}
+
+        # Phase 5: Flood & Ban Cache
+        elif name == "get_flood_config":
+            return await hub.get_flood_config()
+
+        elif name == "set_flood_config":
+            ok = await hub.set_flood_config(args["flood_type"], args["period_ms"], args["max_tokens"])
+            return {"success": ok}
+
+        elif name == "sync_ban_cache":
+            ok = await hub.sync_ban_cache()
+            return {"success": ok}
+
+        elif name == "add_ban_cache_ip":
+            ok = await hub.add_ban_cache_ip(args["ip"])
+            return {"success": ok}
+
+        elif name == "add_ban_cache_nick":
+            ok = await hub.add_ban_cache_nick(args["nick"])
+            return {"success": ok}
+
+        elif name == "clear_ban_cache":
+            ok = await hub.clear_ban_cache()
+            return {"success": ok}
+
+        # Phase 5: Penalties
+        elif name == "list_penalties":
+            return await hub.get_penalties(nick=args.get("nick"))
+
+        elif name == "add_penalty":
+            return await hub.add_penalty(
+                nick=args["nick"],
+                penalty_type=args["penalty_type"],
+                reason=args.get("reason", ""),
+                duration_minutes=args.get("duration_minutes", 0),
+            )
+
+        elif name == "remove_penalty":
+            return await hub.remove_penalty(
+                nick=args["nick"],
+                penalty_type=args.get("penalty_type"),
+            )
+
+        # Phase 5: Triggers & Redirects
+        elif name == "list_triggers":
+            return await hub.get_triggers()
+
+        elif name == "add_trigger":
+            return await hub.add_trigger(
+                command=args["command"],
+                response=args["response"],
+                min_class=args.get("min_class", 0),
+            )
+
+        elif name == "remove_trigger":
+            return await hub.remove_trigger(args["trigger_id"])
+
+        elif name == "list_redirects":
+            return await hub.get_redirects()
+
+        elif name == "add_redirect":
+            return await hub.add_redirect(
+                address=args["address"],
+                flag=args.get("flag", 0),
+                enabled=args.get("enabled", True),
+            )
+
+        elif name == "remove_redirect":
+            return await hub.remove_redirect(args["redirect_id"])
+
         else:
             return {"error": f"Unknown tool: {name}"}
 
@@ -465,6 +990,21 @@ def build_mcp_server(
                         required=True,
                     ),
                 ],
+            ),
+            Prompt(
+                name="security_audit",
+                description="Perform a security audit of the hub",
+                arguments=[],
+            ),
+            Prompt(
+                name="plugin_status",
+                description="Review loaded plugins and scripts",
+                arguments=[],
+            ),
+            Prompt(
+                name="traffic_analysis",
+                description="Analyze hub traffic and protocol statistics",
+                arguments=[],
             ),
         ]
 
@@ -525,6 +1065,67 @@ def build_mcp_server(
                             f"2. Connectivity (hub running, health endpoint)\n"
                             f"3. Abuse (ban spikes, repeated kicks)\n"
                             f"4. Configuration problems"
+                        ),
+                    ),
+                )
+            ]
+
+        elif name == "security_audit":
+            return [
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=(
+                            "Perform a security audit of this Verlihub DC++ hub. "
+                            "Use get_hub_statistics, list_online_users, search_bans, "
+                            "get_flood_config, list_penalties, and list_plugins to gather data. "
+                            "Check for:\n"
+                            "1. Flood protection adequacy\n"
+                            "2. Suspicious user patterns\n"
+                            "3. Ban/penalty effectiveness\n"
+                            "4. Plugin security posture\n"
+                            "5. Recommendations for hardening"
+                        ),
+                    ),
+                )
+            ]
+
+        elif name == "plugin_status":
+            return [
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=(
+                            "Review the plugin and script status of this Verlihub DC++ hub. "
+                            "Use list_plugins, list_lua_scripts, and list_python_scripts to "
+                            "gather data. Report:\n"
+                            "1. All loaded plugins with their status\n"
+                            "2. All loaded Lua scripts\n"
+                            "3. All loaded Python scripts\n"
+                            "4. Any potential conflicts or issues\n"
+                            "5. Recommendations for optimization"
+                        ),
+                    ),
+                )
+            ]
+
+        elif name == "traffic_analysis":
+            return [
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=(
+                            "Analyze the traffic and protocol statistics of this Verlihub DC++ hub. "
+                            "Use get_protocol_stats, get_active_passive_counts, get_hub_statistics, "
+                            "and get_geo_distribution to gather data. Report:\n"
+                            "1. Protocol message rates and volumes\n"
+                            "2. Active vs passive user ratio\n"
+                            "3. Geographic traffic distribution\n"
+                            "4. Bandwidth utilization\n"
+                            "5. Anomalies or optimization opportunities"
                         ),
                     ),
                 )

@@ -95,6 +95,45 @@ class FakeCppHubContext:
     def KickUser(self, op, nick, reason):
         return True
 
+    def ForceMove(self, nick, address):
+        return nick in ("Alice", "Bob")
+
+    def DisconnectUser(self, nick):
+        return nick in ("Alice", "Bob")
+
+    def GetProtocolStats(self):
+        """Return a fake stats snapshot object."""
+        class _Snap:
+            messages_in = 100
+            messages_out = 200
+            chat_count = 50
+            pm_count = 30
+            search_count = 20
+            myinfo_count = 10
+            ctm_count = 5
+            sr_count = 3
+            mcto_count = 2
+            flood_blocked = 1
+            ban_blocked = 0
+        return _Snap()
+
+    def LookupGeoIP(self, ip):
+        class _Info:
+            country_code = "US"
+            country_name = "United States"
+            city = "New York"
+            available = True
+        return _Info()
+
+    def SetFloodConfig(self, flood_type, period_ms, max_tokens):
+        self._flood_config = self._flood_config if hasattr(self, '_flood_config') else {}
+        self._flood_config[flood_type] = (period_ms, max_tokens)
+
+    def GetFloodConfig(self, flood_type):
+        if hasattr(self, '_flood_config') and flood_type in self._flood_config:
+            return self._flood_config[flood_type]
+        return (5000, 3)
+
     def GetConfig(self, section, key, default=""):
         return self._config.get(f"{section}.{key}", default)
 
@@ -421,3 +460,119 @@ class TestSignalHandlers:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGHUP, signal.SIG_DFL)
+
+
+# ===================================================================
+# Phase 3: New Event Handlers
+# ===================================================================
+
+class TestPhase3EventHandlers:
+
+    def test_on_ext_json(self, core_module):
+        handler = core_module.HubEventHandler()
+        called = []
+        handler.register("ext_json", lambda nick, json: called.append((nick, json)))
+        ret = handler.OnExtJSON("Alice", '{"type":"info"}')
+        assert ret is True
+        assert called == [("Alice", '{"type":"info"}')]
+
+    def test_on_ext_json_blocks(self, core_module):
+        handler = core_module.HubEventHandler()
+        handler.register("ext_json", lambda nick, json: False)
+        assert handler.OnExtJSON("Alice", "{}") is False
+
+    def test_on_my_hub_url(self, core_module):
+        handler = core_module.HubEventHandler()
+        called = []
+        handler.register("my_hub_url", lambda nick, url: called.append((nick, url)))
+        ret = handler.OnMyHubURL("Bob", "dchub://example.com:411")
+        assert ret is True
+        assert called == [("Bob", "dchub://example.com:411")]
+
+    def test_on_my_hub_url_blocks(self, core_module):
+        handler = core_module.HubEventHandler()
+        handler.register("my_hub_url", lambda nick, url: False)
+        assert handler.OnMyHubURL("Bob", "dchub://x") is False
+
+    def test_on_user_in_update(self, core_module):
+        handler = core_module.HubEventHandler()
+        called = []
+        handler.register("user_in_update", lambda nick, data: called.append((nick, data)))
+        ret = handler.OnUserINUpdate("Alice", "$Speed:100$")
+        assert ret is True
+        assert called == [("Alice", "$Speed:100$")]
+
+    def test_on_user_in_update_blocks(self, core_module):
+        handler = core_module.HubEventHandler()
+        handler.register("user_in_update", lambda nick, data: False)
+        assert handler.OnUserINUpdate("Alice", "data") is False
+
+    def test_register_new_event_types(self, core_module):
+        """Verify the new event types are in the handler's registry."""
+        handler = core_module.HubEventHandler()
+        for event in ("ext_json", "my_hub_url", "user_in_update"):
+            handler.register(event, lambda *a: True)  # Should not raise
+
+
+# ===================================================================
+# Phase 4: HubContext Wrapper Methods
+# ===================================================================
+
+class TestPhase4WrapperMethods:
+
+    def test_force_move_found(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.force_move("Alice", "dchub://other:411") is True
+
+    def test_force_move_not_found(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.force_move("Ghost", "dchub://other:411") is False
+
+    def test_disconnect_user_found(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.disconnect_user("Bob") is True
+
+    def test_disconnect_user_not_found(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.disconnect_user("Ghost") is False
+
+    def test_send_to_opchat(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.send_to_opchat("test message") is True
+        assert ctx.send_to_opchat("test", from_nick="Admin") is True
+
+    def test_get_protocol_stats(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        stats = ctx.get_protocol_stats()
+        assert isinstance(stats, dict)
+        assert stats["messages_in"] == 100
+        assert stats["messages_out"] == 200
+        assert stats["chat_count"] == 50
+        assert stats["flood_blocked"] == 1
+        assert "mcto_count" in stats
+
+    def test_lookup_geoip(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        info = ctx.lookup_geoip("8.8.8.8")
+        assert isinstance(info, dict)
+        assert info["country_code"] == "US"
+        assert info["available"] is True
+
+    def test_set_and_get_flood_config(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        ctx.set_flood_config(0, 3000, 5)
+        result = ctx.get_flood_config(0)
+        assert result == (3000, 5)
+
+    def test_get_flood_config_default(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        result = ctx.get_flood_config(99)
+        assert result == (5000, 3)
+
+    def test_send_pm_as(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.send_pm_as("Bot", "Alice", "hello") is True
+
+    def test_send_chat_as(self, core_module):
+        ctx = core_module.HubContext.create("/tmp/test-vhcore")
+        assert ctx.send_chat_as("Admin", "Hello everyone") is True

@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import quote_plus
 
-log = logging.getLogger("verlihub.bot_web")
+log = logging.getLogger("verlihub.bot.web")
 
 # Maximum text returned from a single fetch (characters)
 _MAX_TEXT = 4000

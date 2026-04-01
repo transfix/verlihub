@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from verlihub.bot_memory import BotMemory, _relative_time, build_memory_tools, execute_memory_tool
+from verlihub.bot.memory import BotMemory, _relative_time, build_memory_tools, execute_memory_tool
 
 
 # ---------------------------------------------------------------------------

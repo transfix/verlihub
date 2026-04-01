@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from verlihub.bot_web import (
+from verlihub.bot.web import (
     _html_to_text,
     build_web_tools,
     execute_web_tool,
@@ -348,19 +348,19 @@ class TestExecuteWebTool:
 
     @pytest.mark.asyncio
     async def test_web_search_dispatch(self):
-        with patch("verlihub.bot_web.web_search", new_callable=AsyncMock, return_value="results"):
+        with patch("verlihub.bot.web.web_search", new_callable=AsyncMock, return_value="results"):
             result = await execute_web_tool("web_search", {"query": "test"})
         assert result == "results"
 
     @pytest.mark.asyncio
     async def test_fetch_webpage_dispatch(self):
-        with patch("verlihub.bot_web.fetch_webpage", new_callable=AsyncMock, return_value="page"):
+        with patch("verlihub.bot.web.fetch_webpage", new_callable=AsyncMock, return_value="page"):
             result = await execute_web_tool("fetch_webpage", {"url": "https://x.com"})
         assert result == "page"
 
     @pytest.mark.asyncio
     async def test_read_rss_dispatch(self):
-        with patch("verlihub.bot_web.read_rss", new_callable=AsyncMock, return_value="feed"):
+        with patch("verlihub.bot.web.read_rss", new_callable=AsyncMock, return_value="feed"):
             result = await execute_web_tool("read_rss", {"url": "https://x.com/rss"})
         assert result == "feed"
 

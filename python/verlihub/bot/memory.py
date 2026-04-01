@@ -22,7 +22,7 @@ from typing import Any
 
 from sqlmodel import select
 
-log = logging.getLogger("verlihub.bot_memory")
+log = logging.getLogger("verlihub.bot.memory")
 
 
 def _relative_time(dt: datetime) -> str:

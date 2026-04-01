@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from verlihub.bot_mood import (
+from verlihub.bot.mood import (
     MOOD_BORED,
     MOOD_CHEERFUL,
     MOOD_CURIOUS,

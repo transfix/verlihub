@@ -46,12 +46,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from verlihub.bot_memory import BotMemory
-    from verlihub.bot_mood import BotMoodEngine
+    from verlihub.bot.memory import BotMemory
+    from verlihub.bot.mood import BotMoodEngine
     from verlihub.config import BotBehaviorConfig
     from verlihub.core import HubContext, HubEventHandler
 
-log = logging.getLogger("verlihub.bot_chat")
+log = logging.getLogger("verlihub.bot.chat")
 
 
 def _strip_think_blocks(text: str | None) -> str:
@@ -277,11 +277,11 @@ class BotChatSession:
         memory_enabled = behavior.memory_enabled if behavior else False
 
         if web_enabled:
-            from verlihub.bot_web import build_web_tools
+            from verlihub.bot.web import build_web_tools
             self.tools += build_web_tools()
 
         if memory_enabled:
-            from verlihub.bot_memory import build_memory_tools
+            from verlihub.bot.memory import build_memory_tools
             self.tools += build_memory_tools()
 
         self._base_system_prompt = prompt
@@ -353,13 +353,13 @@ class BotChatSession:
         """
         # Memory tools
         if self.memory and fn_name in ("save_note", "recall_notes", "list_notes", "delete_note"):
-            from verlihub.bot_memory import execute_memory_tool
+            from verlihub.bot.memory import execute_memory_tool
             return await execute_memory_tool(self.memory, fn_name, fn_args)
 
         # Web tools
         web_enabled = self.behavior.web_enabled if self.behavior else False
         if web_enabled and fn_name in ("web_search", "fetch_webpage", "read_rss"):
-            from verlihub.bot_web import execute_web_tool
+            from verlihub.bot.web import execute_web_tool
             return await execute_web_tool(fn_name, fn_args)
 
         return None  # not a bot tool
@@ -856,7 +856,7 @@ class BotChatHandler:
         # Instantiate mood engine if enabled
         if self.behavior and self.behavior.mood_enabled:
             try:
-                from verlihub.bot_mood import BotMoodEngine
+                from verlihub.bot.mood import BotMoodEngine
                 self._mood_engine = BotMoodEngine(
                     interaction_window=self.behavior.mood_window,
                     user_history_window=self.behavior.mood_user_history,
@@ -879,7 +879,7 @@ class BotChatHandler:
         # Instantiate persistent memory (uses the shared application database)
         if self.behavior and self.behavior.memory_enabled:
             try:
-                from verlihub.bot_memory import BotMemory
+                from verlihub.bot.memory import BotMemory
                 mood_fn = (
                     (lambda: self._mood_engine.get_mood().name)
                     if self._mood_engine

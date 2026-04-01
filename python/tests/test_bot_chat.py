@@ -69,7 +69,7 @@ class TestBotChatSession:
 
     def test_admin_pm_session(self, llm_cfg):
         """Admin PM session should have admin tools + admin prompt."""
-        from verlihub.bot_chat import BotChatSession
+        from verlihub.bot.chat import BotChatSession
 
         session = BotChatSession(
             nick="admin",
@@ -93,7 +93,7 @@ class TestBotChatSession:
 
     def test_operator_pm_session(self, llm_cfg):
         """Operator PM session should have readonly tools only."""
-        from verlihub.bot_chat import BotChatSession
+        from verlihub.bot.chat import BotChatSession
 
         session = BotChatSession(
             nick="oper",
@@ -110,7 +110,7 @@ class TestBotChatSession:
 
     def test_guest_pm_session(self, llm_cfg):
         """Guest PM session should have no tools."""
-        from verlihub.bot_chat import BotChatSession
+        from verlihub.bot.chat import BotChatSession
 
         session = BotChatSession(
             nick="guest",
@@ -127,7 +127,7 @@ class TestBotChatSession:
 
     def test_main_chat_session_always_no_tools(self, llm_cfg):
         """Main chat sessions always have no tools regardless of user class."""
-        from verlihub.bot_chat import BotChatSession
+        from verlihub.bot.chat import BotChatSession
 
         session = BotChatSession(
             nick="admin",
@@ -144,7 +144,7 @@ class TestBotChatSession:
 
     def test_session_has_correct_nick_in_prompt(self, llm_cfg):
         """System prompt includes user nick and bot nick."""
-        from verlihub.bot_chat import BotChatSession
+        from verlihub.bot.chat import BotChatSession
 
         session = BotChatSession(
             nick="CoolUser",
@@ -171,7 +171,7 @@ class TestBotChatHandler:
 
     def test_register_events(self, mock_hub_context, mock_events, llm_cfg):
         """Handler registers PM and chat event handlers."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -186,7 +186,7 @@ class TestBotChatHandler:
 
     def test_unregister_events(self, mock_hub_context, mock_events, llm_cfg):
         """Handler unregisters cleanly."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -198,7 +198,7 @@ class TestBotChatHandler:
 
     def test_pm_to_other_user_passes_through(self, mock_hub_context, llm_cfg):
         """PM to a nick other than the bot should pass through (return True)."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -209,7 +209,7 @@ class TestBotChatHandler:
 
     def test_pm_to_bot_returns_true(self, mock_hub_context, llm_cfg):
         """PM to the bot nick should return True (don't block)."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -222,7 +222,7 @@ class TestBotChatHandler:
 
     def test_chat_without_mention_passes_through(self, mock_hub_context, llm_cfg):
         """Chat without bot mention should pass through."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -234,7 +234,7 @@ class TestBotChatHandler:
 
     def test_chat_with_mention_returns_true(self, mock_hub_context, llm_cfg):
         """Chat mentioning the bot should return True (pass message through)."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -246,7 +246,7 @@ class TestBotChatHandler:
 
     def test_llm_disabled_passes_through(self, mock_hub_context):
         """When LLM is disabled, all messages pass through."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         disabled_cfg = LlmConfig(enabled=False)
         with patch("verlihub.config.get_config_optional", return_value=None):
@@ -258,7 +258,7 @@ class TestBotChatHandler:
 
     def test_llm_disabled_pm_sends_friendly_message(self, mock_hub_context):
         """PM to bot when LLM disabled sends a friendly explanation."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         disabled_cfg = LlmConfig(enabled=False)
         with patch("verlihub.config.get_config_optional", return_value=None):
@@ -273,7 +273,7 @@ class TestBotChatHandler:
 
     def test_llm_none_cfg_pm_sends_friendly_message(self, mock_hub_context):
         """PM to bot when llm_cfg is None sends a friendly explanation."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, None)
@@ -286,7 +286,7 @@ class TestBotChatHandler:
 
     def test_no_loop_pm_sends_friendly_message(self, mock_hub_context, llm_cfg):
         """PM when no event loop sends a 'try again' message."""
-        from verlihub.bot_chat import BotChatHandler
+        from verlihub.bot.chat import BotChatHandler
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -304,7 +304,7 @@ class TestBotChatHandler:
 
     def test_shutdown_clears_sessions(self, mock_hub_context, llm_cfg):
         """Shutdown clears all active sessions."""
-        from verlihub.bot_chat import BotChatHandler, _sessions, _sessions_lock
+        from verlihub.bot.chat import BotChatHandler, _sessions, _sessions_lock
 
         with patch("verlihub.config.get_config_optional", return_value=None):
             handler = BotChatHandler(mock_hub_context, llm_cfg)
@@ -330,7 +330,7 @@ class TestSessionManagement:
 
     def test_get_or_create_new(self, llm_cfg):
         """New session is created when key doesn't exist."""
-        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+        from verlihub.bot.chat import _get_or_create_session, _sessions, _sessions_lock
 
         # Clear
         with _sessions_lock:
@@ -348,7 +348,7 @@ class TestSessionManagement:
 
     def test_get_or_create_reuses_existing(self, llm_cfg):
         """Existing session is reused for the same key."""
-        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+        from verlihub.bot.chat import _get_or_create_session, _sessions, _sessions_lock
 
         with _sessions_lock:
             _sessions.clear()
@@ -366,7 +366,7 @@ class TestSessionManagement:
 
     def test_separate_pm_and_chat_sessions(self, llm_cfg):
         """PM and chat sessions for the same user are separate."""
-        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+        from verlihub.bot.chat import _get_or_create_session, _sessions, _sessions_lock
 
         with _sessions_lock:
             _sessions.clear()
@@ -386,7 +386,7 @@ class TestSessionManagement:
 
     def test_shared_public_chat_session(self, llm_cfg):
         """All users share the same 'chat:public' session in main chat."""
-        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+        from verlihub.bot.chat import _get_or_create_session, _sessions, _sessions_lock
 
         with _sessions_lock:
             _sessions.clear()
@@ -404,7 +404,7 @@ class TestSessionManagement:
 
     def test_private_sessions_isolated_per_user(self, llm_cfg):
         """Each user gets their own PM session — no shared state."""
-        from verlihub.bot_chat import _get_or_create_session, _sessions, _sessions_lock
+        from verlihub.bot.chat import _get_or_create_session, _sessions, _sessions_lock
 
         with _sessions_lock:
             _sessions.clear()

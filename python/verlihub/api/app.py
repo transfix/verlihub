@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
             llm_cfg = cfg.llm if cfg else None
             bot_behavior = cfg.bots.behavior if cfg else None
             if llm_cfg and llm_cfg.enabled:
-                from verlihub.bot_chat import BotChatHandler
+                from verlihub.bot.chat import BotChatHandler
                 _bot_chat_handler = BotChatHandler(
                     ctx, llm_cfg, behavior=bot_behavior,
                 )

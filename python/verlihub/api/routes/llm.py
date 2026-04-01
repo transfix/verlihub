@@ -1481,10 +1481,10 @@ async def _execute_tool(
         # ------------------------------------------------------------------
         elif tool_name in ("web_search", "fetch_webpage", "read_rss"):
             try:
-                from verlihub.bot_web import execute_web_tool
+                from verlihub.bot.web import execute_web_tool
                 return await execute_web_tool(tool_name, arguments)
             except ImportError:
-                return json.dumps({"error": "Web tools not available (missing bot_web module)"})
+                return json.dumps({"error": "Web tools not available (missing verlihub.bot.web module)"})
             except Exception as e:
                 return json.dumps({"error": f"Web tool error: {e}"})
 
@@ -1946,7 +1946,7 @@ class ChatSession:
             _cfg = get_config_optional()
             _behavior = getattr(getattr(_cfg, "bots", None), "behavior", None) if _cfg else None
             if _behavior and getattr(_behavior, "web_enabled", False):
-                from verlihub.bot_web import build_web_tools
+                from verlihub.bot.web import build_web_tools
                 self.tools += build_web_tools()
         except Exception:
             pass
@@ -2605,7 +2605,7 @@ async def list_sessions(
 
     # Also include NMDC PM sessions so users can continue them on the dashboard
     try:
-        from verlihub.bot_chat import get_nmdc_sessions_for_user
+        from verlihub.bot.chat import get_nmdc_sessions_for_user
         for nmdc_meta in get_nmdc_sessions_for_user(user.nick):
             sessions.append(SessionInfo(
                 session_id=nmdc_meta["session_id"],
@@ -2629,7 +2629,7 @@ async def get_session_messages(
     # Check for NMDC session first
     if session_id.startswith("nmdc-"):
         try:
-            from verlihub.bot_chat import get_nmdc_session_messages
+            from verlihub.bot.chat import get_nmdc_session_messages
             nick = session_id[len("nmdc-"):]
             if nick != user.nick:
                 raise HTTPException(403, "Cannot access another user's NMDC session")

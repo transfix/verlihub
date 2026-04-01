@@ -27,7 +27,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
-log = logging.getLogger("verlihub.bot_mood")
+log = logging.getLogger("verlihub.bot.mood")
 
 # ── Mood definitions ─────────────────────────────────────────────────────
 

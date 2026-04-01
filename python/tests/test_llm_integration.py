@@ -96,6 +96,8 @@ def _mock_hub_context() -> MagicMock:
     ctx.send_to_opchat = MagicMock(return_value=True)
     ctx.send_to_active = MagicMock()
     ctx.send_to_passive = MagicMock()
+    ctx.send_to_active_class = MagicMock()
+    ctx.send_to_passive_class = MagicMock()
     ctx.broadcast_chat = MagicMock()
     ctx.send_pm_as = MagicMock()
     ctx.force_move = MagicMock(return_value=True)
@@ -276,7 +278,7 @@ class TestToolDefinitions:
     def test_admin_tools_count(self):
         from verlihub.api.routes.llm import _build_admin_tools
         tools = _build_admin_tools()
-        assert len(tools) == 38
+        assert len(tools) == 40
         names = {t["function"]["name"] for t in tools}
         assert "kick_user" in names
         assert "send_broadcast" in names
@@ -451,6 +453,16 @@ class TestExecuteTool:
         assert data["success"] is True
         self.ctx.send_to_passive.assert_called_once_with("passive msg")
 
+    async def test_send_to_active_class(self):
+        data = await self._exec("send_to_active_class", {"message": "active class msg", "min_class": 3, "max_class": 10})
+        assert data["success"] is True
+        self.ctx.send_to_active_class.assert_called_once_with("active class msg", 3, 10)
+
+    async def test_send_to_passive_class(self):
+        data = await self._exec("send_to_passive_class", {"message": "passive class msg", "min_class": 1, "max_class": 5})
+        assert data["success"] is True
+        self.ctx.send_to_passive_class.assert_called_once_with("passive class msg", 1, 5)
+
     async def test_broadcast_chat(self):
         data = await self._exec("broadcast_chat", {"from_nick": "Bot", "message": "hi"})
         assert data["success"] is True
@@ -462,7 +474,8 @@ class TestExecuteTool:
         self.ctx.send_pm_as.assert_called_once_with("Bot", "Alice", "hi")
 
     async def test_messaging_denied_for_non_admin(self):
-        for tool in ("send_to_opchat", "send_to_active", "send_to_passive", "broadcast_chat"):
+        for tool in ("send_to_opchat", "send_to_active", "send_to_passive",
+                      "send_to_active_class", "send_to_passive_class", "broadcast_chat"):
             data = await self._exec(tool, {"message": "x", "from_nick": "y", "min_class": 0, "max_class": 10},
                                     user=self.regular_user, is_admin=False)
             assert "Permission denied" in data["error"], f"{tool} should deny non-admin"
@@ -1328,14 +1341,14 @@ class TestChatSession:
         assert session.messages[0]["role"] == "system"
         assert "administrator" in session.messages[0]["content"].lower()
         # Admin gets readonly + admin tools
-        assert len(session.tools) == 17  # 9 readonly + 8 admin
+        assert len(session.tools) == 58  # 18 readonly + 40 admin
 
     def test_session_init_user(self):
         from verlihub.api.routes.llm import ChatSession
         user = _make_token_data("op", 3)
         cfg = LlmConfig(enabled=True)
         session = ChatSession(user, is_admin=False, llm_cfg=cfg)
-        assert len(session.tools) == 9  # readonly only
+        assert len(session.tools) == 18  # readonly only
         assert "CANNOT" in session.messages[0]["content"]
 
     def test_session_personalization(self):

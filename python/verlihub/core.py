@@ -695,6 +695,14 @@ class HubContext:
         """Send a message to all passive-mode users."""
         return self._cpp.SendToPassive(message)
 
+    def send_to_active_class(self, message: str, min_class: int, max_class: int) -> bool:
+        """Send a message to active-mode users in a class range."""
+        return self._cpp.SendToActiveClass(message, min_class, max_class)
+
+    def send_to_passive_class(self, message: str, min_class: int, max_class: int) -> bool:
+        """Send a message to passive-mode users in a class range."""
+        return self._cpp.SendToPassiveClass(message, min_class, max_class)
+
     def broadcast_chat(self, from_nick: str, message: str) -> bool:
         """Broadcast a chat message as a specific nick."""
         return self._cpp.BroadcastChat(from_nick, message)

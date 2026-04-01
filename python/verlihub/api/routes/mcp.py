@@ -332,6 +332,22 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
                      inputSchema={"type": "object",
                                   "properties": {"message": {"type": "string", "description": "Message text"}},
                                   "required": ["message"]}),
+                Tool(name="send_to_active_class",
+                     description="Send a message to active-mode users in a class range",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "message": {"type": "string", "description": "Message text"},
+                                      "min_class": {"type": "integer", "description": "Minimum user class"},
+                                      "max_class": {"type": "integer", "description": "Maximum user class"},
+                                  }, "required": ["message", "min_class", "max_class"]}),
+                Tool(name="send_to_passive_class",
+                     description="Send a message to passive-mode users in a class range",
+                     inputSchema={"type": "object",
+                                  "properties": {
+                                      "message": {"type": "string", "description": "Message text"},
+                                      "min_class": {"type": "integer", "description": "Minimum user class"},
+                                      "max_class": {"type": "integer", "description": "Maximum user class"},
+                                  }, "required": ["message", "min_class", "max_class"]}),
                 Tool(name="broadcast_chat",
                      description="Broadcast a chat message appearing as a specific nick",
                      inputSchema={"type": "object",
@@ -776,6 +792,22 @@ def build_inprocess_mcp_server(server_name: str = "verlihub"):
             if ctx is None:
                 return {"error": "Hub not running"}
             ctx.send_to_passive(args["message"])
+            return {"success": True}
+
+        elif name == "send_to_active_class":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_active_class(args["message"], args["min_class"], args["max_class"])
+            return {"success": True}
+
+        elif name == "send_to_passive_class":
+            if not is_adm:
+                return {"error": "Permission denied — requires admin"}
+            if ctx is None:
+                return {"error": "Hub not running"}
+            ctx.send_to_passive_class(args["message"], args["min_class"], args["max_class"])
             return {"success": True}
 
         elif name == "broadcast_chat":

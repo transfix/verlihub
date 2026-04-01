@@ -412,6 +412,32 @@ def build_mcp_server(
                 },
             ),
             Tool(
+                name="send_to_active_class",
+                description="Send a message to active-mode users in a class range",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            ),
+            Tool(
+                name="send_to_passive_class",
+                description="Send a message to passive-mode users in a class range",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            ),
+            Tool(
                 name="broadcast_chat",
                 description="Broadcast a main-chat message as a specific nick",
                 inputSchema={
@@ -811,6 +837,14 @@ def build_mcp_server(
 
         elif name == "send_to_passive":
             ok = await hub.send_to_passive(args["message"])
+            return {"status": "sent" if ok else "failed"}
+
+        elif name == "send_to_active_class":
+            ok = await hub.send_to_active_class(args["message"], args["min_class"], args["max_class"])
+            return {"status": "sent" if ok else "failed"}
+
+        elif name == "send_to_passive_class":
+            ok = await hub.send_to_passive_class(args["message"], args["min_class"], args["max_class"])
             return {"status": "sent" if ok else "failed"}
 
         elif name == "broadcast_chat":

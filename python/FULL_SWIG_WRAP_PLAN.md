@@ -1209,7 +1209,8 @@ Phase 5 requires all of Phases 1–4 to be complete:
 | **Phase 2** | Administrative Features (P1) — MCTo, UserIP/WhoIP, ForceMove, Protocol stats, GeoIP SWIG, penalties | ✅ **COMPLETE** | `672a51c` | 2026-03 |
 | **Phase 3** | Completeness (P2) — ExtJSON/IN/MyHubURL handlers, ZLib compression, triggers, redirects, client detection, chat rooms  | ✅ **COMPLETE** | `2b3731e` | 2026-03 |
 | **Phase 4** | Web Dashboard Integration — REST API endpoints, dashboard templates, flood config UI, protocol stats UI | ✅ **COMPLETE** | `8219f6d` | 2026-03 |
-| **Phase 5** | MCP & LLM Chatbot Full SWIG Integration — new tools, resources, prompts, standalone parity, bot chat integration | ✅ **COMPLETE** | — | 2026-03 |
+| **Phase 5** | MCP & LLM Chatbot Full SWIG Integration — new tools, resources, prompts, standalone parity, bot chat integration | ✅ **COMPLETE** | `84da020` | 2026-03 |
+| **Phase 5+** | Gap fix: add `send_to_active_class`/`send_to_passive_class` across all layers (core, MCP, LLM, REST, client) + bot module refactor | ✅ **COMPLETE** | — | 2026-03 |
 
 ### Test Coverage
 
@@ -1219,17 +1220,17 @@ Phase 5 requires all of Phases 1–4 to be complete:
 | `test_phase4_api.py` | 21 | ForceMove, ProtocolStats, GeoIP, WhoIP, FloodConfig, OpChat, Disconnect API endpoints |
 | `test_core_wrapper.py` | 49 | HubEventHandler (13 event types incl. ExtJSON/MyHubURL/UserINUpdate), HubContext wrapper methods (force_move, disconnect_user, send_to_opchat, get_protocol_stats, lookup_geoip, set/get_flood_config, send_pm_as, send_chat_as), lifecycle, signals |
 | `test_dashboard_extended.py` | 49 | All dashboard routes (14 unauthenticated redirect tests incl. triggers/redirects/clients/penalties/flood-config/protocol-stats, 16 authenticated page tests) |
-| `test_llm_integration.py` | ~152 | MCP tools (40+), LLM tools (56 total: 18 readonly + 38 admin), _execute_tool handlers (Phase 5 messaging/admin/stats/plugins/flood/penalties/triggers/redirects), prompts, resources, auth middleware, chat sessions, action catalog |
-| **Total (all test files)** | **~1,743** | Full regression suite (1,743 passed, 46 skipped, 0 failures) |
+| `test_llm_integration.py` | ~157 | MCP tools (40+), LLM tools (58 total: 18 readonly + 40 admin incl. send_to_active_class/send_to_passive_class), _execute_tool handlers (Phase 5 messaging/admin/stats/plugins/flood/penalties/triggers/redirects), prompts, resources, auth middleware, chat sessions, action catalog |
+| **Total (all test files)** | **~1,750** | Full regression suite (1,750 passed, 46 skipped, 0 failures) |
 
 ### Phase 5 Detailed Deliverables
 
 | Component | File | Changes |
 |---|---|---|
-| Core wrappers | `core.py` | 22 new methods: send_to_active/passive, broadcast_chat, add/remove_robot, get_active/passive_user_count, load/unload/reload_plugin, get_loaded_plugins, is_plugin_loaded, execute/unload_lua_script, get_loaded_lua_scripts, execute/unload_python_script, get_loaded_python_scripts, load_ban_cache, add_ban_cache_ip/nick, clear_ban_cache, request_reload |
+| Core wrappers | `core.py` | 24 new methods: send_to_active/passive, send_to_active_class/passive_class, broadcast_chat, add/remove_robot, get_active/passive_user_count, load/unload/reload_plugin, get_loaded_plugins, is_plugin_loaded, execute/unload_lua_script, get_loaded_lua_scripts, execute/unload_python_script, get_loaded_python_scripts, load_ban_cache, add_ban_cache_ip/nick, clear_ban_cache, request_reload |
 | In-process MCP | `api/routes/mcp.py` | 40+ new tools, 5 new resources (hub://plugins, penalties, protocol_stats, triggers, flood_config), 3 new prompts (security_audit, plugin_status, traffic_analysis) |
-| LLM gateway | `api/routes/llm.py` | 18 readonly + 38 admin tool definitions, _execute_tool handlers for all Phase 5 tools, expanded action catalog |
-| REST APIs | `api/routes/hub.py` | New endpoints: send-to-active, send-to-passive, broadcast-chat, robot CRUD, active-passive-counts, plugins CRUD, lua/python-scripts CRUD, ban-cache (sync/add-ip/add-nick/clear) |
+| LLM gateway | `api/routes/llm.py` | 18 readonly + 40 admin tool definitions, _execute_tool handlers for all Phase 5 tools, expanded action catalog |
+| REST APIs | `api/routes/hub.py` | New endpoints: send-to-active, send-to-passive, send-to-active-class, send-to-passive-class, broadcast-chat, robot CRUD, active-passive-counts, plugins CRUD, lua/python-scripts CRUD, ban-cache (sync/add-ip/add-nick/clear) |
 | REST client | `client/api.py` | 30+ new AsyncHubClient methods mirroring all Phase 5 REST endpoints |
 | Standalone MCP | `client/mcp.py` | 30+ new tools, 5 new resources, 3 new prompts, all dispatch handlers |
 | Bot chat | `bot_chat.py` | Automatic inheritance via llm.py's _build_*_tools() and _execute_tool() |
@@ -1237,4 +1238,4 @@ Phase 5 requires all of Phases 1–4 to be complete:
 ### Git Branch
 
 - Branch: `verlihub-py-llm`
-- Working tree: Phase 5 complete, pending commit
+- All phases complete. Bot modules refactored into `verlihub.bot` package.

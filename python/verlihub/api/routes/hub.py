@@ -777,6 +777,32 @@ def send_to_passive(
     return {"success": True}
 
 
+@router.post("/send-to-active-class")
+def send_to_active_class(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to active-mode users in a class range. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_active_class(request.message, request.min_class, request.max_class)
+    return {"success": True}
+
+
+@router.post("/send-to-passive-class")
+def send_to_passive_class(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to passive-mode users in a class range. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_passive_class(request.message, request.min_class, request.max_class)
+    return {"success": True}
+
+
 class BroadcastChatRequest(BaseModel):
     from_nick: str
     message: str

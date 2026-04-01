@@ -495,6 +495,38 @@ def _build_admin_tools() -> list[dict]:
         {
             "type": "function",
             "function": {
+                "name": "send_to_active_class",
+                "description": "Send a message to active-mode users in a class range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_passive_class",
+                "description": "Send a message to passive-mode users in a class range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "broadcast_chat",
                 "description": "Broadcast a chat message appearing as a specific nick.",
                 "parameters": {
@@ -1169,6 +1201,22 @@ async def _execute_tool(
             ctx.send_to_passive(arguments["message"])
             return json.dumps({"success": True})
 
+        elif tool_name == "send_to_active_class":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_active_class(arguments["message"], arguments["min_class"], arguments["max_class"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_passive_class":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_passive_class(arguments["message"], arguments["min_class"], arguments["max_class"])
+            return json.dumps({"success": True})
+
         elif tool_name == "broadcast_chat":
             if not is_admin:
                 return json.dumps({"error": "Permission denied — requires admin"})
@@ -1726,6 +1774,8 @@ def _build_action_catalog() -> str:
         ("send_to_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to user class range"),
         ("send_to_active", '{"message": "..."}', "Send to active-mode users"),
         ("send_to_passive", '{"message": "..."}', "Send to passive-mode users"),
+        ("send_to_active_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to active-mode users in class range"),
+        ("send_to_passive_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to passive-mode users in class range"),
         ("broadcast_chat", '{"from_nick": "...", "message": "..."}', "Broadcast mainchat as nick"),
         ("send_pm_as", '{"from_nick": "...", "to_nick": "...", "message": "..."}', "Send PM as nick"),
         # Phase 5 admin

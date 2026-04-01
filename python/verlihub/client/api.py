@@ -974,6 +974,14 @@ class AsyncHubClient:
         result = await self._request("POST", "/hub/send-to-passive", json={"message": message})
         return result.get("success", False)
 
+    async def send_to_active_class(self, message: str, min_class: int, max_class: int) -> bool:
+        result = await self._request("POST", "/hub/send-to-active-class", json={"message": message, "min_class": min_class, "max_class": max_class})
+        return result.get("success", False)
+
+    async def send_to_passive_class(self, message: str, min_class: int, max_class: int) -> bool:
+        result = await self._request("POST", "/hub/send-to-passive-class", json={"message": message, "min_class": min_class, "max_class": max_class})
+        return result.get("success", False)
+
     async def broadcast_chat(self, from_nick: str, message: str) -> bool:
         result = await self._request("POST", "/hub/broadcast-chat", json={"from_nick": from_nick, "message": message})
         return result.get("success", False)

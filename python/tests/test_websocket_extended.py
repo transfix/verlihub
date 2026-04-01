@@ -165,17 +165,22 @@ class TestBroadcastFunctions:
 
 class TestEmitFunctions:
 
-    def test_emit_hub_event_with_loop(self):
-        """When an event loop is running, emit_hub_event creates a task."""
+    async def test_emit_hub_event_with_loop(self):
+        """When _ws_loop is set to a running loop, emit_hub_event schedules a task."""
+        import verlihub.dashboard.websocket as ws_mod
         from verlihub.dashboard.websocket import emit_hub_event
 
-        async def _run():
+        loop = asyncio.get_running_loop()
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = loop
+        try:
             with patch("verlihub.dashboard.websocket.broadcast_hub_event", new_callable=AsyncMock) as mock_bhe:
                 emit_hub_event("test", {"key": "val"})
-                # Give the task a chance to run
-                await asyncio.sleep(0.01)
-
-        asyncio.get_event_loop().run_until_complete(_run())
+                # Give the scheduled coroutine a chance to run
+                await asyncio.sleep(0.05)
+                mock_bhe.assert_awaited_once_with("test", {"key": "val"})
+        finally:
+            ws_mod._ws_loop = old_loop
 
     def test_emit_hub_event_no_loop(self):
         """When no event loop is running, emit_hub_event does nothing."""
@@ -183,15 +188,21 @@ class TestEmitFunctions:
         # This should not raise
         emit_hub_event("test", {"key": "val"})
 
-    def test_emit_log_with_loop(self):
+    async def test_emit_log_with_loop(self):
+        """When _ws_loop is set to a running loop, emit_log schedules a task."""
+        import verlihub.dashboard.websocket as ws_mod
         from verlihub.dashboard.websocket import emit_log
 
-        async def _run():
-            with patch("verlihub.dashboard.websocket.broadcast_log", new_callable=AsyncMock):
+        loop = asyncio.get_running_loop()
+        old_loop = ws_mod._ws_loop
+        ws_mod._ws_loop = loop
+        try:
+            with patch("verlihub.dashboard.websocket.broadcast_log", new_callable=AsyncMock) as mock_bl:
                 emit_log("info", "test message", "system")
-                await asyncio.sleep(0.01)
-
-        asyncio.get_event_loop().run_until_complete(_run())
+                await asyncio.sleep(0.05)
+                mock_bl.assert_awaited_once_with("info", "test message", "system")
+        finally:
+            ws_mod._ws_loop = old_loop
 
     def test_emit_log_no_loop(self):
         from verlihub.dashboard.websocket import emit_log

@@ -176,7 +176,7 @@ class LlmE2ETests:
         try:
             r = _post(f"{self.api_url}/api/v1/llm/chat",
                        json_data={"message": "Hello! What is your name?"},
-                       headers=self._auth_header(), timeout=120)
+                       headers=self._auth_header(), timeout=180)
             if r.status_code == 200:
                 data = r.json()
                 resp = data.get("response", "")

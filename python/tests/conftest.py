@@ -23,27 +23,36 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import SQLModel
 
-from verlihub.models import (
-    RegUser,
-    Ban,
-    SetupList,
-    UserClass,
-    BanType,
-)
-from verlihub.models.database import (
-    Database,
-    DatabaseConfig,
-    init_database,
-    close_database,
-    get_database,
-)
+# Heavy dependencies (sqlalchemy, sqlmodel, pytest_asyncio) are optional.
+# When running lightweight SWIG-only tests (e.g. via CTest's SwigWrapperTests)
+# these packages may not be installed.  Guard them so conftest.py loads cleanly.
+try:
+    import pytest_asyncio
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlmodel import SQLModel
 
-import verlihub.models.database as _db_module  # for restoring global _database
+    from verlihub.models import (
+        RegUser,
+        Ban,
+        SetupList,
+        UserClass,
+        BanType,
+    )
+    from verlihub.models.database import (
+        Database,
+        DatabaseConfig,
+        init_database,
+        close_database,
+        get_database,
+    )
+
+    import verlihub.models.database as _db_module  # for restoring global _database
+
+    _HAS_DB_DEPS = True
+except ImportError:
+    _HAS_DB_DEPS = False
 
 
 # =============================================================================

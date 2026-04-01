@@ -137,7 +137,7 @@ if(PYTEST_FOUND EQUAL 0)
     add_test(NAME SwigWrapperTests
         COMMAND ${Python3_EXECUTABLE} -m pytest
             ${CMAKE_SOURCE_DIR}/python/tests/test_verlihub_core.py
-            -v --tb=short
+            -v --tb=short --noconftest -p no:asyncio
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     )
     set_tests_properties(SwigWrapperTests PROPERTIES

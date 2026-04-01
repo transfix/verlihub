@@ -29,7 +29,6 @@ import pytest
 # these packages may not be installed.  Guard them so conftest.py loads cleanly.
 try:
     import pytest_asyncio
-    from sqlalchemy import event
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlmodel import SQLModel
 
@@ -227,40 +226,18 @@ async def db_session(db: Database) -> AsyncGenerator[AsyncSession, None]:
     """
     Per-test database session with isolation.
     
-    Strategy varies by backend:
+    Uses a simple session from the factory for all backends.  Data cleanup
+    is handled by the autouse ``_clean_db_between_tests`` fixture which
+    DELETEs all rows between tests, so every test starts with empty tables.
     
-    - **SQLite** (in-memory, StaticPool): Simple session from the factory.
-      Data cleanup is handled by the autouse ``_clean_db_between_tests``
-      fixture, so every test starts with empty tables.
-    
-    - **MySQL / PostgreSQL**: Uses a savepoint (SAVEPOINT / ROLLBACK TO)
-      pattern so that each test can call session.commit() freely, but all
-      changes are rolled back when the fixture tears down.  The autouse
-      cleanup catches anything committed through separate sessions.
+    A previous implementation used a savepoint/rollback pattern for MySQL
+    and PostgreSQL, but that caused data inserted via the test session to be
+    invisible to production code that opens its own sessions (e.g.
+    ``prune_stale_hubs``, ``OnValidateNick``).  The DELETE-based cleanup is
+    sufficient and avoids the cross-session visibility problem.
     """
-    if db.config.use_sqlite:
-        # ----- SQLite path: simple session (cleanup already done) -----
-        async with db._session_factory() as session:
-            yield session
-    else:
-        # ----- MySQL / PostgreSQL path: savepoint rollback -----
-        connection = await db._engine.connect()
-        transaction = await connection.begin()
-
-        await connection.begin_nested()
-
-        session = AsyncSession(bind=connection, expire_on_commit=False)
-
-        @event.listens_for(session.sync_session, "after_transaction_end")
-        def _restart_savepoint(sess, trans):
-            if trans.nested and not trans._parent.nested:
-                sess.begin_nested()
-
+    async with db._session_factory() as session:
         yield session
-
-        await session.close()
-        await transaction.rollback()
-        await connection.close()
 
 
 # =============================================================================

@@ -281,16 +281,15 @@ class TestStaleHubPruning:
         pruned = await prune_stale_hubs(timeout=STALE_HUB_TIMEOUT)
         assert pruned == 1
 
-        # Expire cached objects so we see changes from prune's own session
-        db_session.expire_all()
-
-        # Both hubs still exist, but stale one is offline
-        result = await db_session.execute(select(HubListEntry))
-        remaining = result.scalars().all()
-        assert len(remaining) == 2
-        by_name = {h.name: h for h in remaining}
-        assert by_name["Stale Hub"].status == 0
-        assert by_name["Fresh Hub"].status == 1
+        # Verify through a fresh session so MySQL REPEATABLE READ gives us a
+        # new snapshot that includes the prune function's committed changes.
+        async with db._session_factory() as verify:
+            result = await verify.execute(select(HubListEntry))
+            remaining = result.scalars().all()
+            assert len(remaining) == 2
+            by_name = {h.name: h for h in remaining}
+            assert by_name["Stale Hub"].status == 0
+            assert by_name["Fresh Hub"].status == 1
 
     @pytest.mark.asyncio
     async def test_prune_with_no_stale_hubs(self, db: Database, db_session: AsyncSession):

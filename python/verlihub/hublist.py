@@ -70,6 +70,11 @@ def _utcnow() -> datetime:
     """Return the current UTC time as a naive datetime (matching SQLite storage)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+
+def _as_naive(dt: datetime) -> datetime:
+    """Strip timezone info for safe cross-backend comparison."""
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
 # =============================================================================
 # Registration Client -- register *this* hub on external hublist servers
 # =============================================================================
@@ -343,7 +348,7 @@ async def check_hub_blocked(
         result = await session.execute(q)
         block = result.scalar_one_or_none()
         if block:
-            if block.expires_at and block.expires_at < now:
+            if block.expires_at and _as_naive(block.expires_at) < now:
                 await session.delete(block)
                 await session.commit()
                 continue
@@ -611,7 +616,7 @@ async def get_all_hubs(
     result = await session.execute(select(HubListEntry))
     hubs = result.scalars().all()
     for h in hubs:
-        if h.last_seen < cutoff and h.status != 0:
+        if _as_naive(h.last_seen) < cutoff and h.status != 0:
             h.status = 0
             session.add(h)
     await session.commit()

@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1221,6 +1223,10 @@ class TestMcpServer:
 class TestMcpServerBuild:
     """Test that the MCP server builds and has the right tools/resources."""
 
+    # Subprocess env that ensures the verlihub package is importable even when
+    # not pip-installed.
+    _sub_env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+
     def test_build_mcp_server_returns_server(self):
         try:
             from verlihub.client.mcp import build_mcp_server
@@ -1236,7 +1242,7 @@ class TestMcpServerBuild:
         import sys
         result = subprocess.run(
             [sys.executable, "-m", "verlihub.client.mcp", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=self._sub_env,
         )
         assert result.returncode == 0
         assert "serve" in result.stdout
@@ -1248,7 +1254,7 @@ class TestMcpServerBuild:
         import sys
         result = subprocess.run(
             [sys.executable, "-m", "verlihub.client.mcp", "serve", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=self._sub_env,
         )
         assert result.returncode == 0
         combined = result.stdout + result.stderr
@@ -1263,7 +1269,7 @@ class TestMcpServerBuild:
         import sys
         result = subprocess.run(
             [sys.executable, "-m", "verlihub.client.mcp", "serve", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=self._sub_env,
         )
         assert result.returncode == 0
         combined = result.stdout + result.stderr
@@ -1277,7 +1283,7 @@ class TestMcpServerBuild:
         import sys
         result = subprocess.run(
             [sys.executable, "-m", "verlihub.client.mcp", "client", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=self._sub_env,
         )
         assert result.returncode == 0
         combined = result.stdout + result.stderr
@@ -1293,7 +1299,7 @@ class TestMcpServerBuild:
         import sys
         result = subprocess.run(
             [sys.executable, "-m", "verlihub.client.mcp", "client", "call", "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=self._sub_env,
         )
         assert result.returncode == 0
         assert "TOOL_NAME" in result.stdout

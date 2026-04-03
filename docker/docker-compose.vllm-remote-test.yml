@@ -24,6 +24,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.verlihub-py
     container_name: vllm-remote-test-hub
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: >
       python3 -m verlihub.server
         -c /app/docker/tests/configs/vllm-remote-test.yml
@@ -47,6 +50,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.verlihub-py
     container_name: vllm-remote-test-runner
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       vllm-hub:
         condition: service_healthy

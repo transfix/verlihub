@@ -20,21 +20,30 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check vLLM endpoint reachability
+        id: vllm-check
         run: |
           echo "Checking remote vLLM endpoint..."
           if curl -sf --max-time 10 https://vllm-qwen35-35b.tinyhost.xyz/v1/models > /dev/null; then
             echo "vLLM endpoint is reachable"
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
           else
-            echo "WARNING: vLLM endpoint is not reachable — tests will likely fail"
+            echo "::warning::Remote vLLM endpoint is not reachable — skipping tests"
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Clean up previous test resources
+        if: steps.vllm-check.outputs.reachable == 'true'
         run: |
           docker compose -f docker/docker-compose.vllm-remote-test.yml down --remove-orphans --volumes 2>/dev/null || true
           docker system prune -f 2>/dev/null || true
 
       - name: Run remote vLLM integration tests
+        if: steps.vllm-check.outputs.reachable == 'true'
         run: ./docker_test_launcher.sh vllm-remote
+
+      - name: Skip notice
+        if: steps.vllm-check.outputs.reachable != 'true'
+        run: echo "::notice::Remote vLLM endpoint unreachable — tests skipped (not a code failure)"
 
       - name: Collect logs on failure
         if: failure()

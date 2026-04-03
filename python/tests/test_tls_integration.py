@@ -289,6 +289,10 @@ class TestApplyConfigTLS:
 # Compose generation — TLS proxy sidecar
 # ============================================================================
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parent.parent.parent / "run_production.sh").exists(),
+    reason="run_production.sh not found (running inside Docker image without full repo)",
+)
 class TestComposeGenerationTLS:
     """Verify docker-compose.production.yml includes TLS services."""
 
@@ -452,6 +456,10 @@ class TestUserInfoTLSDisplay:
 # Docker compose config file — TLS test config
 # ============================================================================
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parent.parent.parent / "production.example.yml").exists(),
+    reason="production.example.yml not found (running inside Docker image without full repo)",
+)
 class TestTLSConfigFiles:
     """Verify the TLS-related YAML config files are well-formed."""
 

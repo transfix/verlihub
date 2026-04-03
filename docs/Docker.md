@@ -365,41 +365,63 @@ docker:
 ## TLS/SSL Configuration
 
 Enable encrypted NMDCS connections for clients.
+In Docker deployments TLS is handled by a lightweight **Go TLS proxy sidecar** that terminates TLS and forwards plaintext NMDC to the hub.
+The proxy also injects `$MyIP` messages so the hub knows each client's real IP and TLS version.
 
-> **Note**: Requires Verlihub built with `USE_FEARTLS_PROXY=ON` or `USE_TLS_PROXY=ON`
+This architecture works identically for both the **py** and **legacy** editions.
+
+### Architecture
+
+```
+Client ─── NMDCS ──▸ TLS Proxy (Go, :411) ─── NMDC ──▸ Hub (:4111)
+```
+
+- TLS termination happens in the sidecar, not in the hub process.
+- The sidecar auto-generates a self-signed certificate when no custom cert is provided.
+- Optional **certbot sidecar** automates Let's Encrypt certificate management.
 
 ### Basic TLS (Self-Signed Certificate)
 
 ```yaml
 tls:
   enabled: true
-  internal_port: 411      # Internal proxy port
-  only_mode: false        # Allow both TLS and non-TLS clients
-  min_version: 2          # TLS 1.2 minimum
+  port: 411               # TLS proxy listen port
+  only_mode: false         # Allow both TLS and non-TLS clients
+  min_version: 2           # TLS 1.2 minimum
   cert_org: "My Hub"
   cert_email: "admin@example.com"
+  cert_host: "hub.example.com"
 ```
 
-Verlihub will automatically generate a self-signed certificate.
+The proxy generates a self-signed certificate automatically.
 
-### TLS with Custom Certificate
+### TLS with Custom Certificates
 
 ```yaml
 tls:
   enabled: true
-  internal_port: 411
-  cert_file: "/path/to/certificate.pem"
-  key_file: "/path/to/private.key"
+  port: 411
+  cert_file: "/path/to/fullchain.pem"
+  key_file: "/path/to/privkey.pem"
 ```
+
+The cert/key files are bind-mounted into the TLS proxy container.
 
 ### TLS with Let's Encrypt
 
+A certbot sidecar obtains and renews certificates automatically.
+Port 80 must be reachable from the internet for the HTTP-01 challenge.
+
 ```yaml
 tls:
   enabled: true
-  internal_port: 411
-  cert_file: "/etc/letsencrypt/live/hub.example.com/fullchain.pem"
-  key_file: "/etc/letsencrypt/live/hub.example.com/privkey.pem"
+  port: 411
+  cert_host: "hub.example.com"
+  letsencrypt:
+    enabled: true
+    domain: "hub.example.com"
+    email: "admin@example.com"
+    staging: false   # set true to use LE staging during testing
 ```
 
 ### TLS-Only Mode
@@ -420,6 +442,12 @@ tls:
 | 1 | TLS 1.1 |
 | 2 | TLS 1.2 (default, recommended) |
 | 3 | TLS 1.3 |
+
+### Legacy Edition Notes
+
+For the legacy C++ hub, `apply_config.py` writes TLS settings to the `SetupList`
+database table (e.g. `tls_listen_port`, `tls_only_mode`, `tls_min_ver`).
+The TLS proxy sidecar is used identically to the py edition.
 
 ### Client Connection
 

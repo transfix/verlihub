@@ -379,3 +379,25 @@ pytest -vvs --tb=long tests/
 ```bash
 pytest tests/test_plugins.py::TestPluginManagement::test_load_plugin -v
 ```
+
+### TLS Integration Tests
+
+`test_tls_integration.py` verifies the TLS configuration pipeline end-to-end:
+
+| Test Class | What it covers |
+|---|---|
+| `TestApplyConfigTLS` | `apply_config.py` SQL generation for TLS enable/disable |
+| `TestComposeGenerationTLS` | Docker Compose output: TLS proxy, certbot, volumes, ports, legacy edition |
+| `TestMyIPProtocol` | `UserInfoSnapshot.tls_version` via SWIG (skipped when SWIG build lacks the field) |
+| `TestUserInfoTLSDisplay` | `user_info.py` Hub TLS display with/without TLS info |
+| `TestTLSConfigFiles` | YAML config validity, Dockerfile existence, entrypoint permissions |
+
+Run them with:
+
+```bash
+pytest python/tests/test_tls_integration.py -v
+```
+
+Docker TLS test configs live in `docker/tests/configs/`:
+- `tls-selfsigned.yml` — self-signed certificate mode
+- `tls-only.yml` — TLS-only (rejects plaintext connections)

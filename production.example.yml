@@ -478,6 +478,10 @@ tls:
   cert_org: "My Hub"
   cert_email: "admin@example.com"
   cert_host: "localhost"
+  # For legacy C++ hubs: IP the TLS proxy is expected to connect from.
+  # Defaults to the TLS proxy container's Docker-internal IP.
+  # Leave empty unless you need to restrict $MyIP origin.
+  listen_ip: ""
   #
   # Let's Encrypt automatic certificate management.
   # Runs a certbot sidecar that obtains and renews certificates automatically.

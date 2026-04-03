@@ -59,8 +59,9 @@ def _format_info(info: dict) -> str:
     client_tls = "Yes" if (flag & STATUS_TLS) else "No"
     client_nat = "Yes" if (flag & STATUS_NAT) else "No"
 
-    # Hub TLS is not yet implemented in the new core — always "No"
-    lines.append(" [*] Hub TLS: No")
+    hub_tls_ver = info.get("tls_version", "")
+    hub_tls = hub_tls_ver if hub_tls_ver else "No"
+    lines.append(f" [*] Hub TLS: {hub_tls}")
     lines.append(f" [*] Client TLS: {client_tls}")
     lines.append(f" [*] Client NAT: {client_nat}")
 

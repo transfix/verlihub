@@ -140,9 +140,13 @@ class TestFormatInfo:
         assert "Client TLS: No" in text
         assert "Client NAT: No" in text
 
-    def test_hub_tls_always_no(self):
+    def test_hub_tls_no_when_absent(self):
         text = _format_info(_make_info())
         assert "Hub TLS: No" in text
+
+    def test_hub_tls_version_when_present(self):
+        text = _format_info(_make_info(tls_version="1.3"))
+        assert "Hub TLS: 1.3" in text
 
     def test_lines_joined_with_crlf(self):
         text = _format_info(_make_info())

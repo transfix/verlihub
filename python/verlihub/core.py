@@ -597,6 +597,7 @@ class HubContext:
                     "status_flag": getattr(snap, 'status_flag', 0),
                     "supports": getattr(snap, 'supports', ''),
                     "login_time": getattr(snap, 'login_time', 0),
+                    "tls_version": getattr(snap, 'tls_version', ''),
                     "status": "",
                 }
         except (AttributeError, ImportError):

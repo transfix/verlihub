@@ -158,6 +158,7 @@ struct UserInfoSnapshot {
     unsigned char status_flag{0}; ///< Status byte (away/TLS/firewall/etc.)
     std::string supports;      ///< Raw $Supports features
     long login_time{0};        ///< Seconds since connection
+    std::string tls_version;   ///< TLS version string from proxy (e.g. "1.3"), empty if no TLS
 };
 
 /**

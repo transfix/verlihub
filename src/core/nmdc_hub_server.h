@@ -178,6 +178,10 @@ struct NMDCClient {
     // ----- Flood Protection -----
     FloodState flood;              ///< Token-bucket state per message type
     int flood_warnings{0};         ///< Consecutive flood warnings (disconnect threshold)
+
+    // ----- TLS Proxy -----
+    std::string tls_version;       ///< TLS version from $MyIP (e.g. "1.3"), empty if plain
+    bool myip_processed{false};    ///< True after $MyIP was received or first non-$MyIP message
 };
 
 // ============================================================================
@@ -497,6 +501,7 @@ private:
     void HandleExtJSON(NMDCClient& client, const std::string& msg);
     void HandleMyHubURL(NMDCClient& client, const std::string& msg);
     void HandleIN(NMDCClient& client, const std::string& msg);
+    void HandleMyIP(NMDCClient& client, const std::string& msg);
 
     // =========================================================================
     // Internal Helpers

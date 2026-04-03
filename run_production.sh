@@ -241,17 +241,39 @@ user_counts = {
 }
 print(f"USER_COUNTS={user_counts['masters']},{user_counts['admins']},{user_counts['operators']},{user_counts['vips']},{user_counts['registered']}")
 
-# TLS configuration
-tls = config.get('tls', {})
-print(f"TLS_ENABLED={str(tls.get('enabled', False)).lower()}")
-print(f"TLS_INTERNAL_PORT={tls.get('internal_port', 411)}")
-print(f"TLS_ONLY_MODE={str(tls.get('only_mode', False)).lower()}")
-print(f"TLS_MIN_VERSION={tls.get('min_version', 2)}")
-print(f"TLS_CERT_FILE={tls.get('cert_file', '')}")
-print(f"TLS_KEY_FILE={tls.get('key_file', '')}")
-print(f"TLS_CERT_ORG={tls.get('cert_org', 'Verlihub')}")
-print(f"TLS_CERT_EMAIL={tls.get('cert_email', 'verlihub@localhost')}")
-EOF
+# Lua plugin & scripts
+lua = config.get("lua", {})
+print(f"LUA_ENABLED={q(str(lua.get('enabled', True)).lower())}")
+lua_autoload = lua.get("autoload", [])
+print(f"LUA_AUTOLOAD={q(','.join(lua_autoload))}")
+lua_github = lua.get("github_scripts", [])
+lua_repos = [gs.get("repo", "") for gs in lua_github if gs.get("repo")]
+print(f"LUA_GITHUB_REPOS={q(','.join(lua_repos))}")
+
+# TLS
+tls = config.get("tls", {})
+print(f"TLS_ENABLED={q(str(tls.get('enabled', False)).lower())}")
+print(f"TLS_PORT={q(tls.get('port', 411))}")
+print(f"TLS_INTERNAL_PORT={q(tls.get('internal_port', 411))}")
+print(f"TLS_ONLY_MODE={q(str(tls.get('only_mode', False)).lower())}")
+print(f"TLS_MIN_VERSION={q(tls.get('min_version', 2))}")
+print(f"TLS_CERT_FILE={q(tls.get('cert_file', ''))}")
+print(f"TLS_KEY_FILE={q(tls.get('key_file', ''))}")
+print(f"TLS_CERT_ORG={q(tls.get('cert_org', 'Verlihub'))}")
+print(f"TLS_CERT_EMAIL={q(tls.get('cert_email', 'verlihub@localhost'))}")
+print(f"TLS_CERT_HOST={q(tls.get('cert_host', 'localhost'))}")
+
+# Let's Encrypt
+le = tls.get("letsencrypt", {})
+le_enabled = str(le.get('enabled', False)).lower() == 'true'
+print(f"LE_ENABLED={q(str(le_enabled).lower())}")
+print(f"LE_DOMAIN={q(le.get('domain', ''))}")
+print(f"LE_EMAIL={q(le.get('email', ''))}")
+print(f"LE_STAGING={q(str(le.get('staging', False)).lower())}")
+
+# Edition hint (if present in YAML)
+print(f"YAML_EDITION={q(config.get('edition', ''))}")
+PYEOF
 }
 
 # Generate docker-compose file for production
@@ -463,6 +485,90 @@ _compose_ollama_service() {
 EOF
 }
 
+# ── Compose generation — TLS proxy sidecar ───────────────────────────────────
+
+_compose_tls_proxy() {
+    local hub_container="${CONTAINER_PREFIX}-hub"
+    local tls_port="${TLS_PORT:-411}"
+    local hub_port="${HUB_PORT}"
+    local min_ver="${TLS_MIN_VERSION:-2}"
+    local cert_org="${TLS_CERT_ORG:-Verlihub}"
+    local cert_mail="${TLS_CERT_EMAIL:-verlihub@localhost}"
+    local cert_host="${TLS_CERT_HOST:-localhost}"
+    local wait_ms="600"
+
+    if [ "$TLS_ONLY_MODE" = "true" ]; then
+        wait_ms="0"
+    fi
+
+    cat << EOF
+  # TLS Proxy — terminates TLS, forwards plaintext NMDC to hub
+  ${CONTAINER_PREFIX}-tls:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tls-proxy
+    container_name: ${CONTAINER_PREFIX}-tls
+    depends_on:
+      ${hub_container}:
+        condition: service_healthy
+    command: >
+      tls-proxy
+        -host :${tls_port}
+        -hub ${hub_container}:${hub_port}
+        -cert /certs/hub.crt
+        -key /certs/hub.key
+        -ver ${min_ver}
+        -wait ${wait_ms}ms
+        -cert-org "${cert_org}"
+        -cert-mail "${cert_mail}"
+        -cert-host "${cert_host}"
+        -ip
+        -log
+    ports:
+      - "${tls_port}:${tls_port}"
+    volumes:
+      - ${CONTAINER_PREFIX}-certs:/certs
+EOF
+
+    # Mount custom cert files read-only if provided
+    if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then
+        echo "      - ${TLS_CERT_FILE}:/certs/hub.crt:ro"
+        echo "      - ${TLS_KEY_FILE}:/certs/hub.key:ro"
+    fi
+
+    cat << EOF
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Compose generation — Let's Encrypt certbot sidecar ───────────────────────
+
+_compose_certbot() {
+    cat << EOF
+  # Certbot — automatic Let's Encrypt certificate management
+  ${CONTAINER_PREFIX}-certbot:
+    image: certbot/certbot:latest
+    container_name: ${CONTAINER_PREFIX}-certbot
+    entrypoint: /certbot-entrypoint.sh
+    environment:
+      LE_DOMAIN: "${LE_DOMAIN}"
+      LE_EMAIL: "${LE_EMAIL}"
+      LE_STAGING: "$([ "$LE_STAGING" = "true" ] && echo 1 || echo 0)"
+      CERT_DIR: "/certs"
+    volumes:
+      - ${CONTAINER_PREFIX}-certs:/certs
+      - ${CONTAINER_PREFIX}-letsencrypt:/etc/letsencrypt
+      - ./docker/certbot-entrypoint.sh:/certbot-entrypoint.sh:ro
+    ports:
+      - "80:80"
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
 # ── Full compose file generation ─────────────────────────────────────────────
 
 generate_compose() {
@@ -507,31 +613,45 @@ EOF
         _compose_ollama_service >> "$compose_file"
     fi
 
+    # TLS proxy sidecar
+    if [ "$TLS_ENABLED" = "true" ]; then
+        echo "" >> "$compose_file"
+        _compose_tls_proxy >> "$compose_file"
+
+        # Let's Encrypt certbot sidecar
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "" >> "$compose_file"
+            _compose_certbot >> "$compose_file"
+        fi
+    fi
+
     # Volumes and network
+    local extra_volumes=""
+    [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
+    [ "$TLS_ENABLED" = "true" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-certs:"
+    [ "$LE_ENABLED" = "true" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-letsencrypt:"
+
     if [ "$DB_TYPE" = "sqlite" ]; then
         local sqlite_vol="${CONFIG_VOLUME}-sqlite"
-        local ollama_vol_line=""
-        [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
-            ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
         cat >> "$compose_file" << EOF
 
 volumes:
   ${CONFIG_VOLUME}:
-  ${sqlite_vol}:${ollama_vol_line}
+  ${sqlite_vol}:${extra_volumes}
 
 networks:
   ${NETWORK}:
     driver: bridge
 EOF
     else
-        local ollama_vol_line=""
-        [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
-            ollama_vol_line=$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
         cat >> "$compose_file" << EOF
 
 volumes:
   ${DB_VOLUME}:
-  ${CONFIG_VOLUME}:${ollama_vol_line}
+  ${CONFIG_VOLUME}:${extra_volumes}
 
 networks:
   ${NETWORK}:
@@ -658,12 +778,36 @@ update_motd() {
     fi
 }
 
-# Copy TLS certificate files to config volume
+# ── TLS cert copy ────────────────────────────────────────────────────────────
+
 update_tls_certs() {
     if [ "$TLS_ENABLED" != "true" ]; then
         return 0
     fi
-    
+
+    # Let's Encrypt certs are handled by the certbot sidecar
+    if [ "$LE_ENABLED" = "true" ]; then
+        log_info "TLS certificates managed by Let's Encrypt certbot sidecar"
+        return 0
+    fi
+
+    if [ "$EDITION" = "py" ]; then
+        # For py edition, custom certs are bind-mounted into the TLS proxy
+        # container via the compose file. If no custom certs, the Go proxy
+        # auto-generates self-signed certs.
+        if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then
+            if [ -f "$TLS_CERT_FILE" ] && [ -f "$TLS_KEY_FILE" ]; then
+                log_success "TLS using custom certificates: $TLS_CERT_FILE"
+            else
+                log_warn "TLS cert files specified but not found — proxy will self-sign"
+            fi
+        else
+            log_info "TLS enabled — proxy will generate self-signed certificate"
+        fi
+        return 0
+    fi
+
+    # Legacy edition: docker cp certs into the hub container
     local hub_container="${CONTAINER_PREFIX}-hub"
     
     # Check if hub container is running
@@ -829,9 +973,12 @@ start_production() {
     echo "  API Enabled: $API_ENABLED (port $API_PORT)"
     echo "  TLS Enabled: $TLS_ENABLED"
     if [ "$TLS_ENABLED" = "true" ]; then
-        echo "    TLS Only Mode: $TLS_ONLY_MODE"
+        echo "    TLS Port: $TLS_PORT"
+        echo "    TLS Only: $TLS_ONLY_MODE"
         echo "    TLS Min Version: 1.$TLS_MIN_VERSION"
-        if [ -n "$TLS_CERT_FILE" ]; then
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "    Let's Encrypt: $LE_DOMAIN"
+        elif [ -n "$TLS_CERT_FILE" ]; then
             echo "    Certificate: $TLS_CERT_FILE"
         else
             echo "    Certificate: (self-signed)"
@@ -896,11 +1043,13 @@ start_production() {
         log_info "Skipping Ollama sidecar (not needed for remote providers)"
     fi
 
+    # Post-start steps: TLS cert setup (both editions)
+    update_tls_certs || true
+
     # Post-start steps (legacy only — verlihub-py handles all of this from YAML)
     if [ "$EDITION" = "legacy" ]; then
         update_hub_settings || true
         update_motd || true
-        update_tls_certs || true
         register_users || true
 
         if [ "$first_run" = "true" ] || [ "$HAS_COMMANDS" = "true" ]; then
@@ -916,7 +1065,10 @@ start_production() {
     echo ""
     echo "  Hub: dc://$HOSTNAME:$HUB_PORT"
     if [ "$TLS_ENABLED" = "true" ]; then
-        echo "  Hub (TLS): nmdcs://$HOSTNAME:$HUB_PORT"
+        echo "  Hub TLS: nmdcs://$HOSTNAME:${TLS_PORT}"
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "  Certs:   Let's Encrypt (${LE_DOMAIN})"
+        fi
     fi
     if [ "$API_ENABLED" = "true" ] && [ "$PYTHON_MODE" = "single" ]; then
         echo "  API: http://$HOSTNAME:$API_PORT"

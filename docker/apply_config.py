@@ -126,10 +126,12 @@ CONFIG_MAPPINGS: List[Tuple[str, str, Any, Optional[callable]]] = [
     
     # TLS Settings (handled separately but included for completeness)
     ('tls.internal_port', 'tls_listen_port', None, None),
+    ('tls.port', 'tls_listen_port', None, None),      # new-style alias
     ('tls.only_mode', 'tls_only_mode', None, lambda x: '1' if x else '0'),
     ('tls.min_version', 'tls_min_ver', None, None),
     ('tls.cert_org', 'tls_cert_org', None, None),
     ('tls.cert_email', 'tls_cert_mail', None, None),
+    ('tls.cert_host', 'tls_cert_host', None, None),
 ]
 
 

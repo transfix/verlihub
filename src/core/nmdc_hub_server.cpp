@@ -186,6 +186,14 @@ void NMDCHubServer::OnNewMessage(cAsyncConn* conn, std::string* msg) {
     NMDCClient& client = it->second;
 
     // Route based on message type
+    if (NMDCProtocol::IsCommand(message, "$MyIP")) {
+        HandleMyIP(client, message);
+        return;  // $MyIP is handled early, before any other dispatch
+    }
+
+    // Mark that a non-$MyIP message was received (disables future $MyIP)
+    client.myip_processed = true;
+
     if (NMDCProtocol::IsCommand(message, "$Key")) {
         HandleKey(client, message);
     } else if (NMDCProtocol::IsCommand(message, "$Supports")) {
@@ -905,6 +913,7 @@ bool NMDCHubServer::GetUserInfo(const std::string& nick, UserInfoSnapshot& out) 
     out.hubs_operator = c.hubs_operator;
     out.status_flag = c.status_flag;
     out.supports    = c.supports_text;
+    out.tls_version = c.tls_version;
     out.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - c.connect_time).count();
     return true;
@@ -937,6 +946,7 @@ std::vector<UserInfoSnapshot> NMDCHubServer::GetUserInfoSnapshots() const {
         s.hubs_operator = c.hubs_operator;
         s.status_flag = c.status_flag;
         s.supports    = c.supports_text;
+        s.tls_version = c.tls_version;
         s.login_time  = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - c.connect_time).count();
         result.push_back(std::move(s));
@@ -1350,6 +1360,41 @@ void NMDCHubServer::HandleExtJSON(NMDCClient& client, const std::string& msg) {
 // =============================================================================
 // Phase 3.6: $MyHubURL Handler
 // =============================================================================
+
+// =============================================================================
+// $MyIP Handler (TLS proxy IP injection)
+// =============================================================================
+
+void NMDCHubServer::HandleMyIP(NMDCClient& client, const std::string& msg) {
+    // $MyIP is only accepted as the first message from a connection.
+    // This prevents spoofing by regular clients.
+    if (client.myip_processed) return;
+    client.myip_processed = true;
+
+    // Format: "$MyIP <ip> <tls_version>"
+    // Example: "$MyIP 192.168.1.1 1.3"   (TLS 1.3)
+    // Example: "$MyIP 192.168.1.1 0.0"   (plain, no TLS)
+    std::string params = NMDCProtocol::GetCommandParam(msg, "$MyIP");
+    if (params.empty()) return;
+
+    size_t space = params.find(' ');
+    if (space == std::string::npos) return;
+
+    std::string real_ip = params.substr(0, space);
+    std::string tls_ver = params.substr(space + 1);
+
+    // Basic IP validation (must contain a dot for IPv4 or colon for IPv6)
+    if (real_ip.find('.') == std::string::npos &&
+        real_ip.find(':') == std::string::npos) return;
+
+    // Update the client's IP to the real client IP
+    client.ip = real_ip;
+
+    // Store TLS version ("0.0" means no TLS)
+    if (tls_ver != "0.0") {
+        client.tls_version = tls_ver;
+    }
+}
 
 void NMDCHubServer::HandleMyHubURL(NMDCClient& client, const std::string& msg) {
     if (client.state != NMDCConnState::LoggedIn) return;

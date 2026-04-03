@@ -378,10 +378,15 @@ def create_app() -> FastAPI:
     # Include dashboard router
     from verlihub.dashboard import dashboard_router
     from verlihub.dashboard.websocket import ws_router
-    from verlihub.dashboard.nmdcpb_admin import nmdcpb_router
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
-    app.include_router(nmdcpb_router, prefix="/dashboard/nmdcpb", tags=["nmdcpb-admin"])
     app.include_router(ws_router, prefix="/ws", tags=["websocket"])
+
+    # NMDCpb admin dashboard (requires protobuf)
+    try:
+        from verlihub.dashboard.nmdcpb_admin import nmdcpb_router
+        app.include_router(nmdcpb_router, prefix="/dashboard/nmdcpb", tags=["nmdcpb-admin"])
+    except ImportError:
+        logger.debug("NMDCpb admin dashboard not available (protobuf not installed)")
     
     # Health check endpoint
     @app.get("/health")

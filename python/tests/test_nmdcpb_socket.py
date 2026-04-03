@@ -187,7 +187,7 @@ class MockNMDCpbHub:
     def _process_msg(self, sock, fd, nick, msg) -> Optional[str]:
         """Process one NMDC command. Returns current nick."""
         if msg.startswith("$Supports "):
-            has_pb, has_relay = WireCodec.check_supports(msg)
+            has_pb, has_relay, _has_relayonly = WireCodec.check_supports(msg)
             with self._lock:
                 if fd in self._pending:
                     self._pending[fd]["nmdcpb"] = has_pb

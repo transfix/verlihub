@@ -300,7 +300,7 @@ class VllmRemoteE2ETests:
             self.results.record(name, False, str(e))
 
     def test_mcp_endpoint(self):
-        """Verify the in-process MCP endpoint is mounted."""
+        """Verify the in-process MCP endpoint is mounted and healthy."""
         name = "mcp_endpoint"
         if not self.token:
             self.results.record(name, False, "no auth token", skip=True)
@@ -309,9 +309,10 @@ class VllmRemoteE2ETests:
             # MCP SDK v1.26+ uses Streamable HTTP transport (not SSE).
             # A GET to the mount root returns 405 (Method Not Allowed) —
             # that proves the endpoint is mounted.  A 404 means it isn't.
+            # A 5xx means the endpoint is mounted but broken.
             r = _get(f"{self.api_url}/api/v1/mcp",
                      headers=self._auth_header(), timeout=10)
-            ok = r.status_code != 404
+            ok = r.status_code not in (404, 500, 502, 503)
             self.results.record(name, ok, f"status={r.status_code}")
         except requests.exceptions.ReadTimeout:
             # Streaming would block — that's fine, means it's mounted

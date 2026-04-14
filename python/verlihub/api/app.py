@@ -195,6 +195,7 @@ async def lifespan(app: FastAPI):
 
     # Start in-process MCP session manager (if enabled & SDK installed)
     _mcp_session_mgr = None
+    _mcp_stop_event = None
     _mcp_task = None
     try:
         mcp_cfg = cfg.mcp if cfg else None
@@ -202,7 +203,23 @@ async def lifespan(app: FastAPI):
             from verlihub.api.routes.mcp import create_mcp_mount
             mcp_app, _mcp_session_mgr = create_mcp_mount()
             if _mcp_session_mgr is not None:
-                _mcp_task = asyncio.create_task(_mcp_session_mgr.run())
+                # run() is an async context manager that keeps the internal
+                # task-group alive.  We drive it from a background task that
+                # blocks until _mcp_stop_event is set during shutdown.
+                _mcp_stop_event = asyncio.Event()
+                _mcp_ready_event = asyncio.Event()
+
+                async def _run_mcp_session_manager():
+                    async with _mcp_session_mgr.run():
+                        _mcp_ready_event.set()
+                        await _mcp_stop_event.wait()
+
+                _mcp_task = asyncio.create_task(_run_mcp_session_manager())
+                # Give the task-group a chance to initialise before proceeding
+                try:
+                    await asyncio.wait_for(_mcp_ready_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("MCP session manager startup timed out")
                 logger.info("In-process MCP session manager started")
     except Exception as mcp_err:
         logger.warning("MCP session manager failed to start: %s", mcp_err)
@@ -249,12 +266,17 @@ async def lifespan(app: FastAPI):
             pass
 
     # Stop in-process MCP session manager
+    if _mcp_stop_event is not None:
+        _mcp_stop_event.set()
     if _mcp_task is not None:
-        _mcp_task.cancel()
         try:
-            await _mcp_task
-        except Exception:
-            pass
+            await asyncio.wait_for(_mcp_task, timeout=5.0)
+        except (asyncio.TimeoutError, Exception):
+            _mcp_task.cancel()
+            try:
+                await _mcp_task
+            except Exception:
+                pass
 
     # Stop hublist registration client
     if _hublist_client is not None:

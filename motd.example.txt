@@ -1,0 +1,14 @@
+Welcome to our DC++ Hub!
+========================
+
+Rules:
+1. Be respectful to other users
+2. No spam or flooding
+3. Share quality content
+4. English in main chat
+
+Commands:
+- !help - Show available commands
+- !rules - Full rules list
+
+Enjoy your stay!

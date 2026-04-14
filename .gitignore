@@ -1,3 +1,10 @@
 /build/
 /tls-proxy/.git/
 /feartls/.git/
+/tls-proxy/License.md
+/tls-proxy/.gitignore
+
+# Production deployment (generated)
+docker-compose.production.yml
+production.yml
+*.production.yml

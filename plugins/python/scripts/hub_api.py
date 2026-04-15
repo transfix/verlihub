@@ -1695,8 +1695,15 @@ def run_server(port: int):
         )
         server = uvicorn.Server(config)
         
-        # Run in the current thread (which is already a separate thread)
-        asyncio.run(server.serve())
+        # Create a new event loop for this thread explicitly.
+        # asyncio.run() fails in Python sub-interpreters because
+        # _get_running_loop() may see a loop from the parent interpreter.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(server.serve())
+        finally:
+            loop.close()
     except Exception as e:
         print(f"[Hub API] API server error: {e}")
         import traceback

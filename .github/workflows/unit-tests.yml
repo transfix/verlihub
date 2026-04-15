@@ -58,7 +58,7 @@ jobs:
       - name: Run C++ integration tests
         run: |
           cd build
-          ctest --output-on-failure --label-regex "integration" --timeout 180 || true
+          ctest --output-on-failure --label-regex "integration" --timeout 600
 
       - name: Generate C++ coverage report
         if: success()

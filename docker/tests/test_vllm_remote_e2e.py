@@ -24,7 +24,7 @@ Usage:
     python test_vllm_remote_e2e.py \\
         --api-url http://vllm-hub:8000 \\
         --admin-user admin --admin-pass admin123 \\
-        --model cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit \\
+        --model Qwen3.5-27B-Q4_K_M.gguf \\
         --vllm-url https://vllm-qwen35-35b.tinyhost.xyz
 """
 from __future__ import annotations
@@ -381,7 +381,7 @@ def main():
                         help="Base URL of the verlihub-py API")
     parser.add_argument("--admin-user", default="admin")
     parser.add_argument("--admin-pass", default="admin123")
-    parser.add_argument("--model", default="cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit",
+    parser.add_argument("--model", default="Qwen3.5-27B-Q4_K_M.gguf",
                         help="Expected vLLM model name")
     parser.add_argument("--vllm-url",
                         default="https://vllm-qwen35-35b.tinyhost.xyz",

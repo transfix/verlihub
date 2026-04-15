@@ -1012,7 +1012,7 @@ bool cpiPython::OnUnLoad(long code)
 bool cpiPython::OnCtmToHub(cConnDC *conn, string *ref)
 {
 	if (conn && ref) {
-		w_Targs *args = lib_pack("sslls", conn->mMyNick.c_str(), conn->AddrIP().c_str(), conn->AddrPort(), conn->GetServPort(), ref->c_str());
+		w_Targs *args = lib_pack("sslls", conn->mMyNick.c_str(), conn->AddrIP().c_str(), (long)conn->AddrPort(), (long)conn->GetServPort(), ref->c_str());
 		return CallAll(W_OnCtmToHub, args, conn);
 	}
 
@@ -1176,7 +1176,7 @@ bool cpiPython::OnNewBan(cUser *user, cBan *ban) // todo: is not called
 bool cpiPython::OnSetConfig(cUser *user, string *conf, string *var, string *val_new, string *val_old, int val_type)
 {
 	if (user && conf && var && val_new && val_old) {
-		w_Targs *args = lib_pack("sssssl", user->mNick.c_str(), conf->c_str(), var->c_str(), val_new->c_str(), val_old->c_str(), val_type);
+		w_Targs *args = lib_pack("sssssl", user->mNick.c_str(), conf->c_str(), var->c_str(), val_new->c_str(), val_old->c_str(), (long)val_type);
 		return CallAll(W_OnSetConfig, args, user->mxConn);
 	}
 

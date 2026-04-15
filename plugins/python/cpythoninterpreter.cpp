@@ -66,7 +66,7 @@ bool cPythonInterpreter::Init()
 		return false;
 	}
 	id = cpiPython::lib_reserveid();
-	w_Targs *a = cpiPython::lib_pack("lssssls", id, mScriptName.c_str(), cpiPython::botname.c_str(), 
+	w_Targs *a = cpiPython::lib_pack("lssssls", (long)id, mScriptName.c_str(), cpiPython::botname.c_str(), 
 		cpiPython::opchatname.c_str(), cpiPython::me->server->mConfigBaseDir.c_str(), 
 		(long)cpiPython::me->server->mStartTime.Sec(), cpiPython::me->server->mDBConf.config_name.c_str());
 	if (!a) {

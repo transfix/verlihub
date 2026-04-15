@@ -1836,7 +1836,7 @@ int w_ReserveID()
 
 int w_Load(w_Targs *args)
 {
-	int id;
+	long id;
 	long starttime;
 	char *path, *botname, *opchatname, *config_dir, *config_name;
 
@@ -1875,12 +1875,12 @@ int w_Load(w_Targs *args)
 	// Single interpreter mode: all scripts share the same interpreter
 	// No need to create a new interpreter or swap states
 	script->state = main_state;
-	log("PY: [%d:%s] Using SINGLE interpreter mode (threading-safe, data shared)\n", id, script->name);
+	log("PY: [%ld:%s] Using SINGLE interpreter mode (threading-safe, data shared)\n", id, script->name);
 #else
 	// Sub-interpreter mode: create isolated interpreter and swap back to main
 	script->state = Py_NewInterpreter();
 	PyThreadState_Swap(main_state);
-	log("PY: [%d:%s] Created SUB-interpreter (isolated, threading limited)\n", id, script->name);
+	log("PY: [%ld:%s] Created SUB-interpreter (isolated, threading limited)\n", id, script->name);
 #endif
 	PyGILState_Release(gil);
 	if (!script->state) return -1;
@@ -1897,7 +1897,7 @@ int w_Load(w_Targs *args)
 		PyDict_SetItemString(modules, "vh", vh_mod);
 		Py_DECREF(vh_mod);
 	} else {
-		log("PY: [%d:%s] Failed to create vh module\n", id, script->name);
+		log("PY: [%ld:%s] Failed to create vh module\n", id, script->name);
 		if (PyErr_Occurred()) PyErr_Print();
 		PyThreadState_Swap(main_state);
 		PyGILState_Release(sub_gil);
@@ -1931,7 +1931,7 @@ int w_Load(w_Targs *args)
 	// Single interpreter mode: Execute script in __main__ namespace so scripts share globals
 	PyObject *main_module = PyImport_AddModule("__main__");
 	if (!main_module) {
-		log("PY: [%d:%s] Failed to get __main__ module\n", id, script->name);
+		log("PY: [%ld:%s] Failed to get __main__ module\n", id, script->name);
 		if (PyErr_Occurred()) PyErr_Print();
 		PyThreadState_Swap(main_state);
 		PyGILState_Release(sub_gil);
@@ -1952,7 +1952,7 @@ int w_Load(w_Targs *args)
 	
 	FILE *script_file = fopen(script->path, "r");
 	if (!script_file) {
-		log("PY: [%d:%s] Failed to open script file for execution: %s\n", id, script->name, script->path);
+		log("PY: [%ld:%s] Failed to open script file for execution: %s\n", id, script->name, script->path);
 		Py_DECREF(main_module);
 		PyThreadState_Swap(main_state);
 		PyGILState_Release(sub_gil);
@@ -1963,7 +1963,7 @@ int w_Load(w_Targs *args)
 	fclose(script_file);
 	
 	if (!result) {
-		log("PY: [%d:%s] Failed to execute script in __main__ namespace\n", id, script->name);
+		log("PY: [%ld:%s] Failed to execute script in __main__ namespace\n", id, script->name);
 		if (PyErr_Occurred()) PyErr_Print();
 		Py_DECREF(main_module);
 		PyThreadState_Swap(main_state);
@@ -2108,16 +2108,23 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	}
 	
 #ifndef PYTHON_SINGLE_INTERPRETER
-	// Sub-interpreter mode: need to swap to script's interpreter state
-	// In single-interpreter mode, all scripts share the same state, so no swap needed
+	// Sub-interpreter mode: create a new thread state in the sub-interpreter
+	// for the current thread. Direct use of script->state from background threads
+	// causes SEGFAULT because PyThreadState is thread-specific in CPython.
 	PyThreadState *old_state = PyThreadState_Get();
-	PyThreadState_Swap(script->state);
+	PyThreadState *sub_tstate = PyThreadState_New(script->state->interp);
+	if (!sub_tstate) {
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+	PyThreadState_Swap(sub_tstate);
 #endif
 
 	const char *name = w_HookName(num);
 	if (!name) {
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2129,6 +2136,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	if (!module) {
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2140,6 +2148,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2152,6 +2161,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2177,6 +2187,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+					PyThreadState_Delete(sub_tstate);
 #endif
 					PyGILState_Release(gstate);
 					return NULL;
@@ -2199,6 +2210,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 						Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 						PyThreadState_Swap(old_state);
+						PyThreadState_Delete(sub_tstate);
 #endif
 						PyGILState_Release(gstate);
 						return NULL;
@@ -2222,6 +2234,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+					PyThreadState_Delete(sub_tstate);
 #endif
 					PyGILState_Release(gstate);
 					return NULL;
@@ -2241,6 +2254,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 					Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 					PyThreadState_Swap(old_state);
+					PyThreadState_Delete(sub_tstate);
 #endif
 					PyGILState_Release(gstate);
 					return NULL;
@@ -2254,6 +2268,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 				Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 				PyThreadState_Swap(old_state);
+				PyThreadState_Delete(sub_tstate);
 #endif
 				PyGILState_Release(gstate);
 				return NULL;
@@ -2273,6 +2288,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 			Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+			PyThreadState_Delete(sub_tstate);
 #endif
 			PyGILState_Release(gstate);
 			return NULL;
@@ -2289,6 +2305,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2303,6 +2320,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2323,9 +2341,8 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		if (PyErr_Occurred()) PyErr_Print();
 		Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
-#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
-#endif
+		PyThreadState_Delete(sub_tstate);
 #endif
 		PyGILState_Release(gstate);
 		return NULL;
@@ -2354,6 +2371,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 			Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+			PyThreadState_Delete(sub_tstate);
 #endif
 			PyGILState_Release(gstate);
 			return NULL;
@@ -2382,6 +2400,7 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	Py_XDECREF(module);
 #ifndef PYTHON_SINGLE_INTERPRETER
 	PyThreadState_Swap(old_state);
+	PyThreadState_Delete(sub_tstate);
 #endif
 	PyGILState_Release(gstate);
 	return ret;

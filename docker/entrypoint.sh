@@ -79,12 +79,21 @@ init_config() {
         ln -sf /usr/local/lib/libpython_pi.so /etc/verlihub/plugins/libpython_pi.so
     fi
     
+    # Set up Lua plugin symlink
+    if [ -f /usr/local/lib/liblua_pi.so ] && [ ! -f /etc/verlihub/plugins/liblua_pi.so ]; then
+        echo "[entrypoint] Setting up Lua plugin symlink..."
+        ln -sf /usr/local/lib/liblua_pi.so /etc/verlihub/plugins/liblua_pi.so
+    fi
+    
     # Set up scripts symlinks for Python plugin
     if [ -d /usr/local/share/verlihub/scripts ]; then
         echo "[entrypoint] Setting up scripts symlinks..."
         mkdir -p /etc/verlihub/scripts
         ln -sf /usr/local/share/verlihub/scripts/* /etc/verlihub/scripts/ 2>/dev/null || true
     fi
+    
+    # Fetch Lua scripts from GitHub if configured
+    setup_lua_scripts
     
     if [ ! -f /etc/verlihub/dbconfig ]; then
         echo "[entrypoint] Creating initial configuration..."
@@ -152,6 +161,11 @@ ON DUPLICATE KEY UPDATE login_pwd = VALUES(login_pwd), pwd_crypt = 0, class = 10
 -- Enable Python plugin
 INSERT INTO pi_plug (nick, path, dest, detail, autoload) VALUES
     ('python', 'libpython_pi.so', '', 'Python scripting plugin', 1)
+ON DUPLICATE KEY UPDATE autoload = 1;
+
+-- Enable Lua plugin
+INSERT INTO pi_plug (nick, path, dest, detail, autoload) VALUES
+    ('lua', 'liblua_pi.so', '', 'Lua scripting plugin', 1)
 ON DUPLICATE KEY UPDATE autoload = 1;
 EOF
         

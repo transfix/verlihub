@@ -8,3 +8,25 @@
 docker-compose.production.yml
 production.yml
 *.production.yml
+
+# SQLite databases
+*.db
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+
+# SWIG build symlinks (for development)
+python/verlihub/verlihub_core.py
+python/verlihub/_verlihub_core.so

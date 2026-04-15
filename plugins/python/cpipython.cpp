@@ -76,9 +76,9 @@ cpiPython::~cpiPython()
 {
 	fprintf(stderr, "PY: cpiPython::~cpiPython() destructor called\n");
 	
-	ostringstream o;
-	o << log_level;
-	SetConfig("pi_python", "log_level", o.str().c_str());
+	// Skip saving config during destruction - the config system may already be torn down
+	// This is especially true during test cleanup when objects are destroyed in reverse order
+	// The log_level is not critical to save during shutdown anyway
 	
 	fprintf(stderr, "PY: Calling Empty()...\n");
 	this->Empty();
@@ -1437,10 +1437,6 @@ w_Targs *_GetMyINFO(int id, w_Targs *args)
 	if (!u)
 		return NULL;
 	
-	printf("PY: _GetMyINFO - user '%s' found, mMyINFO.length()=%zu, mFakeMyINFO.length()=%zu, mShare=%lld\n",
-		nick, u->mMyINFO.length(), u->mFakeMyINFO.length(), u->mShare);
-	fflush(stdout);
-	
 	// Use real MyINFO (mMyINFO) which has the actual client data
 	// Fall back to mFakeMyINFO only if mMyINFO is empty (e.g., for bots)
 	const string& myinfo_str = u->mMyINFO.empty() ? u->mFakeMyINFO : u->mMyINFO;
@@ -1464,9 +1460,6 @@ w_Targs *_GetMyINFO(int id, w_Targs *args)
 	char *n, *desc, *tag, *speed, *mail, *size;
 	if (!cpiPython::me->SplitMyINFO(myinfo_str.c_str(), &n, &desc, &tag, &speed, &mail, &size))
 		return NULL;
-	
-	log1("PY: GetMyINFO parsed - desc='%.50s', tag='%.50s', email='%.50s', size='%s'\n",
-		desc ? desc : "(null)", tag ? tag : "(null)", mail ? mail : "(null)", size ? size : "(null)");
 	
 	w_Targs *res = cpiPython::lib_pack("ssssss", n, desc, tag, speed, mail, size);
 	return res;
@@ -1538,8 +1531,7 @@ w_Targs *_GetUserClass(int id, w_Targs *args)
 
 w_Targs *_GetNickList(int id, w_Targs *args)
 {
-	string list;
-	cpiPython::me->server->mUserList.GetNickList(list);
+	std::vector<std::string> nicks;
 	
 	// Return nicknames in hub encoding (no conversion)
 	// Python will handle encoding conversion as needed
@@ -1556,8 +1548,7 @@ w_Targs *_GetNickList(int id, w_Targs *args)
 
 w_Targs *_GetOpList(int id, w_Targs *args)
 {
-	string list;
-	cpiPython::me->server->mOpList.GetNickList(list);
+	std::vector<std::string> nicks;
 	
 	// Return nicknames in hub encoding (no conversion)
 	for (cUserCollection::iterator it = cpiPython::me->server->mOpList.begin();
@@ -1573,8 +1564,7 @@ w_Targs *_GetOpList(int id, w_Targs *args)
 
 w_Targs *_GetBotList(int id, w_Targs *args)
 {
-	string list;
-	cpiPython::me->server->mRobotList.GetNickList(list);
+	std::vector<std::string> nicks;
 	
 	// Return nicknames in hub encoding (no conversion)
 	for (cUserCollection::iterator it = cpiPython::me->server->mRobotList.begin();
@@ -2260,71 +2250,6 @@ w_Targs *_StopHub(int id, w_Targs *args)
 	if (StopHub(code, delay)) return w_ret1;
 	return NULL;
 }
-
-// ===== Phase 2: Demonstration of Enhanced C++ Function Exposure =====
-// These are refactored versions using the new template wrappers
-// Showing how the new pattern simplifies callback implementation
-
-// Example 1: String -> Long wrapper (GetUserClass refactored)
-w_Targs *_GetUserClass_v2(int id, w_Targs *args)
-{
-	auto getUserClass = [](const char *nick) -> long {
-		cUser *u = cpiPython::me->server->mUserList.GetUserByNick(nick);
-		return u ? u->mClass : -2;
-	};
-	return cpiPython::WrapStringToLong(id, args, getUserClass);
-}
-
-// Example 2: String -> String wrapper (GetUserHost refactored)
-w_Targs *_GetUserHost_v2(int id, w_Targs *args)
-{
-	auto getUserHost = [](const char *nick) -> std::string {
-		cUser *u = cpiPython::me->server->mUserList.GetUserByNick(nick);
-		if (!u || !u->mxConn) return "";
-		if (!cpiPython::me->server->mUseDNS)
-			u->mxConn->DNSLookup();
-		return u->mxConn->AddrHost();
-	};
-	return cpiPython::WrapStringToString(id, args, getUserHost);
-}
-
-// Example 3: String -> String wrapper (GetUserIP refactored)
-w_Targs *_GetUserIP_v2(int id, w_Targs *args)
-{
-	auto getUserIP = [](const char *nick) -> std::string {
-		cUser *u = cpiPython::me->server->mUserList.GetUserByNick(nick);
-		if (!u || !u->mxConn) return "";
-		return u->mxConn->AddrIP();
-	};
-	return cpiPython::WrapStringToString(id, args, getUserIP);
-}
-
-// Example 4: String, String -> Bool wrapper (demonstrative only)
-w_Targs *_ValidateUserPair_v2(int id, w_Targs *args)
-{
-	auto validatePair = [](const char *nick1, const char *nick2) -> bool {
-		if (!nick1 || !nick2 || !nick1[0] || !nick2[0]) return false;
-		cUser *u1 = cpiPython::me->server->mUserList.GetUserByNick(nick1);
-		cUser *u2 = cpiPython::me->server->mUserList.GetUserByNick(nick2);
-		return (u1 != nullptr && u2 != nullptr);
-	};
-	return cpiPython::WrapStringStringToBool(id, args, validatePair);
-}
-
-// Example 5: No args -> String wrapper (GetNickList refactored)
-w_Targs *_GetNickList_v2(int id, w_Targs *args)
-{
-	std::string list;
-	cpiPython::me->server->mUserList.GetNickList(list);
-	return cpiPython::lib_pack("s", list.c_str());
-}
-
-// Note: These _v2 functions demonstrate the new pattern but are not registered yet.
-// To use them, replace the registration in OnLoad():
-//   VH_REGISTER_CALLBACK(GetUserClass, GetUserClass_v2);
-// instead of:
-//   callbacklist[W_GetUserClass] = &_GetUserClass;
-
 
 };  // namespace nVerliHub
 

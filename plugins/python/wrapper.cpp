@@ -66,7 +66,7 @@ void w_LogLevel(int level) { log_level = level; }
 // This provides full round-trip conversion for the Python/C++ boundary.
 
 // Helper: Convert string from UTF-8 (from Python) to hub encoding
-std::string Utf8ToHub(const std::string& utf8_str) {
+static std::string Utf8ToHub(const std::string& utf8_str) {
 	if (utf8_str.empty())
 		return utf8_str;
 	
@@ -89,7 +89,7 @@ std::string Utf8ToHub(const std::string& utf8_str) {
 }
 
 // Helper: Convert string from hub encoding to UTF-8 (for returning to Python)
-std::string HubToUtf8(const std::string& hub_str) {
+static std::string HubToUtf8(const std::string& hub_str) {
 	if (hub_str.empty())
 		return hub_str;
 	
@@ -106,30 +106,11 @@ std::string HubToUtf8(const std::string& hub_str) {
 	// Use Verlihub's ICU converter: ConvertReverse(hub encoding input) -> UTF-8 output
 	std::string converted;
 	if (cpiPython::me->server->mICUConvert->ConvertReverse(hub_str.c_str(), hub_str.length(), converted)) {
-		log3("PY: HubToUtf8: ConvertReverse succeeded, result_len=%zu\n", converted.length());
-		if (converted.empty()) {
-			log("PY: Warning: ConvertReverse returned empty string for input: %.50s\n", hub_str.c_str());
-		}
 		return converted;
 	}
-	
-	// Conversion failed - replace unconvertible bytes with '?' to preserve the user
-	log("PY: Warning: Failed to convert string from hub encoding to UTF-8, using fallback: %.50s\n", 
-		hub_str.c_str());
-	
-	// Create a fallback version with '?' for bad bytes
-	std::string fallback;
-	for (size_t i = 0; i < hub_str.length(); i++) {
-		unsigned char c = hub_str[i];
-		// ASCII printable characters (0x20-0x7E) are safe
-		if (c >= 0x20 && c <= 0x7E) {
-			fallback += c;
-		} else {
-			// Replace non-ASCII or non-printable with '?'
-			fallback += '?';
-		}
-	}
-	return fallback;
+
+	// Fallback to original string if conversion fails
+	return hub_str;
 }
 
 // Function is similar to Python's [_start:_end] slice
@@ -233,9 +214,9 @@ w_Targs *w_vapack(const char *format, va_list ap)
 			case 's':
 			case 'd':
 			case 'p':
-			case 'L':  // Phase 3: List of strings
-			case 'D':  // Phase 3: Dictionary (as JSON string)
-			case 'O':  // Phase 3: PyObject* (advanced)
+			case 'L':  //  List of strings
+			case 'D':  //  Dictionary (as JSON string)
+			case 'O':  //  PyObject* (advanced)
 				break;
 			default:
 				log1("PY: pack: format string supports 'lsdpLDO' and not '%c'\n", format[i]);
@@ -272,15 +253,15 @@ w_Targs *w_vapack(const char *format, va_list ap)
 				a->args[i].type = 'p';
 				a->args[i].p = va_arg(ap, void *);
 				break;
-			case 'L':  // Phase 3: List of strings (NULL-terminated char**)
+			case 'L':  //  List of strings (NULL-terminated char**)
 				a->args[i].type = 'L';
 				a->args[i].L = va_arg(ap, char **);
 				break;
-			case 'D':  // Phase 3: Dict as JSON string (treated as 's' internally)
+			case 'D':  //  Dict as JSON string (treated as 's' internally)
 				a->args[i].type = 'D';
 				a->args[i].s = va_arg(ap, char *);
 				break;
-			case 'O':  // Phase 3: PyObject* passthrough
+			case 'O':  //  PyObject* passthrough
 				a->args[i].type = 'O';
 				a->args[i].O = va_arg(ap, PyObject *);
 				break;
@@ -372,24 +353,22 @@ int w_unpack(w_Targs *a, const char *format, ...)
 			case 'l':
 				*va_arg(ap, long *) = a->args[arg_idx].l;
 				break;
-				
 			case 's':
 				*va_arg(ap, char **) = a->args[arg_idx].s;
 				break;
-				
 			case 'd':
 				*va_arg(ap, double *) = a->args[arg_idx].d;
 				break;
 			case 'p':
 				*va_arg(ap, void **) = a->args[arg_idx].p;
 				break;
-			case 'L':  // Phase 3: List of strings
+			case 'L':  //  List of strings
 				*va_arg(ap, char ***) = a->args[arg_idx].L;
 				break;
-			case 'D':  // Phase 3: Dict as JSON (unpacked as string)
+			case 'D':  //  Dict as JSON (unpacked as string)
 				*va_arg(ap, char **) = a->args[arg_idx].s;
 				break;
-			case 'O':  // Phase 3: PyObject* passthrough
+			case 'O':  //  PyObject* passthrough
 				*va_arg(ap, PyObject **) = a->args[arg_idx].O;
 				break;
 			default:
@@ -405,7 +384,7 @@ int w_unpack(w_Targs *a, const char *format, ...)
 
 const char *w_packprint(w_Targs *a)
 {
-	if (!a) return "NULL";
+	if (!a) return "(null)";
 
 	static char buf[1024];
 	buf[0] = 0;
@@ -418,12 +397,10 @@ const char *w_packprint(w_Targs *a)
 				snprintf(tmp, sizeof(tmp), "%ld ", a->args[i].l);
 				strcat(buf, tmp);
 				break;
-				
 			case 's':
 				snprintf(tmp, sizeof(tmp), "'%s' ", a->args[i].s);
 				strcat(buf, tmp);
 				break;
-				
 			case 'd':
 				snprintf(tmp, sizeof(tmp), "%f ", a->args[i].d);
 				strcat(buf, tmp);
@@ -432,7 +409,7 @@ const char *w_packprint(w_Targs *a)
 				snprintf(tmp, sizeof(tmp), "%p ", a->args[i].p);
 				strcat(buf, tmp);
 				break;
-			case 'L':  // Phase 3: List of strings
+			case 'L':  //  List of strings
 				{
 					strcat(buf, "[");
 					if (a->args[i].L) {
@@ -449,13 +426,13 @@ const char *w_packprint(w_Targs *a)
 					strcat(buf, "] ");
 				}
 				break;
-			case 'D':  // Phase 3: Dict as JSON string
+			case 'D':  //  Dict as JSON string
 				snprintf(tmp, sizeof(tmp), "JSON:'%.50s%s' ", 
 					a->args[i].s ? a->args[i].s : "",
 					(a->args[i].s && strlen(a->args[i].s) > 50) ? "..." : "");
 				strcat(buf, tmp);
 				break;
-			case 'O':  // Phase 3: PyObject*
+			case 'O':  //  PyObject*
 				snprintf(tmp, sizeof(tmp), "PyObject:%p ", a->args[i].O);
 				strcat(buf, tmp);
 				break;
@@ -783,7 +760,7 @@ PyObject* JsonStringToPyObject(const char* json_str)
 #endif // HAVE_RAPIDJSON
 
 //==============================================================================
-// Python 3 vh Module Implementation - Restored from Python 2 version
+// vh Module Implementation
 //==============================================================================
 
 // Helper: Get script ID from vh.myid attribute
@@ -1103,7 +1080,7 @@ static PyObject* vh_Decode(PyObject *self, PyObject *args);
 static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args);
 
 //==============================================================================
-// vh Module Functions (53 functions restored from Python 2 version)
+// vh Module Functions
 //==============================================================================
 
 static PyObject* vh_SendToOpChat(PyObject *self, PyObject *args)       { return vh_CallBool(W_SendToOpChat, args, "s|s"); }
@@ -1191,9 +1168,70 @@ static PyObject* vh_GetUserExtJSON(PyObject *self, PyObject *args)     { return 
 static PyObject* vh_GetUserCC(PyObject *self, PyObject *args)          { return vh_CallString(W_GetUserCC, args, "s"); }
 static PyObject* vh_GetIPCC(PyObject *self, PyObject *args)            { return vh_CallString(W_GetIPCC, args, "s"); }
 static PyObject* vh_GetIPCN(PyObject *self, PyObject *args)            { return vh_CallString(W_GetIPCN, args, "s"); }
-static PyObject* vh_GetIPCity(PyObject *self, PyObject *args)          { return vh_CallString(W_GetIPCity, args, "ss"); }
-static PyObject* vh_GetIPASN(PyObject *self, PyObject *args)           { return vh_CallString(W_GetIPASN, args, "ss"); }
-static PyObject* vh_GetGeoIP(PyObject *self, PyObject *args)           { return vh_CallString(W_GetGeoIP, args, "ss"); }
+static PyObject* vh_GetIPASN(PyObject *self, PyObject *args)           { return vh_CallString(W_GetIPASN, args, "s|s"); }
+
+// GetGeoIP returns a dictionary with geographic data
+static PyObject* vh_GetGeoIP(PyObject *self, PyObject *args)
+{
+	// Parse Python arguments (IP required, DB optional)
+	const char *ip = NULL, *db = NULL;
+	if (!PyArg_ParseTuple(args, "s|s", &ip, &db))
+		return NULL;
+
+	// Pack arguments for callback
+	w_Targs *call_args = w_pack(db ? "ss" : "s", ip, db);
+	if (!call_args)
+		Py_RETURN_NONE;
+
+	// Call the C++ callback
+	w_Targs *res = w_Python->callbacks[W_GetGeoIP](W_GetGeoIP, call_args);
+	if (!res)
+		Py_RETURN_NONE;
+
+	// Unpack the complex structure: 'sdsdslslp'
+	// Format: latitude(s,d) longitude(s,d) metro_code(s,l) area_code(s,l) data(p)
+	char *lat_key, *lon_key, *metro_key, *area_key;
+	double latitude, longitude;
+	long metro_code, area_code;
+	void *data_ptr;
+
+	if (!w_unpack(res, "sdsdslslp", 
+	              &lat_key, &latitude,
+	              &lon_key, &longitude,
+	              &metro_key, &metro_code,
+	              &area_key, &area_code,
+	              &data_ptr)) {
+		free(res);
+		Py_RETURN_NONE;
+	}
+
+	// Create Python dictionary
+	PyObject *dict = PyDict_New();
+	if (!dict) {
+		free(res);
+		return NULL;
+	}
+
+	// Add numeric fields
+	PyDict_SetItemString(dict, "latitude", PyFloat_FromDouble(latitude));
+	PyDict_SetItemString(dict, "longitude", PyFloat_FromDouble(longitude));
+	PyDict_SetItemString(dict, "metro_code", PyLong_FromLong(metro_code));
+	PyDict_SetItemString(dict, "area_code", PyLong_FromLong(area_code));
+
+	// Extract string fields from vector
+	if (data_ptr) {
+		std::vector<std::string> *data = static_cast<std::vector<std::string>*>(data_ptr);
+		// Vector contains key-value pairs as consecutive strings
+		for (size_t i = 0; i + 1 < data->size(); i += 2) {
+			const char *key = (*data)[i].c_str();
+			const char *value = (*data)[i + 1].c_str();
+			PyDict_SetItemString(dict, key, PyUnicode_FromString(HubToUtf8(value).c_str()));
+		}
+	}
+
+	free(res);
+	return dict;
+}
 static PyObject* vh_AddRegUser(PyObject *self, PyObject *args)         { return vh_CallBool(W_AddRegUser, args, "sl|ss"); }
 static PyObject* vh_DelRegUser(PyObject *self, PyObject *args)         { return vh_CallBool(W_DelRegUser, args, "s"); }
 static PyObject* vh_SetRegClass(PyObject *self, PyObject *args)        { return vh_CallBool(W_SetRegClass, args, "sl"); }
@@ -1212,8 +1250,8 @@ static PyObject* vh_SQL(PyObject *self, PyObject *args)                { return 
 static PyObject* vh_GetServFreq(PyObject *self, PyObject *args)        { return vh_CallLong(W_GetServFreq, args, ""); }
 static PyObject* vh_GetUsersCount(PyObject *self, PyObject *args)      { return vh_CallLong(W_GetUsersCount, args, ""); }
 static PyObject* vh_GetTotalShareSize(PyObject *self, PyObject *args)  { return vh_CallString(W_GetTotalShareSize, args, ""); }
-static PyObject* vh_usermc(PyObject *self, PyObject *args)             { return vh_CallBool(W_usermc, args, "ss"); }
-static PyObject* vh_pm(PyObject *self, PyObject *args)                 { return vh_CallBool(W_pm, args, "ss"); }
+static PyObject* vh_usermc(PyObject *self, PyObject *args)             { return vh_CallBool(W_usermc, args, "ss|s"); }
+static PyObject* vh_pm(PyObject *self, PyObject *args)                 { return vh_CallBool(W_pm, args, "ss|ss"); }
 static PyObject* vh_mc(PyObject *self, PyObject *args)                 { return vh_CallBool(W_mc, args, "s"); }
 static PyObject* vh_classmc(PyObject *self, PyObject *args)            { return vh_CallBool(W_classmc, args, "sll"); }
 static PyObject* vh_Topic(PyObject *self, PyObject *args)              { return vh_CallString(W_Topic, args, "|s"); }
@@ -1229,12 +1267,18 @@ static PyObject* vh_GetNickList(PyObject *self, PyObject *args)
 	char *json_str = NULL;
 	w_unpack(res, "D", &json_str);
 	
+	PyObject *py_list = NULL;
+	
 #ifdef HAVE_RAPIDJSON
-	PyObject *py_list = json_str ? JsonStringToPyObject(json_str) : PyList_New(0);
-	if (!py_list) py_list = PyList_New(0);
+	py_list = json_str ? JsonStringToPyObject(json_str) : PyList_New(0);
+	if (!py_list) {
+		// Clear any exception set by JsonStringToPyObject before returning fallback
+		PyErr_Clear();
+		py_list = PyList_New(0);
+	}
 #else
 	// Fallback: parse JSON with Python json module
-	PyObject *py_list = PyList_New(0);
+	py_list = PyList_New(0);
 	if (json_str) {
 		PyObject *json_module = PyImport_ImportModule("json");
 		if (json_module) {
@@ -1269,7 +1313,11 @@ static PyObject* vh_GetOpList(PyObject *self, PyObject *args)
 	
 #ifdef HAVE_RAPIDJSON
 	PyObject *py_list = json_str ? JsonStringToPyObject(json_str) : PyList_New(0);
-	if (!py_list) py_list = PyList_New(0);
+	if (!py_list) {
+		// Clear any exception set by JsonStringToPyObject before returning fallback
+		PyErr_Clear();
+		py_list = PyList_New(0);
+	}
 #else
 	// Fallback: parse JSON with Python json module
 	PyObject *py_list = PyList_New(0);
@@ -1283,6 +1331,8 @@ static PyObject* vh_GetOpList(PyObject *self, PyObject *args)
 					Py_DECREF(py_list);
 					py_list = result;
 				} else {
+					// Clear exception if parsing failed
+					PyErr_Clear();
 					Py_XDECREF(result);
 				}
 				Py_DECREF(loads_func);
@@ -1306,7 +1356,11 @@ static PyObject* vh_GetBotList(PyObject *self, PyObject *args)
 	
 #ifdef HAVE_RAPIDJSON
 	PyObject *py_list = json_str ? JsonStringToPyObject(json_str) : PyList_New(0);
-	if (!py_list) py_list = PyList_New(0);
+	if (!py_list) {
+		// Clear any exception set by JsonStringToPyObject before returning fallback
+		PyErr_Clear();
+		py_list = PyList_New(0);
+	}
 #else
 	// Fallback: parse JSON with Python json module
 	PyObject *py_list = PyList_New(0);
@@ -1320,6 +1374,8 @@ static PyObject* vh_GetBotList(PyObject *self, PyObject *args)
 					Py_DECREF(py_list);
 					py_list = result;
 				} else {
+					// Clear exception if parsing failed
+					PyErr_Clear();
 					Py_XDECREF(result);
 				}
 				Py_DECREF(loads_func);
@@ -1462,7 +1518,7 @@ static PyMethodDef vh_methods[] = {
 	{"SendDataToAll",      vh_SendDataToAll,      METH_VARARGS, "Send raw protocol data to all users"},
 	{"SendPMToAll",        vh_SendPMToAll,        METH_VARARGS, "Send PM to all users"},
 	{"CloseConnection",    vh_CloseConnection,    METH_VARARGS, "Close user connection"},
-	{"GetMyINFO",          vh_GetMyINFO,          METH_VARARGS, "Get user MyINFO string"},
+	{"GetMyINFO",          vh_GetMyINFO,          METH_VARARGS, "Get user MyINFO tuple (nick, desc, tag, speed, email, sharesize)"},
 	{"SetMyINFO",          vh_SetMyINFO,          METH_VARARGS, "Set user MyINFO"},
 	{"GetUserClass",       vh_GetUserClass,       METH_VARARGS, "Get user class (0-10)"},
 	{"GetNickList",        vh_GetNickList,        METH_VARARGS, "Get list of all nicknames"},
@@ -1481,10 +1537,10 @@ static PyMethodDef vh_methods[] = {
 	{"GetUserCC",          vh_GetUserCC,          METH_VARARGS, "Get user country code"},
 	{"GetIPCC",            vh_GetIPCC,            METH_VARARGS, "Get country code for IP"},
 	{"GetIPCN",            vh_GetIPCN,            METH_VARARGS, "Get country name for IP"},
-	{"GetIPCity",          vh_GetIPCity,          METH_VARARGS, "Get city for IP"},
 	{"GetIPASN",           vh_GetIPASN,           METH_VARARGS, "Get ASN for IP"},
 	{"GetGeoIP",           vh_GetGeoIP,           METH_VARARGS, "Get GeoIP info"},
 	{"AddRegUser",         vh_AddRegUser,         METH_VARARGS, "Register new user"},
+
 	{"DelRegUser",         vh_DelRegUser,         METH_VARARGS, "Delete registered user"},
 	{"SetRegClass",        vh_SetRegClass,        METH_VARARGS, "Set registered user class"},
 	{"Ban",                vh_Ban,                METH_VARARGS, "Ban user"},
@@ -1512,7 +1568,7 @@ static PyMethodDef vh_methods[] = {
 	{"StopHub",            vh_StopHub,            METH_VARARGS, "Stop the hub"},
 	{"Encode",             vh_Encode,             METH_VARARGS, "Encode DC++ special characters to HTML entities"},
 	{"Decode",             vh_Decode,             METH_VARARGS, "Decode HTML entities back to DC++ special characters"},
-	{"CallDynamicFunction", vh_CallDynamicFunction, METH_VARARGS, "Call a dynamically registered C++ function (Dimension 4)"},
+	{"CallDynamicFunction", vh_CallDynamicFunction, METH_VARARGS, "Call a dynamically registered C++ function"},
 	{NULL, NULL, 0, NULL}
 };
 
@@ -1540,6 +1596,7 @@ static PyObject* vh_CreateModule(long script_id)
 	PyModule_AddStringConstant(m, "name", script->name ? script->name : "");
 	PyModule_AddStringConstant(m, "path", script->path ? script->path : "");
 	PyModule_AddStringConstant(m, "config_name", script->config_name ? script->config_name : "");
+	PyModule_AddStringConstant(m, "basedir", script->config_dir ? script->config_dir : "");
 	
 	// Add connection close reason constants (from cserverdc.h)
 	PyModule_AddIntConstant(m, "eCR_DEFAULT", 0);
@@ -1599,14 +1656,18 @@ int w_Begin(w_Tcallback *callbacks)
 
 int w_End()
 {
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: w_End() called - starting Python cleanup\n");
+	#endif
 	
 	// Clean up all remaining interpreters before finalizing Python
 	// We need to track the main state before we start ending interpreters
 	PyGILState_STATE gil = PyGILState_Ensure();
 	PyThreadState *main_state = PyThreadState_Get();
 	
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: Acquired GIL, cleaning up %zu script(s)\n", w_Scripts.size());
+	#endif
 	
 	bool any_had_threads = false;
 	
@@ -1614,14 +1675,27 @@ int w_End()
 	for (size_t i = 0; i < w_Scripts_had_threads.size(); ++i) {
 		if (w_Scripts_had_threads[i]) {
 			any_had_threads = true;
+			#ifdef DEBUG_WRAPPER
 			fprintf(stderr, "PY: Script %d had threading/asyncio\n", (int)i);
+			#endif
 		}
 	}
 	
 #ifdef PYTHON_SINGLE_INTERPRETER
 	// Single interpreter mode: all scripts shared the same interpreter
 	// Just clean up the script objects, not the interpreter itself
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: Single interpreter mode - cleaning up shared interpreter\n");
+	#endif
+	
+	// Remove vh module from sys.modules so next w_Begin() gets fresh callbacks
+	PyObject *modules = PyImport_GetModuleDict();
+	if (modules && PyDict_Contains(modules, PyUnicode_FromString("vh"))) {
+		PyDict_DelItemString(modules, "vh");
+		#ifdef DEBUG_WRAPPER
+		fprintf(stderr, "PY: Removed vh module from sys.modules (will be recreated with fresh callbacks)\n");
+		#endif
+	}
 	
 	for (size_t i = 0; i < w_Scripts.size(); ++i) {
 		w_TScript *script = w_Scripts[i];
@@ -1649,14 +1723,18 @@ int w_End()
 	
 	// In single interpreter mode, we can safely call Py_Finalize even with threading
 	// because there are no sub-interpreters to corrupt
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: Calling Py_Finalize() (safe in single interpreter mode)\n");
+	#endif
 	// Note: Do NOT release GIL before Py_Finalize - Python docs say finalize handles it
 	Py_Finalize();
 	// GIL is automatically released by Py_Finalize
 	
 #else
 	// Sub-interpreter mode: each script had its own isolated interpreter
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: Sub-interpreter mode - cleaning up %zu sub-interpreters\n", w_Scripts.size());
+	#endif
 	
 	for (size_t i = 0; i < w_Scripts.size(); ++i) {
 		w_TScript *script = w_Scripts[i];
@@ -1676,13 +1754,17 @@ int w_End()
 				// This is a known limitation of Python's sub-interpreter + threading model
 				// The interpreter will leak, but it's better than crashing
 				// Reference: https://bugs.python.org/issue15751
+				#ifdef DEBUG_WRAPPER
 				fprintf(stderr, "PY: Skipping Py_EndInterpreter() for sub-interpreter %d to prevent crash\n",
 				        (int)i);
+				#endif
 				// script->state is intentionally not freed - memory leak but no crash
 				script->state = NULL;  // Clear the pointer but don't end the interpreter
 			} else {
 				// Safe to end interpreters that didn't use threading
+				#ifdef DEBUG_WRAPPER
 				fprintf(stderr, "PY: Calling Py_EndInterpreter() for sub-interpreter %d\n", (int)i);
+				#endif
 				Py_EndInterpreter(script->state);
 				script->state = NULL;
 			}
@@ -1712,15 +1794,21 @@ int w_End()
 	// This is a known Python limitation - Py_Finalize() with threading causes crashes
 	// Reference: https://bugs.python.org/issue15751
 	if (any_had_threads) {
+		#ifdef DEBUG_WRAPPER
 		fprintf(stderr, "PY: Skipping Py_Finalize() because threading was used\n");
 		fprintf(stderr, "PY: This prevents crashes but will leak Python memory (known limitation)\n");
 		fprintf(stderr, "PY: Also skipping PyGILState_Release() to avoid thread state corruption\n");
+		#endif
 		// Do NOT release GIL or finalize - just leave Python in current state
 		// This leaks memory but prevents crashes
 	} else {
+		#ifdef DEBUG_WRAPPER
 		fprintf(stderr, "PY: About to call Py_Finalize()...\n");
+		#endif
 		Py_Finalize();
+		#ifdef DEBUG_WRAPPER
 		fprintf(stderr, "PY: Py_Finalize() completed successfully\n");
+		#endif
 		// No PyGILState_Release after Py_Finalize
 	}
 #endif
@@ -1750,7 +1838,7 @@ int w_Load(w_Targs *args)
 	long starttime;
 	char *path, *botname, *opchatname, *config_dir, *config_name;
 
-	if (!w_unpack(args, "lssssls", &id, &path, &botname, &opchatname, &config_dir, &starttime, &config_name)) return -1;
+	if (!w_unpack(args, "lssssls", &id, &path, &botname, &opchatname, &config_dir, &starttime, &config_name)) return -1;  // Fixed unpack to match 7 args from pack call; original had 6, causing data mismatch
 
 	w_TScript *script = w_Scripts[id];
 	if (!script) return -1;
@@ -1759,6 +1847,7 @@ int w_Load(w_Targs *args)
 	script->botname = strdup(botname);
 	script->opchatname = strdup(opchatname);
 	script->config_name = strdup(config_name);
+	script->config_dir = strdup(config_dir);
 	script->use_old_ontimer = false;
 
 	// Extract script_dir and module_name
@@ -1833,20 +1922,63 @@ int w_Load(w_Targs *args)
 			Py_DECREF(scripts_path_str);
 		}
 	} else {
-		log("PY: Failed to decode locale for PySys_SetPath\n");
+		log("PY: Warning - could not access sys.path\n");
 	}
-#else
-	PySys_SetPath(pypath_c);
-#endif
-	free(pypath_c);
 
-	// Import the module (this executes the script)
+#ifdef PYTHON_SINGLE_INTERPRETER
+	// Single interpreter mode: Execute script in __main__ namespace so scripts share globals
+	PyObject *main_module = PyImport_AddModule("__main__");
+	if (!main_module) {
+		log("PY: [%d:%s] Failed to get __main__ module\n", id, script->name);
+		if (PyErr_Occurred()) PyErr_Print();
+		PyThreadState_Swap(main_state);
+		PyGILState_Release(sub_gil);
+		return -1;
+	}
+	Py_INCREF(main_module);
+	script->module = main_module;
+	
+	// Execute the script file in __main__'s namespace
+	PyObject *main_dict = PyModule_GetDict(main_module);  // Borrowed ref
+	
+	// Set __file__ so scripts can use it (e.g., os.path.dirname(__file__))
+	PyObject *file_str = PyUnicode_FromString(script->path);
+	if (file_str) {
+		PyDict_SetItemString(main_dict, "__file__", file_str);
+		Py_DECREF(file_str);
+	}
+	
+	FILE *script_file = fopen(script->path, "r");
+	if (!script_file) {
+		log("PY: [%d:%s] Failed to open script file for execution: %s\n", id, script->name, script->path);
+		Py_DECREF(main_module);
+		PyThreadState_Swap(main_state);
+		PyGILState_Release(sub_gil);
+		return -1;
+	}
+	
+	PyObject *result = PyRun_File(script_file, script->path, Py_file_input, main_dict, main_dict);
+	fclose(script_file);
+	
+	if (!result) {
+		log("PY: [%d:%s] Failed to execute script in __main__ namespace\n", id, script->name);
+		if (PyErr_Occurred()) PyErr_Print();
+		Py_DECREF(main_module);
+		PyThreadState_Swap(main_state);
+		PyGILState_Release(sub_gil);
+		return -1;
+	}
+	Py_DECREF(result);
+#else
+	// Sub-interpreter mode: Import as separate module (isolated namespace)
 	script->module = PyImport_ImportModule(script->name);
 	if (!script->module) {
 		if (PyErr_Occurred()) PyErr_Print();
-		PyEval_ReleaseThread(script->state);
+		PyThreadState_Swap(main_state);
+		PyGILState_Release(sub_gil);
 		return -1;
 	}
+#endif
 
 	script->hooks = (char*)calloc(W_MAX_HOOKS, sizeof(char));
 
@@ -1854,14 +1986,19 @@ int w_Load(w_Targs *args)
 		const char *hname = w_HookName(i);
 		if (hname) {
 			PyObject *func = PyObject_GetAttrString(script->module, hname);
-			if (func && PyCallable_Check(func)) {
-				script->hooks[i] = 1;
+			if (func) {
+				if (PyCallable_Check(func)) {
+					script->hooks[i] = 1;
+				}
+			} else {
+				PyErr_Clear();  // Clear error if attribute not found
 			}
 			Py_XDECREF(func);
 		}
 	}
 
-	PyEval_ReleaseThread(script->state);
+	PyThreadState_Swap(main_state);
+	PyGILState_Release(sub_gil);
 
 	return id;
 }
@@ -1902,14 +2039,18 @@ int w_Unload(int id)
 #ifdef PYTHON_SINGLE_INTERPRETER
 	// Single interpreter mode: never end the interpreter, just clean the module
 	// All scripts share the same interpreter, so we can't end it per-script
+	#ifdef DEBUG_WRAPPER
 	fprintf(stderr, "PY: Single interpreter mode - skipping Py_EndInterpreter()\n");
+	#endif
 	PyThreadState_Swap(main_state);
 #else
 	// Sub-interpreter mode: end interpreter only if no threading was used
 	// WORKAROUND: Do NOT call Py_EndInterpreter if threading was used
 	// Reference: https://bugs.python.org/issue15751
 	if (had_threads) {
+		#ifdef DEBUG_WRAPPER
 		fprintf(stderr, "PY: Skipping Py_EndInterpreter() for script %d (threading detected)\n", id);
+		#endif
 		// Switch back but don't end interpreter
 		PyThreadState_Swap(main_state);
 	} else {
@@ -1932,6 +2073,7 @@ int w_Unload(int id)
 	free(script->opchatname);
 	free(script->hooks);
 	free(script->config_name);
+	free(script->config_dir);
 	free(script);
 
 	w_Scripts[id] = NULL;
@@ -1954,20 +2096,49 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	
 	// Acquire GIL and switch to script's interpreter
 	PyGILState_STATE gstate = PyGILState_Ensure();
+	
+	// CRITICAL: Re-check script validity after acquiring GIL
+	// Script may have been unloaded by another thread between our first check and now
+	script = w_Scripts[id];
+	if (!script || !script->state) {
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+	
+#ifndef PYTHON_SINGLE_INTERPRETER
+	// Sub-interpreter mode: need to swap to script's interpreter state
+	// In single-interpreter mode, all scripts share the same state, so no swap needed
 	PyThreadState *old_state = PyThreadState_Get();
 	PyThreadState_Swap(script->state);
+#endif
 
 	const char *name = w_HookName(num);
 	if (!name) {
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
 
-	PyObject *func = PyObject_GetAttrString(script->module, name);
+	// CRITICAL: Increment module reference to protect from concurrent Py_XDECREF in w_Unload
+	PyObject *module = script->module;
+	Py_XINCREF(module);
+	if (!module) {
+#ifndef PYTHON_SINGLE_INTERPRETER
+		PyThreadState_Swap(old_state);
+#endif
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+
+	PyObject *func = PyObject_GetAttrString(module, name);
 	if (!func || !PyCallable_Check(func)) {
 		Py_XDECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -1976,49 +2147,184 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	PyObject *args = PyTuple_New(arg_count);
 	if (!args) {
 		Py_DECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
 
+	// Initialize all tuple slots to None to avoid double-free on error paths
+	for (size_t i = 0; i < arg_count; i++) {
+		Py_INCREF(Py_None);
+		PyTuple_SetItem(args, i, Py_None);
+	}
+
 	for (size_t i = 0; i < arg_count; i++) {
 		switch (params->format[i]) {
-			case 'l':
-				PyTuple_SetItem(args, i, PyLong_FromLong(params->args[i].l));
+			case 'l': {
+				PyObject *long_obj = PyLong_FromLong(params->args[i].l);
+				if (!long_obj) {
+					#ifdef DEBUG_WRAPPER
+					fprintf(stderr, "PY: w_CallHook - PyLong_FromLong failed\n");
+					#endif
+					PyErr_Clear();
+					Py_DECREF(args);
+					Py_DECREF(func);
+					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+					PyThreadState_Swap(old_state);
+#endif
+					PyGILState_Release(gstate);
+					return NULL;
+				}
+				PyTuple_SetItem(args, i, long_obj);
 				break;
+			}
 			case 's': {
 				const char *s = params->args[i].s;
 				if (s) {
-					PyTuple_SetItem(args, i, PyUnicode_FromString(s));
+					PyObject *str_obj = PyUnicode_FromString(s);
+					if (!str_obj) {
+						// Invalid UTF-8 or allocation failure
+						#ifdef DEBUG_WRAPPER
+						fprintf(stderr, "PY: w_CallHook - PyUnicode_FromString failed for hook %d\n", num);
+						#endif
+						PyErr_Clear();
+						Py_DECREF(args);
+						Py_DECREF(func);
+						Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+						PyThreadState_Swap(old_state);
+#endif
+						PyGILState_Release(gstate);
+						return NULL;
+					}
+					PyTuple_SetItem(args, i, str_obj);
 				} else {
 					Py_INCREF(Py_None);
 					PyTuple_SetItem(args, i, Py_None);
 				}
 				break;
 			}
-			case 'd':
-				PyTuple_SetItem(args, i, PyFloat_FromDouble(params->args[i].d));
+			case 'd': {
+				PyObject *float_obj = PyFloat_FromDouble(params->args[i].d);
+				if (!float_obj) {
+					#ifdef DEBUG_WRAPPER
+					fprintf(stderr, "PY: w_CallHook - PyFloat_FromDouble failed\n");
+					#endif
+					PyErr_Clear();
+					Py_DECREF(args);
+					Py_DECREF(func);
+					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+					PyThreadState_Swap(old_state);
+#endif
+					PyGILState_Release(gstate);
+					return NULL;
+				}
+				PyTuple_SetItem(args, i, float_obj);
 				break;
-			case 'p':
-				PyTuple_SetItem(args, i, PyLong_FromVoidPtr(params->args[i].p));
+			}
+			case 'p': {
+				PyObject *ptr_obj = PyLong_FromVoidPtr(params->args[i].p);
+				if (!ptr_obj) {
+					#ifdef DEBUG_WRAPPER
+					fprintf(stderr, "PY: w_CallHook - PyLong_FromVoidPtr failed\n");
+					#endif
+					PyErr_Clear();
+					Py_DECREF(args);
+					Py_DECREF(func);
+					Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+					PyThreadState_Swap(old_state);
+#endif
+					PyGILState_Release(gstate);
+					return NULL;
+				}
+				PyTuple_SetItem(args, i, ptr_obj);
 				break;
+			}
 			default:
 				Py_DECREF(args);
 				Py_DECREF(func);
+				Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 				PyThreadState_Swap(old_state);
+#endif
 				PyGILState_Release(gstate);
 				return NULL;
 		}
 	}
 
+	// Validate that args tuple is fully populated
+	for (size_t i = 0; i < arg_count; i++) {
+		PyObject *item = PyTuple_GetItem(args, i);
+		if (!item) {
+			#ifdef DEBUG_WRAPPER
+			fprintf(stderr, "PY: w_CallHook - NULL item in args tuple at index %zu\n", i);
+			#endif
+
+			Py_DECREF(args);
+			Py_DECREF(func);
+			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+			PyThreadState_Swap(old_state);
+#endif
+			PyGILState_Release(gstate);
+			return NULL;
+		}
+	}
+
+	// Validate func and args before calling
+	if (!PyCallable_Check(func)) {
+		#ifdef DEBUG_WRAPPER
+		fprintf(stderr, "PY: w_CallHook - func is not callable\n");
+		#endif
+		Py_DECREF(args);
+		Py_DECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+		PyThreadState_Swap(old_state);
+#endif
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+
+	if (!PyTuple_Check(args)) {
+		#ifdef DEBUG_WRAPPER
+		fprintf(stderr, "PY: w_CallHook - args is not a tuple\n");
+		#endif
+		Py_DECREF(args);
+		Py_DECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+		PyThreadState_Swap(old_state);
+#endif
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+
+	#ifdef DEBUG_WRAPPER
+	fprintf(stderr, "PY: w_CallHook - About to call hook %d with %zu args\n", num, arg_count);
+	#endif
 	PyObject *res = PyObject_CallObject(func, args);
+	#ifdef DEBUG_WRAPPER
+	fprintf(stderr, "PY: w_CallHook - Returned from PyObject_CallObject, res=%p\n", (void*)res);
+	#endif
 
 	Py_DECREF(args);
 	Py_DECREF(func);
 
 	if (!res) {
 		if (PyErr_Occurred()) PyErr_Print();
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2043,7 +2349,10 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 		ret = (w_Targs*)calloc(1, sizeof(w_Targs) + len * sizeof(w_Telement));
 		if (!ret) {
 			Py_DECREF(res);
+			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2068,7 +2377,10 @@ w_Targs *w_CallHook(int id, int num, w_Targs *params)
 	}
 
 	Py_DECREF(res);
+	Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 	PyThreadState_Swap(old_state);
+#endif
 	PyGILState_Release(gstate);
 	return ret;
 }
@@ -2087,14 +2399,38 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	}
 
 	PyGILState_STATE gstate = PyGILState_Ensure();
+	
+	// CRITICAL: Re-check script validity after acquiring GIL
+	// Script may have been unloaded by another thread between our first check and now
+	script = w_Scripts[id];
+	if (!script || !script->state) {
+		log("PY: w_CallFunction - script %d was unloaded\n", id);
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+	
 	PyThreadState *old_state = PyThreadState_Get();
 	PyThreadState_Swap(script->state);
 
-	PyObject *func = PyObject_GetAttrString(script->module, func_name);
+	// CRITICAL: Increment module reference to protect from concurrent Py_XDECREF in w_Unload
+	PyObject *module = script->module;
+	Py_XINCREF(module);
+	if (!module) {
+#ifndef PYTHON_SINGLE_INTERPRETER
+		PyThreadState_Swap(old_state);
+#endif
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+
+	PyObject *func = PyObject_GetAttrString(module, func_name);
 	if (!func) {
 		log("PY: w_CallFunction - function '%s' not found in script\n", func_name);
 		PyErr_Clear();
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2102,7 +2438,10 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	if (!PyCallable_Check(func)) {
 		log("PY: w_CallFunction - '%s' is not callable\n", func_name);
 		Py_DECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2112,9 +2451,18 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	if (!args) {
 		log("PY: w_CallFunction - failed to create argument tuple\n");
 		Py_DECREF(func);
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
+	}
+
+	// Initialize all tuple slots to None to avoid double-free on error paths
+	for (size_t i = 0; i < arg_count; i++) {
+		Py_INCREF(Py_None);
+		PyTuple_SetItem(args, i, Py_None);
 	}
 
 	for (size_t i = 0; i < arg_count; i++) {
@@ -2138,7 +2486,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 			case 'p':
 				PyTuple_SetItem(args, i, PyLong_FromVoidPtr(params->args[i].p));
 				break;
-			case 'L': {  // Phase 3: List of strings
+			case 'L': {  //  List of strings
 				char **list = params->args[i].L;
 				if (!list) {
 					PyTuple_SetItem(args, i, PyList_New(0));
@@ -2155,7 +2503,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 				PyTuple_SetItem(args, i, py_list);
 				break;
 			}
-			case 'D': {  // Phase 3: Dict/complex as JSON string
+			case 'D': {  //  Dict/complex as JSON string
 				const char *json_str = params->args[i].s;
 				if (!json_str || json_str[0] == '\0') {
 					PyTuple_SetItem(args, i, PyDict_New());
@@ -2203,7 +2551,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 #endif
 				break;
 			}
-			case 'O':  // Phase 3: PyObject* passthrough
+			case 'O':  //  PyObject* passthrough
 				if (params->args[i].O) {
 					Py_INCREF(params->args[i].O);  // Inc ref for tuple
 					PyTuple_SetItem(args, i, params->args[i].O);
@@ -2212,17 +2560,18 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 					PyTuple_SetItem(args, i, Py_None);
 				}
 				break;
-			default:
-				log("PY: w_CallFunction - unknown format character '%c'\n", params->format[i]);
-				Py_DECREF(args);
-				Py_DECREF(func);
-				PyThreadState_Swap(old_state);
-				PyGILState_Release(gstate);
-				return NULL;
+		default:
+			log("PY: w_CallFunction - unknown format character '%c'\n", params->format[i]);
+			Py_DECREF(args);
+			Py_DECREF(func);
+			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
+			PyThreadState_Swap(old_state);
+#endif
+			PyGILState_Release(gstate);
+			return NULL;
 		}
-	}
-
-	log2("PY: Calling function '%s' with %zu arguments\n", func_name, arg_count);
+	}	log2("PY: Calling function '%s' with %zu arguments\n", func_name, arg_count);
 	PyObject *res = PyObject_CallObject(func, args);
 
 	Py_DECREF(args);
@@ -2231,7 +2580,10 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 	if (!res) {
 		log("PY: w_CallFunction - call to '%s' failed:\n", func_name);
 		if (PyErr_Occurred()) PyErr_Print();
+		Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 		PyThreadState_Swap(old_state);
+#endif
 		PyGILState_Release(gstate);
 		return NULL;
 	}
@@ -2250,7 +2602,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		ret = w_pack("s", strdup(s));
 	} else if (res == Py_None) {
 		ret = w_pack("l", (long)0);  // Default to 0 for None
-	} else if (PyList_Check(res) || PyTuple_Check(res) || PySet_Check(res) || PyFrozenSet_Check(res)) {  // Phase 3: All containers use JSON marshaling
+	} else if (PyList_Check(res) || PyTuple_Check(res) || PySet_Check(res) || PyFrozenSet_Check(res)) {  //  All containers use JSON marshaling
 #ifdef HAVE_RAPIDJSON
 		// Use RapidJSON-based converter for all containers
 		char *json_str = PyObjectToJsonString(res);
@@ -2260,7 +2612,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 			log("PY: w_CallFunction - failed to convert container to JSON\n");
 			ret = w_pack("D", strdup("[]"));
 		}
-	} else if (PyDict_Check(res)) {  // Phase 3: Dict to 'D' format (JSON)
+	} else if (PyDict_Check(res)) {  //  Dict to 'D' format (JSON)
 #ifdef HAVE_RAPIDJSON
 		// Use RapidJSON-based converter for fast serialization
 		char *json_str = PyObjectToJsonString(res);
@@ -2306,7 +2658,10 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		ret = (w_Targs*)calloc(1, sizeof(w_Targs) + len * sizeof(w_Telement));
 		if (!ret) {
 			Py_DECREF(res);
+			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}
@@ -2348,7 +2703,10 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 		ret = (w_Targs*)calloc(1, sizeof(w_Targs) + len * sizeof(w_Telement));
 		if (!ret) {
 			Py_DECREF(res);
+			Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 			PyThreadState_Swap(old_state);
+#endif
 			PyGILState_Release(gstate);
 			return NULL;
 		}et->format = "tab";
@@ -2374,7 +2732,10 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 
 	log2("PY: Function '%s' returned successfully\n", func_name);
 	Py_DECREF(res);
+	Py_XDECREF(module);
+#ifndef PYTHON_SINGLE_INTERPRETER
 	PyThreadState_Swap(old_state);
+#endif
 	PyGILState_Release(gstate);
 	
 	// NOTE: We do NOT free params here because:
@@ -2387,7 +2748,7 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params)
 }
 
 // ============================================================================
-// Dimension 4: Dynamic C++ Function Registration
+// Dynamic C++ Function Registration
 // ============================================================================
 
 // Register a C++ callback that can be called from Python
@@ -2496,8 +2857,21 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 	// Parse remaining arguments (skip first arg which is function name)
 	int arg_count = PyTuple_Size(args) - 1;
 	
-	// Build format string for vh_ParseArgs
-	std::string format_str;
+	// Build w_Targs manually to support complex types (lists, dicts)
+	w_Targs *parsed_args = (w_Targs*)calloc(arg_count + 1, sizeof(w_Telement));
+	if (!parsed_args) {
+		PyErr_SetString(PyExc_MemoryError, "Failed to allocate argument structure");
+		return NULL;
+	}
+	
+	char *format_str = (char*)malloc(arg_count + 1);
+	if (!format_str) {
+		free(parsed_args);
+		PyErr_SetString(PyExc_MemoryError, "Failed to allocate format string");
+		return NULL;
+	}
+	
+	// Parse each argument and build format string
 	for (int i = 0; i < arg_count; i++) {
 		PyObject *arg = PyTuple_GetItem(args, i + 1);
 		
@@ -2583,23 +2957,8 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 		}
 	}
 	
-	// Create a new tuple without the function name for vh_ParseArgs
-	PyObject *call_args = PyTuple_New(arg_count);
-	for (int i = 0; i < arg_count; i++) {
-		PyObject *arg = PyTuple_GetItem(args, i + 1);
-		Py_INCREF(arg);
-		PyTuple_SetItem(call_args, i, arg);
-	}
-	
-	// Parse arguments using existing infrastructure
-	w_Targs *parsed_args = NULL;
-	int parse_result = vh_ParseArgs(-1, call_args, format_str.c_str(), &parsed_args);
-	Py_DECREF(call_args);
-	
-	if (!parse_result || !parsed_args) {
-		PyErr_SetString(PyExc_ValueError, "Failed to parse arguments");
-		return NULL;
-	}
+	format_str[arg_count] = '\0';
+	parsed_args->format = format_str;
 	
 	// Release GIL and call C++ callback
 	PyThreadState *state = PyThreadState_Get();
@@ -2638,13 +2997,24 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 				Py_INCREF(Py_None);
 				py_result = Py_None;
 			}
-			case 's': {
-				char *ret_val;
-				w_unpack(result, "s", &ret_val);
-				PyObject *py_str = ret_val ? PyUnicode_FromString(ret_val) : Py_None;
-				free(result);
-				if (py_str == Py_None) Py_INCREF(Py_None);
-				return py_str;
+			break;
+		}
+		case 'd': {
+			double ret_val;
+			w_unpack(result, "d", &ret_val);
+			py_result = PyFloat_FromDouble(ret_val);
+			break;
+		}
+		case 'L': {
+			// List of strings - return Python list
+			char **ret_val;
+			w_unpack(result, "L", &ret_val);
+			
+			py_result = PyList_New(0);
+			if (ret_val) {
+				for (int i = 0; ret_val[i] != NULL; i++) {
+					PyList_Append(py_result, PyUnicode_FromString(ret_val[i]));
+				}
 			}
 			break;
 		}
@@ -2696,10 +3066,13 @@ static PyObject* vh_CallDynamicFunction(PyObject *self, PyObject *args)
 				}
 #endif
 			}
-			default:
-				free(result);
-				Py_RETURN_NONE;
+			break;
 		}
+		default:
+			log("PY: vh_CallDynamicFunction - unsupported return type '%c'\n", result->format[0]);
+			Py_INCREF(Py_None);
+			py_result = Py_None;
+			break;
 	}
 	
 	w_free_args(result);

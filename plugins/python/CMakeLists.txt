@@ -17,7 +17,7 @@
 #	of the GNU General Public License.
 
 SET(PYTHON_PI_VERSION_MAJOR 1)
-SET(PYTHON_PI_VERSION_MINOR 6)
+SET(PYTHON_PI_VERSION_MINOR 7)
 SET(PYTHON_PI_VERSION_PATCH 0)
 SET(PYTHON_PI_VERSION_TWEAK 0)
 SET(PYTHON_PI_VERSION "${PYTHON_PI_VERSION_MAJOR}.${PYTHON_PI_VERSION_MINOR}.${PYTHON_PI_VERSION_PATCH}.${PYTHON_PI_VERSION_TWEAK}")
@@ -30,6 +30,16 @@ INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR})
 # Only enable if you need complex threading/daemon threads and accept the risks
 option(PYTHON_USE_SINGLE_INTERPRETER 
     "Use single Python interpreter (allows threading but scripts can see each other)" 
+    OFF)
+
+# Option to build Python plugin tests (requires GTest, GMock, and optionally libcurl)
+option(BUILD_PYTHON_TESTS
+    "Build Python plugin unit and integration tests"
+    ON)
+
+# Option to build legacy Python plugin tests (slow, to be refactored with thin verlihub)
+option(BUILD_LEGACY_PYTHON_TESTS
+    "Build legacy Python plugin tests (disable during thin verlihub development)"
     OFF)
 
 if(PYTHON_USE_SINGLE_INTERPRETER)
@@ -45,6 +55,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 INCLUDE_DIRECTORIES(${Python3_INCLUDE_DIRS})
 
 # Find RapidJSON for JSON parsing (header-only library)
+# RapidJSON is REQUIRED for Python plugin to function correctly
 find_path(RAPIDJSON_INCLUDE_DIR
     NAMES rapidjson/rapidjson.h
     PATHS /usr/include /usr/local/include
@@ -55,7 +66,13 @@ if(RAPIDJSON_INCLUDE_DIR)
     message(STATUS "[ OK ] RapidJSON found at ${RAPIDJSON_INCLUDE_DIR}")
     add_definitions(-DHAVE_RAPIDJSON)
 else()
-    message(WARNING "[ !! ] RapidJSON not found; advanced JSON features will use fallback")
+    message(FATAL_ERROR "[ !! ] RapidJSON not found - REQUIRED for Python plugin\n"
+            "Please install RapidJSON:\n"
+            "  Ubuntu/Debian: sudo apt-get install rapidjson-dev\n"
+            "  Fedora/RHEL:   sudo dnf install rapidjson-devel\n"
+            "  macOS:         brew install rapidjson\n"
+            "  Or download from: https://github.com/Tencent/rapidjson\n"
+            "To build without Python plugin, use: -DWITH_PYTHON=OFF")
 endif()
 
 SET(PYTHON_HDRS
@@ -102,18 +119,23 @@ TARGET_LINK_LIBRARIES(libpython_pi ${DL_LIBRARIES} libverlihub_so libvh_python_w
 
 INSTALL(TARGETS libpython_pi libvh_python_wrapper LIBRARY DESTINATION ${PLUGINDIR})
 
-# Find GTest using modern CMake approach
-find_package(GTest)
+# Only build tests if requested (enabled by default)
+if(BUILD_PYTHON_TESTS)
+    # Find GTest using modern CMake approach
+    find_package(GTest)
 
-if(GTest_FOUND)
-    # Also check for gmock
-    find_path(GMOCK_INCLUDE_DIR gmock/gmock.h PATHS /usr/include /usr/src/googletest/googlemock/include)
-    
-    # Check for libcurl (needed for API stress test)
-    find_package(CURL)
-    
-    if(GMOCK_INCLUDE_DIR)
+    if(GTest_FOUND)
+        # Also check for gmock
+        find_path(GMOCK_INCLUDE_DIR gmock/gmock.h PATHS /usr/include /usr/src/googletest/googlemock/include)
+        
+        # Check for libcurl (needed for API stress test)
+        find_package(CURL)
+        
+        if(GMOCK_INCLUDE_DIR)
         include_directories(${GTEST_INCLUDE_DIRS} ${GMOCK_INCLUDE_DIR})
+
+        if(BUILD_LEGACY_PYTHON_TESTS)
+            message(STATUS "[ OK ] Building legacy Python plugin tests (slow)")
         
         # Test executable for wrapper only
         add_executable(test_python_wrapper tests/test_wrapper.cpp)
@@ -130,9 +152,10 @@ if(GTest_FOUND)
         # Pass build directory to test for config file location
         target_compile_definitions(test_python_plugin_integration PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
 
-        # Phase 3 & 4: Advanced type marshaling tests
+        # Advanced type marshaling tests
         add_executable(test_python_advanced_types tests/test_python_advanced_types.cpp)
-        target_link_libraries(test_python_advanced_types GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
+        target_link_libraries(test_python_advanced_types GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+        target_compile_definitions(test_python_advanced_types PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}" SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
         # Test utilities library (for memory tracking)
         add_library(test_utils STATIC tests/test_utils.cpp)
@@ -143,21 +166,25 @@ if(GTest_FOUND)
         target_link_libraries(test_vh_module test_utils GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
         target_compile_definitions(test_vh_module PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
         
-        # Dimension 4: Dynamic registration tests
+        # Dynamic registration tests
         add_executable(test_dynamic_registration tests/test_dynamic_registration.cpp)
-        target_link_libraries(test_dynamic_registration GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
+        target_link_libraries(test_dynamic_registration GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+        target_compile_definitions(test_dynamic_registration PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
 
         # JSON marshaling tests
         add_executable(test_json_marshal tests/test_json_marshal.cpp)
-        target_link_libraries(test_json_marshal GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
+        target_link_libraries(test_json_marshal GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+        target_compile_definitions(test_json_marshal PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
 
         # JSON integration tests - comprehensive nested structure tests
         add_executable(test_json_integration tests/test_json_integration.cpp)
-        target_link_libraries(test_json_integration GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
+        target_link_libraries(test_json_integration GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+        target_compile_definitions(test_json_integration PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
 
         # Sets and tuples marshaling tests
         add_executable(test_sets_tuples tests/test_sets_tuples.cpp)
-        target_link_libraries(test_sets_tuples GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
+        target_link_libraries(test_sets_tuples GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+        target_compile_definitions(test_sets_tuples PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
 
         # Hub API stress test - tests FastAPI server with concurrent message processing
         if(CURL_FOUND)
@@ -174,13 +201,12 @@ if(GTest_FOUND)
         add_executable(test_dispatcher tests/test_dispatcher.cpp)
         target_link_libraries(test_dispatcher test_utils GTest::gtest GTest::gtest_main pthread libverlihub_so vhapi_so libpython_pi_core libvh_python_wrapper)
         target_compile_definitions(test_dispatcher PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}" SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-        add_test(NAME DispatcherTests COMMAND test_dispatcher)
 
         # Single interpreter mode tests (only built when option is enabled)
         if(PYTHON_USE_SINGLE_INTERPRETER)
             add_executable(test_single_interpreter tests/test_single_interpreter.cpp)
-            target_link_libraries(test_single_interpreter GTest::gtest GTest::gtest_main pthread libvh_python_wrapper)
-            add_test(NAME SingleInterpreterTests COMMAND test_single_interpreter)
+            target_link_libraries(test_single_interpreter GTest::gtest GTest::gtest_main pthread libverlihub_so -Wl,--no-as-needed libpython_pi_core -Wl,--as-needed libvh_python_wrapper vhapi_so)
+            target_compile_definitions(test_single_interpreter PRIVATE BUILD_DIR="${CMAKE_BINARY_DIR}")
         endif()
 
         # Add tests to CTest (enable_testing is called in root CMakeLists.txt)
@@ -221,6 +247,13 @@ if(GTest_FOUND)
             add_test(NAME HubApiStressTests COMMAND test_hub_api_stress)
             set_tests_properties(HubApiStressTests PROPERTIES LABELS "integration")
         endif()
+
+        if(PYTHON_USE_SINGLE_INTERPRETER)
+            add_test(NAME SingleInterpreterTests COMMAND test_single_interpreter)
+            set_tests_properties(SingleInterpreterTests PROPERTIES LABELS "integration")
+        endif()
+        
+        endif() # BUILD_LEGACY_PYTHON_TESTS
         
         message(STATUS "[ OK ] GTest and GMock found, building Python plugin tests")
     else()
@@ -228,4 +261,7 @@ if(GTest_FOUND)
     endif()
 else()
     message(STATUS "[ !! ] GTest not found; skipping test build")
+endif()
+else()
+    message(STATUS "[ .. ] Python plugin tests disabled (use -DBUILD_PYTHON_TESTS=ON to enable)")
 endif()

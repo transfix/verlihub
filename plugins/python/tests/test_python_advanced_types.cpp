@@ -1,5 +1,5 @@
 /*
-	Phase 3 & 4: Advanced Type Marshaling Tests
+	Advanced Type Marshaling Tests
 	Tests list, dict, and PyObject* marshaling between C++ and Python
 	
 	Copyright (C) 2025 Verlihub Team, info at verlihub dot net
@@ -20,13 +20,8 @@ protected:
 	static bool initialized;
 
 	static void SetUpTestSuite() {
-		// Load test script once for all tests
-		script_path = std::string(__FILE__);
-		size_t pos = script_path.find_last_of("/\\");
-		if (pos != std::string::npos) {
-			script_path = script_path.substr(0, pos + 1);
-		}
-		script_path += "test_script_advanced_types.py";
+		// Use the test script from source directory
+		script_path = std::string(SOURCE_DIR) + "/plugins/python/tests/test_script_advanced_types.py";
 		
 		// Initialize wrapper
 		w_Tcallback callbacks[W_MAX_HOOKS] = {nullptr};
@@ -66,7 +61,7 @@ int AdvancedTypesTest::script_id = -1;
 std::string AdvancedTypesTest::script_path;
 bool AdvancedTypesTest::initialized = false;
 
-// ===== Phase 3: List Marshaling Tests =====
+// ===== List Marshaling Tests =====
 
 TEST_F(AdvancedTypesTest, PythonReturnsStringList) {
 	// Call Python function that returns list of strings
@@ -121,7 +116,7 @@ TEST_F(AdvancedTypesTest, CppSendsListToPython) {
 	w_free_args(result);
 }
 
-// ===== Phase 3: Dict/JSON Marshaling Tests =====
+// ===== Dict/JSON Marshaling Tests =====
 
 TEST_F(AdvancedTypesTest, PythonReturnsDict) {
 	// Call Python function that returns dict
@@ -197,7 +192,7 @@ TEST_F(AdvancedTypesTest, ComplexDictRoundTrip) {
 	w_free_args(result);
 }
 
-// ===== Phase 4: Bidirectional API Tests =====
+// ===== Bidirectional API Tests =====
 
 TEST_F(AdvancedTypesTest, CallPythonWithArgs) {
 	// Test calling Python with arguments - must be heap-allocated for w_pack

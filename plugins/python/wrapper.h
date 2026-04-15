@@ -32,9 +32,7 @@ extern "C" {
 #include <vector>
 #include <map>
 
-#if PY_MAJOR_VERSION >= 3
 #include <wchar.h>
-#endif
 
 // user rights
 #define w_UR_CHAT 0x0001
@@ -183,7 +181,7 @@ typedef struct {
 		double d;        // 'd' - double
 		void *p;         // 'p' - void pointer
 		char **L;        // 'L' - list of strings (NULL-terminated array)
-		PyObject *O;     // 'O' - PyObject* (advanced, for Phase 3)
+		PyObject *O;     // 'O' - PyObject*
 	};
 } w_Telement;
 
@@ -206,9 +204,10 @@ typedef struct {
 	char          *opchatname;
 	bool           use_old_ontimer;
 	char          *config_name;
+	char          *config_dir;
 	bool           had_threads;  // Track if this interpreter used threading/asyncio
 	
-	// Dynamic function registry (Dimension 4)
+	// Dynamic function registry
 	std::map<std::string, w_Tcallback> *dynamic_funcs;
 } w_TScript;
 
@@ -229,10 +228,6 @@ w_Targs *w_CallFunction(int id, const char *func_name, w_Targs *params);
 PyObject *w_GetHook(int hook);
 const char *w_HookName(int hook);
 const char *w_CallName(int callback);
-
-// Encoding conversion helpers (Hub encoding <-> UTF-8 for Python)
-std::string HubToUtf8(const std::string& hub_str);
-std::string Utf8ToHub(const std::string& utf8_str);
 
 // Dynamic function registration
 // Register a C++ function that can be called from Python scripts

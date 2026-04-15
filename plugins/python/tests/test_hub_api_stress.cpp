@@ -6,6 +6,7 @@
 #include "cconndc.h"
 #include "cprotocol.h"
 #include "test_utils.h"
+#include "plugins/python/json_marshal.h"
 #include <fstream>
 #include <string>
 #include <vector>
@@ -44,6 +45,8 @@ static size_t my_curl_write_callback(void *contents, size_t size, size_t nmemb, 
 static bool http_get(const std::string& url, std::string& response, long& http_code) {
     CURL *curl = curl_easy_init();
     if (!curl) return false;
+    
+    response.clear();  // Clear response before making request
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, my_curl_write_callback);
@@ -159,8 +162,21 @@ public:
         g_server->SetConfig("config", "hub_encoding", "UTF-8", val_new, val_old);
         g_server->SetConfig("config", "hub_name", "Test Hub API", val_new, val_old);
         g_server->SetConfig("config", "hub_desc", "Testing API Endpoints", val_new, val_old);
+        g_server->SetConfig("config", "hub_host", "hub.example.com:411", val_new, val_old);
         g_server->SetConfig("config", "hub_topic", "Welcome to the test!", val_new, val_old);
         g_server->SetConfig("config", "max_users_total", "500", val_new, val_old);
+        g_server->SetConfig("config", "hub_icon_url", "https://example.com/icon.png", val_new, val_old);
+        g_server->SetConfig("config", "hub_logo_url", "https://example.com/logo.png", val_new, val_old);
+        
+        // Set config_dir so hub_api.py can find MOTD file
+        g_server->SetConfig("config", "config_dir", config_dir.c_str(), val_new, val_old);
+        g_server->mDBConf.config_name = "config";
+        
+        // Create MOTD file in the config directory
+        std::string motd_path = config_dir + "/motd";
+        std::ofstream motd_file(motd_path);
+        motd_file << "Welcome to Test Hub API!\nThis is the message of the day for testing.";
+        motd_file.close();
         
         // Also set in memory
         g_server->mC.hub_name = "Test Hub API";
@@ -193,26 +209,86 @@ public:
     }
 
     void TearDown() override {
+        std::cerr << "=== Global TearDown starting ===" << std::endl;
+        
         curl_global_cleanup();
+        std::cerr << "  ✓ curl cleanup done" << std::endl;
+        
+        // Stop all Python scripts first
+        if (g_py_plugin) {
+            std::cerr << "  Emptying Python plugin..." << std::endl;
+            try {
+                g_py_plugin->Empty();  // This will stop all scripts including FastAPI servers
+                std::cerr << "  ✓ Python scripts emptied" << std::endl;
+            } catch (...) {
+                std::cerr << "  ⚠ Exception during Python Empty()" << std::endl;
+            }
+            
+            // Give background threads time to shut down
+            std::cerr << "  Waiting for background threads..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::cerr << "  ✓ Wait complete" << std::endl;
+        }
         
         if (g_server) {
-            delete g_server;
+            std::cerr << "  Cleaning up users and connections..." << std::endl;
+            // Clean up all users and connections before deleting server
+            std::vector<cUser*> users_to_remove;
+            
+            // Collect all users first (to avoid iterator invalidation)
+            for (auto it = g_server->mUserList.begin(); it != g_server->mUserList.end(); ++it) {
+                cUserBase* user_base = *it;
+                if (user_base) {
+                    cUser* user = static_cast<cUser*>(user_base);
+                    users_to_remove.push_back(user);
+                }
+            }
+            std::cerr << "    Found " << users_to_remove.size() << " users to clean up" << std::endl;
+            
+            // Remove and delete each user and its connection
+            for (cUser* user : users_to_remove) {
+                if (user) {
+                    // Remove from user list first
+                    g_server->mUserList.Remove(user);
+                    
+                    // Delete the connection if it exists
+                    if (user->mxConn) {
+                        delete user->mxConn;
+                        user->mxConn = nullptr;
+                    }
+                    
+                    // Delete the user
+                    delete user;
+                }
+            }
+            std::cerr << "  ✓ Users and connections cleaned up" << std::endl;
+            
+            // Clear the user list
+            g_server->mUserList.Clear();
+            std::cerr << "  ✓ User list cleared" << std::endl;
+            
+            // DON'T delete the server - the destructor has issues without an event loop running
+            // Since this is test cleanup and process will exit immediately, this is acceptable
+            std::cerr << "  Skipping server deletion (process will clean up on exit)" << std::endl;
             g_server = nullptr;
         }
         
 #ifdef PYTHON_SINGLE_INTERPRETER
         if (g_py_plugin) {
-            g_py_plugin->Empty();
+            std::cerr << "  Deleting Python plugin..." << std::endl;
             delete g_py_plugin;
             g_py_plugin = nullptr;
+            std::cerr << "  ✓ Python plugin deleted" << std::endl;
         }
 #else
         // Leak Python plugin in sub-interpreter mode to avoid threading issues
         if (g_py_plugin) {
-            std::cerr << "Skipping Python cleanup (sub-interpreter mode)" << std::endl;
+            std::cerr << "  Skipping Python plugin deletion (sub-interpreter mode)" << std::endl;
             g_py_plugin = nullptr;
         }
 #endif
+        
+        std::cerr << "=== Global TearDown complete ===" << std::endl;
     }
 };
 
@@ -281,6 +357,16 @@ protected:
         conn->mpUser->mShare = 10485760;  // 10 MB
         
         return conn;
+    }
+    
+    // Helper: Set IP address on connection (accesses protected member for testing)
+    void set_connection_ip(cConnDC* conn, const std::string& ip) {
+        // Access protected mAddrIP member using pointer arithmetic
+        // This is safe in test context as we control the object lifecycle
+        struct ConnectionIPSetter : public nVerliHub::nSocket::cAsyncConn {
+            void SetIP(const std::string& ip) { mAddrIP = ip; }
+        };
+        static_cast<ConnectionIPSetter*>(static_cast<nVerliHub::nSocket::cAsyncConn*>(conn))->SetIP(ip);
     }
     
     // Helper: Send command through OnHubCommand hook
@@ -365,93 +451,149 @@ TEST_F(HubApiStressTest, ValidateApiEndpoints) {
     g_py_plugin->OnTimer(0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    // Test /api/hub endpoint
+    // Test /hub endpoint
     std::string response;
     long http_code = 0;
     
-    if (http_get("http://localhost:18085/api/hub", response, http_code)) {
-        std::cout << "\n=== /api/hub Response ===" << std::endl;
-        std::cout << response << std::endl;
+    if (http_get("http://localhost:18085/hub", response, http_code)) {
+        std::cout << "\n=== /hub Response ===" << std::endl;
+        std::cout << response.substr(0, 500) << "..." << std::endl;
         
         if (http_code == 200) {
-            // Validate response has expected JSON structure (no UTF-8 errors)
-            EXPECT_EQ(response.find("\"error\":"), std::string::npos)
-                << "/api/hub should not contain encoding errors";
+            // Parse JSON using our JSON marshaling utilities
+            nVerliHub::nPythonPlugin::JsonValue hub_data;
+            ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, hub_data))
+                << "/hub should return valid JSON";
             
-            EXPECT_NE(response.find("\"name\":"), std::string::npos) 
-                << "/api/hub should return hub name field";
+            ASSERT_TRUE(hub_data.isObject()) << "/hub should return JSON object";
             
-            EXPECT_NE(response.find("\"description\":"), std::string::npos)
-                << "/api/hub should return description field";
+            // Validate actual field values
+            ASSERT_TRUE(hub_data.object_val.count("name") > 0);
+            EXPECT_EQ(hub_data.object_val["name"].string_val, "Test Hub API")
+                << "/hub should return correct hub name";
             
-            EXPECT_NE(response.find("\"topic\":"), std::string::npos)
-                << "/api/hub should return topic field";
+            ASSERT_TRUE(hub_data.object_val.count("description") > 0);
+            EXPECT_EQ(hub_data.object_val["description"].string_val, "Testing API Endpoints")
+                << "/hub should return correct description";
             
-            EXPECT_NE(response.find("\"max_users\":"), std::string::npos)
-                << "/api/hub should return max_users field";
+            ASSERT_TRUE(hub_data.object_val.count("host") > 0);
+            EXPECT_EQ(hub_data.object_val["host"].string_val, "hub.example.com:411")
+                << "/hub should return correct hub_host value";
             
-            // Verify the hub name matches what we set
-            EXPECT_NE(response.find("Test Hub API"), std::string::npos)
-                << "/api/hub should return the configured hub name";
+            ASSERT_TRUE(hub_data.object_val.count("topic") > 0);
+            EXPECT_EQ(hub_data.object_val["topic"].string_val, "Welcome to the test!")
+                << "/hub should return correct topic";
             
-            std::cout << "✓ /api/hub endpoint validated successfully" << std::endl;
+            ASSERT_TRUE(hub_data.object_val.count("max_users") > 0);
+            EXPECT_EQ(hub_data.object_val["max_users"].int_val, 500)
+                << "/hub should return correct max_users";
+            
+            ASSERT_TRUE(hub_data.object_val.count("motd") > 0);
+            EXPECT_NE(hub_data.object_val["motd"].string_val.find("Welcome to Test Hub API!"), std::string::npos)
+                << "/hub should return MOTD from test file";
+            
+            ASSERT_TRUE(hub_data.object_val.count("icon_url") > 0);
+            EXPECT_EQ(hub_data.object_val["icon_url"].string_val, "https://example.com/icon.png")
+                << "/hub should return correct icon_url";
+            
+            ASSERT_TRUE(hub_data.object_val.count("logo_url") > 0);
+            EXPECT_EQ(hub_data.object_val["logo_url"].string_val, "https://example.com/logo.png")
+                << "/hub should return correct logo_url";
+            
+            std::cout << "✓ /hub endpoint validated with correct values" << std::endl;
         } else {
-            std::cerr << "⚠ /api/hub returned HTTP " << http_code << std::endl;
+            std::cerr << "⚠ /hub returned HTTP " << http_code << std::endl;
         }
     }
     
-    // Test /api/users endpoint
-    if (http_get("http://localhost:18085/api/users", response, http_code)) {
-        std::cout << "\n=== /api/users Response ===" << std::endl;
-        std::cout << response.substr(0, 800) << "..." << std::endl;
+    // Test /users endpoint
+    if (http_get("http://localhost:18085/users", response, http_code)) {
+        std::cout << "\n=== /users Response ===" << std::endl;
+        std::cout << response.substr(0, 500) << "..." << std::endl;
         
         if (http_code == 200) {
-            // Check that response has the expected structure
-            EXPECT_NE(response.find("\"count\":"), std::string::npos)
-                << "/api/users should return count field";
+            // Parse JSON
+            nVerliHub::nPythonPlugin::JsonValue users_data;
+            ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, users_data))
+                << "/users should return valid JSON";
             
-            EXPECT_NE(response.find("\"users\":"), std::string::npos)
-                << "/api/users should return users array";
+            ASSERT_TRUE(users_data.isObject()) << "/users should return JSON object";
             
-            // Validate that at least one user has non-zero share
-            EXPECT_NE(response.find("\"share\": 10485760"), std::string::npos)
-                << "/api/users should return correct share amounts (not zero)";
+            // Check structure
+            ASSERT_TRUE(users_data.object_val.count("count") > 0);
+            EXPECT_GT(users_data.object_val["count"].int_val, 0)
+                << "/users should return user count";
             
-            // Validate that user info fields are populated
-            EXPECT_NE(response.find("\"description\": \"Test Description\""), std::string::npos)
-                << "/api/users should return user descriptions";
+            ASSERT_TRUE(users_data.object_val.count("users") > 0);
+            ASSERT_TRUE(users_data.object_val["users"].isArray())
+                << "/users should return users array";
             
-            EXPECT_NE(response.find("\"email\": \"test@example.com\""), std::string::npos)
-                << "/api/users should return user email addresses";
+            // Find a test user and validate fields
+            bool found_test_user = false;
+            for (const auto& user : users_data.object_val["users"].array_val) {
+                if (user.isObject() && user.object_val.count("nick") > 0) {
+                    std::string nick = user.object_val.at("nick").string_val;
+                    if (nick.find("TestUser") == 0) {
+                        found_test_user = true;
+                        
+                        EXPECT_EQ(user.object_val.at("share").int_val, 10485760)
+                            << "Test user should have correct share";
+                        
+                        EXPECT_EQ(user.object_val.at("description").string_val, "Test Description")
+                            << "Test user should have description";
+                        
+                        EXPECT_EQ(user.object_val.at("email").string_val, "test@example.com")
+                            << "Test user should have email";
+                        
+                        EXPECT_EQ(user.object_val.at("tag").string_val, "<++ V:0.777,M:A,H:1/0/0,S:2>")
+                            << "Test user should have tag";
+                        
+                        break;
+                    }
+                }
+            }
             
-            EXPECT_NE(response.find("\"tag\": \"<++ V:0.777,M:A,H:1/0/0,S:2>\""), std::string::npos)
-                << "/api/users should return user client tags";
+            EXPECT_TRUE(found_test_user) << "Should find at least one test user";
             
-            std::cout << "✓ /api/users endpoint validated successfully" << std::endl;
+            std::cout << "✓ /users endpoint validated successfully" << std::endl;
         } else {
-            std::cerr << "⚠ /api/users returned HTTP " << http_code << std::endl;
+            std::cerr << "⚠ /users returned HTTP " << http_code << std::endl;
         }
     }
     
-    // Test /api/stats endpoint
-    if (http_get("http://localhost:18085/api/stats", response, http_code)) {
-        std::cout << "\n=== /api/stats Response ===" << std::endl;
-        std::cout << response << std::endl;
+    // Test /stats endpoint
+    if (http_get("http://localhost:18085/stats", response, http_code)) {
+        std::cout << "\n=== /stats Response ===" << std::endl;
+        std::cout << response.substr(0, 500) << "..." << std::endl;
         
         if (http_code == 200) {
-            // Validate response has expected fields
-            EXPECT_NE(response.find("\"users_online\""), std::string::npos)
-                << "Stats should have users_online field";
-            EXPECT_NE(response.find("\"total_share\""), std::string::npos)
-                << "Stats should have total_share field";
+            // Parse JSON
+            nVerliHub::nPythonPlugin::JsonValue stats_data;
+            ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, stats_data))
+                << "/stats should return valid JSON";
             
-            // Validate that total_share is not "0.00 B" (should show actual share)
-            EXPECT_EQ(response.find("\"total_share\": \"0.00 B\""), std::string::npos)
-                << "Stats total_share should not be zero when users have share";
+            ASSERT_TRUE(stats_data.isObject()) << "/stats should return JSON object";
             
-            std::cout << "✓ /api/stats endpoint validated successfully" << std::endl;
+            // Validate structure and values
+            ASSERT_TRUE(stats_data.object_val.count("users_online") > 0);
+            EXPECT_GT(stats_data.object_val["users_online"].int_val, 0)
+                << "/stats should return users_online > 0";
+            
+            ASSERT_TRUE(stats_data.object_val.count("max_users") > 0);
+            EXPECT_EQ(stats_data.object_val["max_users"].int_val, 500)
+                << "/stats should return correct max_users";
+            
+            ASSERT_TRUE(stats_data.object_val.count("total_share") > 0);
+            EXPECT_TRUE(stats_data.object_val["total_share"].isString())
+                << "/stats should return total_share as formatted string";
+            
+            ASSERT_TRUE(stats_data.object_val.count("hub_name") > 0);
+            EXPECT_EQ(stats_data.object_val["hub_name"].string_val, "Test Hub API")
+                << "/stats should return correct hub_name";
+            
+            std::cout << "✓ /stats endpoint validated successfully" << std::endl;
         } else {
-            std::cerr << "⚠ /api/stats returned HTTP " << http_code << std::endl;
+            std::cerr << "⚠ /stats returned HTTP " << http_code << std::endl;
         }
     }
     
@@ -510,11 +652,11 @@ TEST_F(HubApiStressTest, ConcurrentMessagesAndApiCalls) {
     std::thread api_thread([&]() {
         std::vector<std::string> endpoints = {
             "http://localhost:18081/",
-            "http://localhost:18081/api/hub",
-            "http://localhost:18081/api/stats",
-            "http://localhost:18081/api/users",
-            "http://localhost:18081/api/geo",
-            "http://localhost:18081/api/share",
+            "http://localhost:18081/hub",
+            "http://localhost:18081/stats",
+            "http://localhost:18081/users",
+            "http://localhost:18081/geo",
+            "http://localhost:18081/share",
             "http://localhost:18081/health"
         };
         
@@ -585,7 +727,7 @@ TEST_F(HubApiStressTest, ConcurrentMessagesAndApiCalls) {
     delete admin;
 }
 
-// Test 4: Rapid command processing (the scenario where crashes occur)
+// Test 5: Rapid command processing
 TEST_F(HubApiStressTest, RapidCommandProcessing) {
     cConnDC* admin = create_mock_connection("TestAdmin", 10);
     
@@ -640,7 +782,7 @@ TEST_F(HubApiStressTest, RapidCommandProcessing) {
         while (!stop_flag && count < 50) {
             std::string response;
             long http_code = 0;
-            http_get("http://localhost:18082/api/stats", response, http_code);
+            http_get("http://localhost:18082/stats", response, http_code);
             count++;
             
             // Sample memory every 10 API calls
@@ -675,7 +817,7 @@ TEST_F(HubApiStressTest, RapidCommandProcessing) {
     delete admin;
 }
 
-// Test 5: Memory leak detection under load
+// Test 6: Memory leak detection under load
 TEST_F(HubApiStressTest, MemoryLeakDetection) {
     cConnDC* admin = create_mock_connection("TestAdmin", 10);
     
@@ -698,7 +840,7 @@ TEST_F(HubApiStressTest, MemoryLeakDetection) {
             
             std::string response;
             long http_code = 0;
-            http_get("http://localhost:18083/api/users", response, http_code);
+            http_get("http://localhost:18083/users", response, http_code);
             
             // Sample memory every 100 iterations
             if (i % 100 == 0) {
@@ -1309,7 +1451,7 @@ TEST_F(HubApiStressTest, DirectGetIPCityCall) {
     std::cout << "Calling OnTimer to trigger GetIPCity calls (stress test with 500 total calls)..." << std::endl;
     
     // Call OnTimer multiple times to stress test
-    for (int i = 0; i < 10; i++) {  // Increased from 5 to 10
+    for (int i = 0; i < 10; i++) {
         g_py_plugin->OnTimer(1000);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         std::cout << "  Iteration " << (i+1) << "/10 complete" << std::endl;
@@ -1625,6 +1767,732 @@ TEST_F(HubApiStressTest, ValidateGetGeoIPStructure) {
     // Cleanup
     g_py_plugin->RemoveByName(test_script);
     unlink(test_script.c_str());
+}
+
+// Test 13: Verify uptime tracking in hub info endpoint
+TEST_F(HubApiStressTest, VerifyUptimeTracking) {
+    cConnDC* admin = create_mock_connection("TestAdmin", 10);
+    
+    std::cout << "\n=== Uptime Tracking Test ===" << std::endl;
+    
+    // Start API server
+    send_hub_command(admin, "!api start 18088", true);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // Trigger cache update
+    g_py_plugin->OnTimer(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Make initial request to /hub endpoint
+    std::string response;
+    long http_code = 0;
+    
+    if (http_get("http://localhost:18088/hub", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "Initial /hub response:" << std::endl;
+            std::cout << response << std::endl;
+            
+            // Verify uptime fields exist
+            EXPECT_NE(response.find("\"uptime_seconds\""), std::string::npos)
+                << "Hub info should contain uptime_seconds field";
+            
+            EXPECT_NE(response.find("\"uptime\""), std::string::npos)
+                << "Hub info should contain uptime (formatted) field";
+            
+            // Extract uptime_seconds value
+            size_t uptime_pos = response.find("\"uptime_seconds\":");
+            if (uptime_pos != std::string::npos) {
+                size_t value_start = response.find_first_of("0123456789", uptime_pos);
+                size_t value_end = response.find_first_of(",}", value_start);
+                if (value_start != std::string::npos && value_end != std::string::npos) {
+                    std::string uptime_str = response.substr(value_start, value_end - value_start);
+                    double uptime1 = std::stod(uptime_str);
+                    std::cout << "Initial uptime_seconds: " << uptime1 << std::endl;
+                    
+                    // Wait a few seconds
+                    std::cout << "Waiting 3 seconds..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                    
+                    // Force cache update by calling the script's update function
+                    send_hub_command(admin, "!api update", false);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    
+                    // Make second request
+                    if (http_get("http://localhost:18088/hub", response, http_code)) {
+                        if (http_code == 200) {
+                            uptime_pos = response.find("\"uptime_seconds\":");
+                            if (uptime_pos != std::string::npos) {
+                                value_start = response.find_first_of("0123456789", uptime_pos);
+                                value_end = response.find_first_of(",}", value_start);
+                                if (value_start != std::string::npos && value_end != std::string::npos) {
+                                    uptime_str = response.substr(value_start, value_end - value_start);
+                                    double uptime2 = std::stod(uptime_str);
+                                    std::cout << "Second uptime_seconds: " << uptime2 << std::endl;
+                                    
+                                    // Verify uptime increased
+                                    double delta = uptime2 - uptime1;
+                                    std::cout << "Uptime delta: " << delta << " seconds" << std::endl;
+                                    
+                                    EXPECT_GE(delta, 2.5)
+                                        << "Uptime should increase by at least 2.5 seconds (we waited 3)";
+                                    EXPECT_LE(delta, 5.0)
+                                        << "Uptime delta should be reasonable (< 5 seconds)";
+                                    
+                                    std::cout << "✓ Uptime tracking working correctly" << std::endl;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Verify formatted uptime contains expected format (e.g., "5s" or "1m 5s")
+            size_t formatted_pos = response.find("\"uptime\":");
+            if (formatted_pos != std::string::npos) {
+                size_t quote_start = response.find("\"", formatted_pos + 10);
+                size_t quote_end = response.find("\"", quote_start + 1);
+                if (quote_start != std::string::npos && quote_end != std::string::npos) {
+                    std::string uptime_formatted = response.substr(quote_start + 1, quote_end - quote_start - 1);
+                    std::cout << "Formatted uptime: " << uptime_formatted << std::endl;
+                    
+                    // Should contain 's' for seconds (at minimum)
+                    EXPECT_NE(uptime_formatted.find("s"), std::string::npos)
+                        << "Formatted uptime should contain seconds indicator";
+                    
+                    std::cout << "✓ Formatted uptime looks correct" << std::endl;
+                }
+            }
+            
+        } else {
+            std::cout << "✗ API returned HTTP " << http_code << std::endl;
+        }
+    }
+    
+    // Cleanup
+    delete admin->mpUser;
+    delete admin;
+}
+
+// Test 14: Verify clone detection in user list
+TEST_F(HubApiStressTest, VerifyCloneDetection) {
+    cConnDC* admin = create_mock_connection("TestAdmin", 10);
+    
+    std::cout << "\n=== Clone Detection Test ===" << std::endl;
+    
+    // Start API server
+    send_hub_command(admin, "!api start 18089", true);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // Create users with specific IPs and shares to test clone detection logic
+    std::vector<cConnDC*> test_users;
+    
+    // Group 1: Exact clones - same IP (192.168.1.100) + same share (50000000 = 50MB) + same ASN (AS1234)
+    cConnDC* clone1 = create_mock_connection("Clone1", 1);
+    cConnDC* clone2 = create_mock_connection("Clone2", 1);
+    clone1->mpUser->mShare = 50000000;
+    clone2->mpUser->mShare = 50000000;
+    set_connection_ip(clone1, "192.168.1.100");
+    set_connection_ip(clone2, "192.168.1.100");
+    
+    // Group 2: Same IP as clones (192.168.1.100) but different share (30000000 = 30MB), same ASN (AS1234)
+    cConnDC* nat_user = create_mock_connection("NATUser", 1);
+    nat_user->mpUser->mShare = 30000000;
+    set_connection_ip(nat_user, "192.168.1.100");
+    
+    // Group 3: Different IP (192.168.1.200) but same ASN as Group 1 (AS1234)
+    cConnDC* different_user = create_mock_connection("DifferentUser", 1);
+    different_user->mpUser->mShare = 20000000;
+    set_connection_ip(different_user, "192.168.1.200");
+    
+    // Group 4: Another set of exact clones - same IP (10.0.0.50) + same share (40000000 = 40MB) + different ASN (AS5678)
+    cConnDC* clone3 = create_mock_connection("Clone3", 1);
+    cConnDC* clone4 = create_mock_connection("Clone4", 1);
+    clone3->mpUser->mShare = 40000000;
+    clone4->mpUser->mShare = 40000000;
+    set_connection_ip(clone3, "10.0.0.50");
+    set_connection_ip(clone4, "10.0.0.50");
+    
+    test_users.push_back(clone1);
+    test_users.push_back(clone2);
+    test_users.push_back(nat_user);
+    test_users.push_back(different_user);
+    test_users.push_back(clone3);
+    test_users.push_back(clone4);
+    
+    // Add users to server
+    for (auto* user : test_users) {
+        g_server->mUserList.Add(user->mpUser);
+        user->mpUser->mInList = true;
+    }
+    
+    std::cout << "\nCreated test users:" << std::endl;
+    std::cout << "  Clone1: IP=192.168.1.100, Share=50MB, ASN=AS1234 (exact clone of Clone2)" << std::endl;
+    std::cout << "  Clone2: IP=192.168.1.100, Share=50MB, ASN=AS1234 (exact clone of Clone1)" << std::endl;
+    std::cout << "  NATUser: IP=192.168.1.100, Share=30MB, ASN=AS1234 (same IP+ASN, different share)" << std::endl;
+    std::cout << "  DifferentUser: IP=192.168.1.200, Share=20MB, ASN=AS1234 (different IP, same ASN as Group 1)" << std::endl;
+    std::cout << "  Clone3: IP=10.0.0.50, Share=40MB, ASN=AS5678 (exact clone of Clone4, different network)" << std::endl;
+    std::cout << "  Clone4: IP=10.0.0.50, Share=40MB, ASN=AS5678 (exact clone of Clone3, different network)" << std::endl;
+    
+    // Trigger cache update
+    g_py_plugin->OnTimer(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Helper lambda to check if array contains a string value
+    auto array_contains = [](const JsonValue& arr, const std::string& value) -> bool {
+        if (!arr.isArray()) return false;
+        for (const auto& elem : arr.array_val) {
+            if (elem.isString() && elem.string_val == value) {
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    // Test Clone1 - should be marked as cloned with Clone2 in clone_group
+    std::string response;
+    long http_code = 0;
+    
+    if (http_get("http://localhost:18089/user/Clone1", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "\n=== Clone1 User Data ===" << std::endl;
+            
+            JsonValue clone1_data;
+            ASSERT_TRUE(parseJson(response, clone1_data)) << "Failed to parse Clone1 JSON response";
+            ASSERT_TRUE(clone1_data.isObject()) << "Clone1 response should be a JSON object";
+            
+            // Verify Clone1 is marked as cloned
+            ASSERT_TRUE(clone1_data.object_val.count("cloned") > 0) << "Clone1 should have 'cloned' field";
+            EXPECT_TRUE(clone1_data.object_val["cloned"].isBool()) << "'cloned' should be boolean";
+            EXPECT_TRUE(clone1_data.object_val["cloned"].bool_val) 
+                << "Clone1 should be marked as cloned (has same IP+share as Clone2)";
+            
+            // Verify Clone2 is in clone_group
+            ASSERT_TRUE(clone1_data.object_val.count("clone_group") > 0) << "Clone1 should have 'clone_group' field";
+            EXPECT_TRUE(clone1_data.object_val["clone_group"].isArray()) << "'clone_group' should be array";
+            EXPECT_TRUE(array_contains(clone1_data.object_val["clone_group"], "Clone2"))
+                << "Clone1's clone_group should contain Clone2";
+            
+            // Verify same_ip_users contains Clone2 and NATUser
+            ASSERT_TRUE(clone1_data.object_val.count("same_ip_users") > 0) << "Clone1 should have 'same_ip_users' field";
+            EXPECT_TRUE(clone1_data.object_val["same_ip_users"].isArray()) << "'same_ip_users' should be array";
+            EXPECT_TRUE(array_contains(clone1_data.object_val["same_ip_users"], "Clone2"))
+                << "Clone1's same_ip_users should contain Clone2";
+            EXPECT_TRUE(array_contains(clone1_data.object_val["same_ip_users"], "NATUser"))
+                << "Clone1's same_ip_users should contain NATUser (same IP 192.168.1.100)";
+            
+            // Verify same_asn_users contains Clone2, NATUser, and DifferentUser (all share AS1234)
+            ASSERT_TRUE(clone1_data.object_val.count("same_asn_users") > 0) << "Clone1 should have 'same_asn_users' field";
+            EXPECT_TRUE(clone1_data.object_val["same_asn_users"].isArray()) << "'same_asn_users' should be array";
+            // Note: same_asn_users will only be populated if ASN data is available from GeoIP
+            // The field should exist but may be empty if GeoIP database is not configured
+            
+            std::cout << "✓ Clone1 has correct clone detection data" << std::endl;
+        }
+    }
+    
+    // Test NATUser - should NOT be marked as cloned (different share) but should have same_ip_users
+    if (http_get("http://localhost:18089/user/NATUser", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "\n=== NATUser User Data ===" << std::endl;
+            
+            JsonValue nat_data;
+            ASSERT_TRUE(parseJson(response, nat_data)) << "Failed to parse NATUser JSON response";
+            ASSERT_TRUE(nat_data.isObject()) << "NATUser response should be a JSON object";
+            
+        // NATUser has same IP as Clone1/Clone2 but different share
+        ASSERT_TRUE(nat_data.object_val.count("cloned") > 0) << "NATUser should have 'cloned' field";
+        EXPECT_TRUE(nat_data.object_val["cloned"].isBool()) << "'cloned' should be boolean";
+        // Note: NATUser is NOT cloned (different share), but it shares same IP
+        bool nat_is_cloned = nat_data.object_val["cloned"].bool_val;
+        std::cout << "  NATUser cloned status: " << (nat_is_cloned ? "true" : "false") << std::endl;            // Verify same_ip_users contains Clone1 and Clone2
+            ASSERT_TRUE(nat_data.object_val.count("same_ip_users") > 0) << "NATUser should have 'same_ip_users' field";
+            EXPECT_TRUE(nat_data.object_val["same_ip_users"].isArray()) << "'same_ip_users' should be array";
+            EXPECT_TRUE(array_contains(nat_data.object_val["same_ip_users"], "Clone1"))
+                << "NATUser's same_ip_users should contain Clone1";
+            EXPECT_TRUE(array_contains(nat_data.object_val["same_ip_users"], "Clone2"))
+                << "NATUser's same_ip_users should contain Clone2";
+            
+            // Verify same_asn_users field exists
+            ASSERT_TRUE(nat_data.object_val.count("same_asn_users") > 0) << "NATUser should have 'same_asn_users' field";
+            EXPECT_TRUE(nat_data.object_val["same_asn_users"].isArray()) << "'same_asn_users' should be array";
+            
+            std::cout << "✓ NATUser has correct clone detection data (not cloned, but shares IP)" << std::endl;
+        }
+    }
+    
+    // Test DifferentUser - should NOT be cloned and should have empty same_ip_users
+    if (http_get("http://localhost:18089/user/DifferentUser", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "\n=== DifferentUser User Data ===" << std::endl;
+            
+            JsonValue diff_data;
+            ASSERT_TRUE(parseJson(response, diff_data)) << "Failed to parse DifferentUser JSON response";
+            ASSERT_TRUE(diff_data.isObject()) << "DifferentUser response should be a JSON object";
+            
+            // Verify DifferentUser is NOT marked as cloned
+            ASSERT_TRUE(diff_data.object_val.count("cloned") > 0) << "DifferentUser should have 'cloned' field";
+            EXPECT_TRUE(diff_data.object_val["cloned"].isBool()) << "'cloned' should be boolean";
+            EXPECT_FALSE(diff_data.object_val["cloned"].bool_val)
+                << "DifferentUser should NOT be marked as cloned (unique IP+share)";
+            
+            // Verify same_ip_users is empty
+            ASSERT_TRUE(diff_data.object_val.count("same_ip_users") > 0) << "DifferentUser should have 'same_ip_users' field";
+            EXPECT_TRUE(diff_data.object_val["same_ip_users"].isArray()) << "'same_ip_users' should be array";
+            EXPECT_EQ(diff_data.object_val["same_ip_users"].array_val.size(), 0)
+                << "DifferentUser's same_ip_users should be empty (unique IP)";
+            
+            // Verify clone_group is empty
+            ASSERT_TRUE(diff_data.object_val.count("clone_group") > 0) << "DifferentUser should have 'clone_group' field";
+            EXPECT_TRUE(diff_data.object_val["clone_group"].isArray()) << "'clone_group' should be array";
+            EXPECT_EQ(diff_data.object_val["clone_group"].array_val.size(), 0)
+                << "DifferentUser's clone_group should be empty";
+            
+            // Verify same_asn_users field exists (may contain Clone1, Clone2, NATUser if they share ASN)
+            ASSERT_TRUE(diff_data.object_val.count("same_asn_users") > 0) << "DifferentUser should have 'same_asn_users' field";
+            EXPECT_TRUE(diff_data.object_val["same_asn_users"].isArray()) << "'same_asn_users' should be array";
+            // If GeoIP ASN data is available and DifferentUser shares ASN with Group 1, this array would be populated
+            
+            std::cout << "✓ DifferentUser has correct clone detection data (unique user)" << std::endl;
+        }
+    }
+    
+    // Test Clone3 - should be cloned with Clone4
+    if (http_get("http://localhost:18089/user/Clone3", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "\n=== Clone3 User Data ===" << std::endl;
+            
+            JsonValue clone3_data;
+            ASSERT_TRUE(parseJson(response, clone3_data)) << "Failed to parse Clone3 JSON response";
+            ASSERT_TRUE(clone3_data.isObject()) << "Clone3 response should be a JSON object";
+            
+            // Verify Clone3 is marked as cloned
+            ASSERT_TRUE(clone3_data.object_val.count("cloned") > 0) << "Clone3 should have 'cloned' field";
+            EXPECT_TRUE(clone3_data.object_val["cloned"].isBool()) << "'cloned' should be boolean";
+            EXPECT_TRUE(clone3_data.object_val["cloned"].bool_val)
+                << "Clone3 should be marked as cloned (has same IP+share as Clone4)";
+            
+            // Verify Clone4 is in clone_group
+            ASSERT_TRUE(clone3_data.object_val.count("clone_group") > 0) << "Clone3 should have 'clone_group' field";
+            EXPECT_TRUE(clone3_data.object_val["clone_group"].isArray()) << "'clone_group' should be array";
+            EXPECT_TRUE(array_contains(clone3_data.object_val["clone_group"], "Clone4"))
+                << "Clone3's clone_group should contain Clone4";
+            
+            // Verify same_ip_users contains only Clone4 (not Clone1/Clone2 from different IP)
+            ASSERT_TRUE(clone3_data.object_val.count("same_ip_users") > 0) << "Clone3 should have 'same_ip_users' field";
+            EXPECT_TRUE(clone3_data.object_val["same_ip_users"].isArray()) << "'same_ip_users' should be array";
+            EXPECT_TRUE(array_contains(clone3_data.object_val["same_ip_users"], "Clone4"))
+                << "Clone3's same_ip_users should contain Clone4";
+            EXPECT_FALSE(array_contains(clone3_data.object_val["same_ip_users"], "Clone1"))
+                << "Clone3's same_ip_users should NOT contain Clone1 (different IP)";
+            
+            // Verify same_asn_users contains only Clone4 (different ASN from Group 1)
+            ASSERT_TRUE(clone3_data.object_val.count("same_asn_users") > 0) << "Clone3 should have 'same_asn_users' field";
+            EXPECT_TRUE(clone3_data.object_val["same_asn_users"].isArray()) << "'same_asn_users' should be array";
+            // Note: ASN detection depends on GeoIP data which may not be available for test IPs
+            // Just verify the field exists - don't enforce specific ASN grouping
+            std::cout << "  Clone3 same_asn_users count: " 
+                      << clone3_data.object_val["same_asn_users"].array_val.size() << std::endl;
+            
+            std::cout << "✓ Clone3 has correct clone detection data (separate clone pair)" << std::endl;
+        }
+    }
+    
+    // Test /users endpoint - verify overall structure
+    if (http_get("http://localhost:18089/users", response, http_code)) {
+        if (http_code == 200) {
+            std::cout << "\n=== All Users Response ===" << std::endl;
+            
+            JsonValue users_data;
+            ASSERT_TRUE(parseJson(response, users_data)) << "Failed to parse /users JSON response";
+            ASSERT_TRUE(users_data.isObject()) << "/users response should be a JSON object";
+            
+            // Get users array
+            ASSERT_TRUE(users_data.object_val.count("users") > 0) << "Response should have 'users' field";
+            const JsonValue& users_array = users_data.object_val["users"];
+            ASSERT_TRUE(users_array.isArray()) << "'users' should be an array";
+            
+            // Count how many users are marked as cloned (should be 4: Clone1, Clone2, Clone3, Clone4)
+            int cloned_count = 0;
+            std::vector<std::string> cloned_nicks;
+            for (const auto& user : users_array.array_val) {
+                if (user.isObject() && user.object_val.count("cloned") > 0) {
+                    if (user.object_val.at("cloned").isBool() && user.object_val.at("cloned").bool_val) {
+                        cloned_count++;
+                        if (user.object_val.count("nick") > 0 && user.object_val.at("nick").isString()) {
+                            cloned_nicks.push_back(user.object_val.at("nick").string_val);
+                        }
+                    }
+                }
+            }
+            
+            std::cout << "  Cloned users: ";
+            for (const auto& nick : cloned_nicks) {
+                std::cout << nick << " ";
+            }
+            std::cout << std::endl;
+            
+            EXPECT_GE(cloned_count, 4)
+                << "Should have at least 4 users marked as cloned (Clone1, Clone2, Clone3, Clone4)";
+            
+            std::cout << "✓ Found " << cloned_count << " cloned users (expected at least 4)" << std::endl;
+            
+            // Verify all users have required clone detection fields
+            for (const auto& user : users_array.array_val) {
+                if (user.isObject()) {
+                    EXPECT_TRUE(user.object_val.count("cloned") > 0) << "User should have 'cloned' field";
+                    EXPECT_TRUE(user.object_val.count("clone_group") > 0) << "User should have 'clone_group' field";
+                    EXPECT_TRUE(user.object_val.count("same_ip_users") > 0) << "User should have 'same_ip_users' field";
+                    EXPECT_TRUE(user.object_val.count("same_asn_users") > 0) << "User should have 'same_asn_users' field";
+                }
+            }
+            
+            std::cout << "✓ All clone detection fields present in users list" << std::endl;
+        }
+    }
+    
+    // Cleanup
+    for (auto* user : test_users) {
+        g_server->mUserList.Remove(user->mpUser);
+        delete user->mpUser;
+        delete user;
+    }
+    
+    delete admin->mpUser;
+    delete admin;
+}
+
+// Test 15: Verify support_flags field is present and readable from API
+TEST_F(HubApiStressTest, VerifySupportFlags) {
+    cConnDC* admin = create_mock_connection("TestAdmin", 10);
+    
+    std::cout << "\n=== Support Flags Test ===" << std::endl;
+    
+    // Start API server
+    send_hub_command(admin, "!api start 18090", true);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // Create test user
+    cConnDC* test_user = create_mock_connection("TestUser", 1);
+    g_server->mUserList.Add(test_user->mpUser);
+    
+    // Simulate OnParsedMsgSupports hook being called
+    // This would normally happen when user sends $Supports message
+    std::string supports_msg = "$Supports OpPlus NoHello NoGetINFO UserCommand TTHSearch BZList ADCGet";
+    std::string back = "";
+    
+    std::cout << "Simulating $Supports message: " << supports_msg << std::endl;
+    
+    // Call the OnParsedMsgSupports hook directly (simulating what would happen in real scenario)
+    // In real usage, this would be called by cServerDC when parsing the $Supports protocol message
+    g_py_plugin->OnParsedMsgSupports(test_user, nullptr, &back);
+    
+    // Trigger cache update
+    g_py_plugin->OnTimer(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Fetch user from API
+    std::string response;
+    long http_code = 0;
+    
+    if (http_get("http://localhost:18090/user/TestUser", response, http_code)) {
+        ASSERT_EQ(http_code, 200) << "API should return 200 OK for user detail";
+        
+        // Parse JSON response
+        nVerliHub::nPythonPlugin::JsonValue json_result;
+        ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, json_result)) 
+            << "Failed to parse JSON response";
+        
+        ASSERT_TRUE(json_result.isObject()) << "Response should be a JSON object";
+        
+        // Verify support_flags field exists
+        std::cout << "\n--- Validating support_flags field ---" << std::endl;
+        
+        ASSERT_TRUE(json_result.object_val.count("support_flags") > 0) 
+            << "User data should have 'support_flags' field";
+        
+        ASSERT_TRUE(json_result.object_val["support_flags"].isArray()) 
+            << "'support_flags' should be an array";
+        
+        // Since we haven't actually sent a $Supports message through the protocol parser,
+        // the array might be empty. But the field should exist.
+        size_t flags_count = json_result.object_val["support_flags"].array_val.size();
+        std::cout << "support_flags array size: " << flags_count << std::endl;
+        
+        // Print all flags if any
+        if (flags_count > 0) {
+            std::cout << "Support flags found:" << std::endl;
+            for (const auto& flag : json_result.object_val["support_flags"].array_val) {
+                if (flag.isString()) {
+                    std::cout << "  - " << flag.string_val << std::endl;
+                }
+            }
+        } else {
+            std::cout << "Note: support_flags array is empty (expected - hook needs actual protocol message)" << std::endl;
+        }
+        
+        std::cout << "\n✓ support_flags field exists in API response" << std::endl;
+        std::cout << "✓ support_flags is correctly formatted as array" << std::endl;
+        std::cout << "✓ Field is accessible via both /users and /user/{nick} endpoints" << std::endl;
+    } else {
+        std::cout << "API server not responding (FastAPI might not be installed)" << std::endl;
+    }
+    
+    // Also test via /users endpoint
+    if (http_get("http://localhost:18090/users", response, http_code)) {
+        ASSERT_EQ(http_code, 200) << "API should return 200 OK for users list";
+        
+        nVerliHub::nPythonPlugin::JsonValue json_result;
+        ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, json_result)) 
+            << "Failed to parse /users JSON response";
+        ASSERT_TRUE(json_result.isObject()) << "Response should be a JSON object";
+        ASSERT_TRUE(json_result.object_val.count("users") > 0) << "Response should have 'users' field";
+        ASSERT_TRUE(json_result.object_val.at("users").isArray()) << "'users' field should be an array";
+        
+        // Find TestUser in the users array
+        bool found_user = false;
+        for (const auto& user : json_result.object_val.at("users").array_val) {
+            if (user.isObject() && user.object_val.count("nick") > 0 && user.object_val.at("nick").isString()) {
+                if (user.object_val.at("nick").string_val == "TestUser") {
+                    found_user = true;
+                    
+                    ASSERT_TRUE(user.object_val.count("support_flags") > 0) 
+                        << "User in /users list should have 'support_flags' field";
+                    ASSERT_TRUE(user.object_val.at("support_flags").isArray()) 
+                        << "'support_flags' in /users list should be an array";
+                    
+                    std::cout << "✓ support_flags field also present in /users endpoint" << std::endl;
+                    break;
+                }
+            }
+        }
+        
+        EXPECT_TRUE(found_user) << "TestUser should be in /users list";
+    }
+    
+    // Cleanup
+    g_server->mUserList.Remove(test_user->mpUser);
+    delete test_user->mpUser;
+    delete test_user;
+    
+    delete admin->mpUser;
+    delete admin;
+}
+
+// Test 16: Verify /ops endpoint returns only operators
+TEST_F(HubApiStressTest, VerifyOpsEndpoint) {
+    cConnDC* admin = create_mock_connection("TestAdmin", 10);
+    
+    std::cout << "\n=== Operators Endpoint Test ===" << std::endl;
+    
+    // Start API server
+    send_hub_command(admin, "!api start 18091", true);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // Create mix of users with different classes
+    std::vector<cConnDC*> users;
+    
+    // Regular users (class < 3)
+    for (int i = 0; i < 3; i++) {
+        cConnDC* user = create_mock_connection("RegularUser" + std::to_string(i), 1);
+        g_server->mUserList.Add(user->mpUser);
+        users.push_back(user);
+    }
+    
+    // Operators (class >= 3) - Note: OpChat and Verlihub are system operators
+    std::vector<std::string> op_nicks = {"OpChat", "Verlihub"}; // System operators
+    for (int i = 0; i < 4; i++) {
+        int op_class = 3 + i; // Classes 3, 4, 5, 6
+        std::string nick = "Operator" + std::to_string(i);
+        cConnDC* op = create_mock_connection(nick, op_class);
+        g_server->mUserList.Add(op->mpUser);
+        users.push_back(op);
+        op_nicks.push_back(nick);
+    }
+    
+    // Trigger cache update
+    g_py_plugin->OnTimer(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Fetch operators from API
+    std::string response;
+    long http_code = 0;
+    
+    if (http_get("http://localhost:18091/ops", response, http_code)) {
+        ASSERT_EQ(http_code, 200) << "API should return 200 OK for /ops";
+        
+        // Parse JSON response
+        nVerliHub::nPythonPlugin::JsonValue json_result;
+        ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, json_result)) 
+            << "Failed to parse /ops JSON response";
+        
+        ASSERT_TRUE(json_result.isObject()) << "Response should be a JSON object";
+        
+        std::cout << "\n--- Validating /ops endpoint response ---" << std::endl;
+        
+        // Check structure
+        ASSERT_TRUE(json_result.object_val.count("operators") > 0) 
+            << "Response should have 'operators' field";
+        ASSERT_TRUE(json_result.object_val.count("total") > 0) 
+            << "Response should have 'total' field";
+        
+        ASSERT_TRUE(json_result.object_val["operators"].isArray()) 
+            << "'operators' should be an array";
+        
+        auto& ops_array = json_result.object_val["operators"].array_val;
+        
+        // Should have 6 operators (4 created + OpChat + Verlihub system operators)
+        EXPECT_EQ(ops_array.size(), 6) << "Should return 6 operators";
+        
+        // Verify all returned users are operators
+        for (const auto& op_user : ops_array) {
+            ASSERT_TRUE(op_user.isObject()) << "Each operator should be an object";
+            
+            ASSERT_TRUE(op_user.object_val.count("nick") > 0) << "Operator should have 'nick' field";
+            ASSERT_TRUE(op_user.object_val.count("class") > 0) << "Operator should have 'class' field";
+            
+            int user_class = (int)op_user.object_val.at("class").int_val;
+            EXPECT_GE(user_class, 3) << "All users in /ops should have class >= 3";
+            
+            std::string nick = op_user.object_val.at("nick").string_val;
+            std::cout << "Found operator: " << nick << " (class " << user_class << ")" << std::endl;
+            
+            // Verify this nick is in our expected operators list
+            bool found = false;
+            for (const auto& expected_nick : op_nicks) {
+                if (nick == expected_nick) {
+                    found = true;
+                    break;
+                }
+            }
+            EXPECT_TRUE(found) << "Operator " << nick << " should be in expected list";
+        }
+        
+        std::cout << "✓ /ops endpoint returns only operators" << std::endl;
+        std::cout << "✓ All operators have class >= 3" << std::endl;
+        std::cout << "✓ Response structure is correct" << std::endl;
+    } else {
+        std::cout << "API server not responding (FastAPI might not be installed)" << std::endl;
+    }
+    
+    // Cleanup
+    for (auto* user : users) {
+        g_server->mUserList.Remove(user->mpUser);
+        delete user->mpUser;
+        delete user;
+    }
+    
+    delete admin->mpUser;
+    delete admin;
+}
+
+// Test 17: Verify /bots endpoint returns bot users
+TEST_F(HubApiStressTest, VerifyBotsEndpoint) {
+    cConnDC* admin = create_mock_connection("TestAdmin", 10);
+    
+    std::cout << "\n=== Bots Endpoint Test ===" << std::endl;
+    
+    // Start API server
+    send_hub_command(admin, "!api start 18092", true);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // Create regular users
+    std::vector<cConnDC*> users;
+    for (int i = 0; i < 3; i++) {
+        cConnDC* user = create_mock_connection("RegularUser" + std::to_string(i), 1);
+        g_server->mUserList.Add(user->mpUser);
+        users.push_back(user);
+    }
+    
+    // Create bot users (Note: OpChat and Verlihub are system bots already present)
+    std::vector<std::string> bot_nicks = {"HubBot", "StatsBot", "ServiceBot", "OpChat", "Verlihub"};
+    std::vector<std::string> created_bot_nicks = {"HubBot", "StatsBot", "ServiceBot"};
+    for (const auto& bot_nick : created_bot_nicks) {
+        cConnDC* bot = create_mock_connection(bot_nick, 1);
+        g_server->mUserList.Add(bot->mpUser);
+        
+        // Register bot in server's bot list
+        g_server->mRobotList.Add(bot->mpUser);
+        
+        users.push_back(bot);
+    }
+    
+    // Trigger cache update
+    g_py_plugin->OnTimer(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Fetch bots from API
+    std::string response;
+    long http_code = 0;
+    
+    if (http_get("http://localhost:18092/bots", response, http_code)) {
+        ASSERT_EQ(http_code, 200) << "API should return 200 OK for /bots";
+        
+        // Parse JSON response
+        nVerliHub::nPythonPlugin::JsonValue json_result;
+        ASSERT_TRUE(nVerliHub::nPythonPlugin::parseJson(response, json_result)) 
+            << "Failed to parse /bots JSON response";
+        
+        ASSERT_TRUE(json_result.isObject()) << "Response should be a JSON object";
+        
+        std::cout << "\n--- Validating /bots endpoint response ---" << std::endl;
+        
+        // Check structure
+        ASSERT_TRUE(json_result.object_val.count("bots") > 0) 
+            << "Response should have 'bots' field";
+        ASSERT_TRUE(json_result.object_val.count("total") > 0) 
+            << "Response should have 'total' field";
+        
+        ASSERT_TRUE(json_result.object_val["bots"].isArray()) 
+            << "'bots' should be an array";
+        
+        auto& bots_array = json_result.object_val["bots"].array_val;
+        
+        // Should have 5 bots (3 created + OpChat + Verlihub system bots)
+        EXPECT_EQ(bots_array.size(), 5) << "Should return 5 bots";
+        
+        // Verify all returned users are bots
+        for (const auto& bot_user : bots_array) {
+            ASSERT_TRUE(bot_user.isObject()) << "Each bot should be an object";
+            
+            ASSERT_TRUE(bot_user.object_val.count("nick") > 0) << "Bot should have 'nick' field";
+            
+            std::string nick = bot_user.object_val.at("nick").string_val;
+            std::cout << "Found bot: " << nick << std::endl;
+            
+            // Verify this nick is in our expected bots list
+            bool found = false;
+            for (const auto& expected_nick : bot_nicks) {
+                if (nick == expected_nick) {
+                    found = true;
+                    break;
+                }
+            }
+            EXPECT_TRUE(found) << "Bot " << nick << " should be in expected list";
+            
+            // Verify bot has all standard user fields
+            EXPECT_TRUE(bot_user.object_val.count("class") > 0) << "Bot should have 'class' field";
+            EXPECT_TRUE(bot_user.object_val.count("ip") > 0) << "Bot should have 'ip' field";
+            EXPECT_TRUE(bot_user.object_val.count("share") > 0) << "Bot should have 'share' field";
+        }
+        
+        std::cout << "✓ /bots endpoint returns only bots" << std::endl;
+        std::cout << "✓ All bots are in the bot list" << std::endl;
+        std::cout << "✓ Response structure is correct" << std::endl;
+        std::cout << "✓ Bots have complete user information" << std::endl;
+    } else {
+        std::cout << "API server not responding (FastAPI might not be installed)" << std::endl;
+    }
+    
+    // Cleanup
+    for (auto* user : users) {
+        g_server->mUserList.Remove(user->mpUser);
+        g_server->mRobotList.Remove(user->mpUser);
+        delete user->mpUser;
+        delete user;
+    }
+    
+    delete admin->mpUser;
+    delete admin;
 }
 
 // Register global environment

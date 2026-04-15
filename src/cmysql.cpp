@@ -176,7 +176,7 @@ bool cMySQL::Ping()
 			Close();
 			Init();
 
-			if (Connect(mDBHost, mDBUser, mDBPass, mDBName, mDBChar)) {
+			if (Connect()) {
 				mReconnect = 0;
 				if (Log(0))
 					LogStream() << "MySQL Ping: reconnected successfully" << endl;

@@ -24,11 +24,10 @@ import time
 import requests
 from typing import Optional
 
-# Try to import NMDC client
+# Try to import official NMDC client
 try:
-    from nmdc_client import NMDCClient
+    from verlihub.client.nmdc import NMDCClient
 except ImportError:
-    # Create minimal client inline if import fails
     NMDCClient = None
 
 
@@ -140,16 +139,13 @@ class StandaloneIntegrationTestRunner:
         )
         
         try:
-            if client.connect(timeout=30):
-                print(f"  Connected as: {self.admin_nick}")
-                client.close()
-                return True
-            else:
-                # NMDC connection test is optional - if it fails, don't fail the whole suite
-                print("  Connection failed (test marked optional)")
-                return None  # Skip rather than fail
+            client.connect(timeout=30)
+            print(f"  Connected as: {self.admin_nick}")
+            client.close()
+            return True
         except Exception as e:
-            print(f"  Connection error: {e}")
+            # NMDC connection test is optional - if it fails, don't fail the whole suite
+            print(f"  Connection failed: {e} (test marked optional)")
             return None  # Skip rather than fail
     
     def run_test(self, name: str, test_func) -> bool:

@@ -69,6 +69,12 @@ jobs:
           cd build
           ctest --output-on-failure --label-regex "integration" --timeout 600
 
+
+      - name: Stop MySQL after integration tests
+        if: always()
+        run: |
+          sudo systemctl stop mysql || true
+
       - name: Generate C++ coverage report
         if: success()
         run: |

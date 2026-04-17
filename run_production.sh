@@ -7,18 +7,18 @@
 #
 # Usage:
 #   # Legacy verlihub with MySQL (default)
-#   sg docker ./run_production.sh --config production.yml
+#   sg docker -c "./run_production.sh --config production.yml"
 #
 #   # verlihub-py with PostgreSQL
-#   sg docker ./run_production.sh --config production.yml --edition py
+#   sg docker -c "./run_production.sh --config production.yml --edition py"
 #
 #   # Auto-detect edition and database from YAML
-#   sg docker ./run_production.sh --config production.yml
+#   sg docker -c "./run_production.sh --config production.yml"
 #
 #   # Lifecycle
-#   sg docker ./run_production.sh --stop
-#   sg docker ./run_production.sh --logs
-#   sg docker ./run_production.sh --status
+#   sg docker -c "./run_production.sh --stop"
+#   sg docker -c "./run_production.sh --logs"
+#   sg docker -c "./run_production.sh --status"
 
 set -e
 
@@ -103,10 +103,10 @@ while [[ $# -gt 0 ]]; do
             echo "  py      — verlihub-py Python reimplementation, MySQL or PostgreSQL"
             echo ""
             echo "Examples:"
-            echo "  sg docker $0                                  # Default (legacy + MySQL)"
-            echo "  sg docker $0 --edition py                     # verlihub-py + auto DB"
-            echo "  sg docker $0 --edition py --config hub.yml    # verlihub-py + custom config"
-            echo "  sg docker $0 --stop                           # Stop instance"
+            echo "  sg docker -c \"$0\"                                  # Default (legacy + MySQL)"
+            echo "  sg docker -c \"$0 --edition py\"                     # verlihub-py + auto DB"
+            echo "  sg docker -c \"$0 --edition py --config hub.yml\"    # verlihub-py + custom config"
+            echo "  sg docker -c \"$0 --stop\"                           # Stop instance"
             exit 0
             ;;
         *)
@@ -215,6 +215,18 @@ print(f"MATTERBRIDGE_TOKEN={q(mb.get('api_token', ''))}")
 print(f"MATTERBRIDGE_GATEWAY={q(mb.get('gateway', 'verlihub'))}")
 print(f"MATTERBRIDGE_CHANNEL={q(mb.get('channel', '#general'))}")
 
+# LLM (Ollama sidecar)
+llm = config.get("llm", {})
+llm_enabled = str(llm.get('enabled', False)).lower() == 'true'
+llm_base_url = llm.get('base_url', 'http://ollama:11434/v1')
+# Only spin up the Ollama container when the base_url points at the local sidecar
+needs_ollama = llm_enabled and ('ollama' in llm_base_url and ('localhost' in llm_base_url or '127.0.0.1' in llm_base_url or 'vh-prod-ollama' in llm_base_url or llm_base_url == 'http://ollama:11434/v1'))
+print(f"LLM_ENABLED={q(str(llm_enabled).lower())}")
+print(f"LLM_MODEL={q(llm.get('model', 'qwen2.5:7b'))}")
+print(f"LLM_BASE_URL={q(llm_base_url)}")
+print(f"LLM_PORT={q(llm.get('ollama_port', 11434))}")
+print(f"NEEDS_OLLAMA={q(str(needs_ollama).lower())}")
+
 # Startup commands
 startup_cmds = config.get("startup_commands", [])
 plugin_cmds  = config.get("plugin_commands", [])
@@ -244,6 +256,7 @@ print(f"LUA_GITHUB_REPOS={q(','.join(lua_repos))}")
 # TLS
 tls = config.get("tls", {})
 print(f"TLS_ENABLED={q(str(tls.get('enabled', False)).lower())}")
+print(f"TLS_PORT={q(tls.get('port', 411))}")
 print(f"TLS_INTERNAL_PORT={q(tls.get('internal_port', 411))}")
 print(f"TLS_ONLY_MODE={q(str(tls.get('only_mode', False)).lower())}")
 print(f"TLS_MIN_VERSION={q(tls.get('min_version', 2))}")
@@ -251,6 +264,15 @@ print(f"TLS_CERT_FILE={q(tls.get('cert_file', ''))}")
 print(f"TLS_KEY_FILE={q(tls.get('key_file', ''))}")
 print(f"TLS_CERT_ORG={q(tls.get('cert_org', 'Verlihub'))}")
 print(f"TLS_CERT_EMAIL={q(tls.get('cert_email', 'verlihub@localhost'))}")
+print(f"TLS_CERT_HOST={q(tls.get('cert_host', 'localhost'))}")
+
+# Let's Encrypt
+le = tls.get("letsencrypt", {})
+le_enabled = str(le.get('enabled', False)).lower() == 'true'
+print(f"LE_ENABLED={q(str(le_enabled).lower())}")
+print(f"LE_DOMAIN={q(le.get('domain', ''))}")
+print(f"LE_EMAIL={q(le.get('email', ''))}")
+print(f"LE_STAGING={q(str(le.get('staging', False)).lower())}")
 
 # Edition hint (if present in YAML)
 print(f"YAML_EDITION={q(config.get('edition', ''))}")
@@ -278,7 +300,9 @@ _compose_mysql_service() {
       timeout: 5s
       retries: 10
     networks:
-      - ${NETWORK}
+      ${NETWORK}:
+        aliases:
+          - ${DB_HOST}
     restart: ${RESTART_POLICY}
 EOF
 }
@@ -303,7 +327,9 @@ _compose_postgres_service() {
       timeout: 5s
       retries: 10
     networks:
-      - ${NETWORK}
+      ${NETWORK}:
+        aliases:
+          - ${DB_HOST}
     restart: ${RESTART_POLICY}
 EOF
 }
@@ -371,7 +397,8 @@ _compose_py_hub() {
     command: >
       python3 -m verlihub.server
         -c /config/production.yml
-        --mode api
+        --mode both
+        --host 0.0.0.0
     environment:
       PYTHONUNBUFFERED: "1"
     ports:
@@ -404,7 +431,8 @@ EOF
     command: >
       python3 -m verlihub.server
         -c /config/production.yml
-        --mode api
+        --mode both
+        --host 0.0.0.0
     environment:
       PYTHONUNBUFFERED: "1"
     ports:
@@ -423,6 +451,114 @@ EOF
     restart: ${RESTART_POLICY}
 EOF
     fi
+}
+
+# ── Compose generation — Ollama LLM sidecar ──────────────────────────────────
+
+_compose_ollama_service() {
+    cat << EOF
+  # Ollama LLM inference server
+  ${CONTAINER_PREFIX}-ollama:
+    image: ollama/ollama:latest
+    container_name: ${CONTAINER_PREFIX}-ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    volumes:
+      - ${CONTAINER_PREFIX}-ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Compose generation — TLS proxy sidecar ───────────────────────────────────
+
+_compose_tls_proxy() {
+    local hub_container="${CONTAINER_PREFIX}-hub"
+    local tls_port="${TLS_PORT:-411}"
+    local hub_port="${HUB_PORT}"
+    local min_ver="${TLS_MIN_VERSION:-2}"
+    local cert_org="${TLS_CERT_ORG:-Verlihub}"
+    local cert_mail="${TLS_CERT_EMAIL:-verlihub@localhost}"
+    local cert_host="${TLS_CERT_HOST:-localhost}"
+    local wait_ms="600"
+
+    if [ "$TLS_ONLY_MODE" = "true" ]; then
+        wait_ms="0"
+    fi
+
+    cat << EOF
+  # TLS Proxy — terminates TLS, forwards plaintext NMDC to hub
+  ${CONTAINER_PREFIX}-tls:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tls-proxy
+    container_name: ${CONTAINER_PREFIX}-tls
+    depends_on:
+      ${hub_container}:
+        condition: service_healthy
+    command: >
+      tls-proxy
+        -host :${tls_port}
+        -hub ${hub_container}:${hub_port}
+        -cert /certs/hub.crt
+        -key /certs/hub.key
+        -ver ${min_ver}
+        -wait ${wait_ms}ms
+        -cert-org "${cert_org}"
+        -cert-mail "${cert_mail}"
+        -cert-host "${cert_host}"
+        -ip
+        -log
+    ports:
+      - "${tls_port}:${tls_port}"
+    volumes:
+      - ${CONTAINER_PREFIX}-certs:/certs
+EOF
+
+    # Mount custom cert files read-only if provided
+    if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then
+        echo "      - ${TLS_CERT_FILE}:/certs/hub.crt:ro"
+        echo "      - ${TLS_KEY_FILE}:/certs/hub.key:ro"
+    fi
+
+    cat << EOF
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
+}
+
+# ── Compose generation — Let's Encrypt certbot sidecar ───────────────────────
+
+_compose_certbot() {
+    cat << EOF
+  # Certbot — automatic Let's Encrypt certificate management
+  ${CONTAINER_PREFIX}-certbot:
+    image: certbot/certbot:latest
+    container_name: ${CONTAINER_PREFIX}-certbot
+    entrypoint: /certbot-entrypoint.sh
+    environment:
+      LE_DOMAIN: "${LE_DOMAIN}"
+      LE_EMAIL: "${LE_EMAIL}"
+      LE_STAGING: "$([ "$LE_STAGING" = "true" ] && echo 1 || echo 0)"
+      CERT_DIR: "/certs"
+    volumes:
+      - ${CONTAINER_PREFIX}-certs:/certs
+      - ${CONTAINER_PREFIX}-letsencrypt:/etc/letsencrypt
+      - ./docker/certbot-entrypoint.sh:/certbot-entrypoint.sh:ro
+    ports:
+      - "80:80"
+    networks:
+      - ${NETWORK}
+    restart: ${RESTART_POLICY}
+EOF
 }
 
 # ── Full compose file generation ─────────────────────────────────────────────
@@ -463,14 +599,40 @@ EOF
         _compose_legacy_hub >> "$compose_file"
     fi
 
+    # Ollama LLM sidecar (only when base_url points at the local sidecar)
+    if [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ]; then
+        echo "" >> "$compose_file"
+        _compose_ollama_service >> "$compose_file"
+    fi
+
+    # TLS proxy sidecar
+    if [ "$TLS_ENABLED" = "true" ]; then
+        echo "" >> "$compose_file"
+        _compose_tls_proxy >> "$compose_file"
+
+        # Let's Encrypt certbot sidecar
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "" >> "$compose_file"
+            _compose_certbot >> "$compose_file"
+        fi
+    fi
+
     # Volumes and network
+    local extra_volumes=""
+    [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-ollama-models:"
+    [ "$TLS_ENABLED" = "true" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-certs:"
+    [ "$LE_ENABLED" = "true" ] && \
+        extra_volumes="${extra_volumes}"$'\n'"  ${CONTAINER_PREFIX}-letsencrypt:"
+
     if [ "$DB_TYPE" = "sqlite" ]; then
         local sqlite_vol="${CONFIG_VOLUME}-sqlite"
         cat >> "$compose_file" << EOF
 
 volumes:
   ${CONFIG_VOLUME}:
-  ${sqlite_vol}:
+  ${sqlite_vol}:${extra_volumes}
 
 networks:
   ${NETWORK}:
@@ -481,7 +643,7 @@ EOF
 
 volumes:
   ${DB_VOLUME}:
-  ${CONFIG_VOLUME}:
+  ${CONFIG_VOLUME}:${extra_volumes}
 
 networks:
   ${NETWORK}:
@@ -619,13 +781,36 @@ update_motd() {
     fi
 }
 
-# ── TLS cert copy (legacy only) ─────────────────────────────────────────────
+# ── TLS cert copy ────────────────────────────────────────────────────────────
 
 update_tls_certs() {
-    if [ "$TLS_ENABLED" != "true" ] || [ "$EDITION" = "py" ]; then
+    if [ "$TLS_ENABLED" != "true" ]; then
         return 0
     fi
 
+    # Let's Encrypt certs are handled by the certbot sidecar
+    if [ "$LE_ENABLED" = "true" ]; then
+        log_info "TLS certificates managed by Let's Encrypt certbot sidecar"
+        return 0
+    fi
+
+    if [ "$EDITION" = "py" ]; then
+        # For py edition, custom certs are bind-mounted into the TLS proxy
+        # container via the compose file. If no custom certs, the Go proxy
+        # auto-generates self-signed certs.
+        if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then
+            if [ -f "$TLS_CERT_FILE" ] && [ -f "$TLS_KEY_FILE" ]; then
+                log_success "TLS using custom certificates: $TLS_CERT_FILE"
+            else
+                log_warn "TLS cert files specified but not found — proxy will self-sign"
+            fi
+        else
+            log_info "TLS enabled — proxy will generate self-signed certificate"
+        fi
+        return 0
+    fi
+
+    # Legacy edition: docker cp certs into the hub container
     local hub_container="${CONTAINER_PREFIX}-hub"
 
     if ! docker ps --format '{{.Names}}' | grep -q "^${hub_container}$"; then
@@ -858,11 +1043,22 @@ print(c.get('api', {}).get('port', 8000))
     echo "  API Enabled: $API_ENABLED (port $API_PORT)"
     echo "  TLS Enabled: $TLS_ENABLED"
     if [ "$TLS_ENABLED" = "true" ]; then
+        echo "    TLS Port: $TLS_PORT"
         echo "    TLS Only: $TLS_ONLY_MODE"
         echo "    TLS Min Version: 1.$TLS_MIN_VERSION"
-        [ -n "$TLS_CERT_FILE" ] && echo "    Certificate: $TLS_CERT_FILE" || echo "    Certificate: (self-signed)"
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "    Let's Encrypt: $LE_DOMAIN"
+        elif [ -n "$TLS_CERT_FILE" ]; then
+            echo "    Certificate: $TLS_CERT_FILE"
+        else
+            echo "    Certificate: (self-signed)"
+        fi
     fi
     echo "  Matterbridge: $MATTERBRIDGE_ENABLED"
+    if [ "$EDITION" = "py" ]; then
+        echo "  LLM (Ollama): $LLM_ENABLED"
+        [ "$LLM_ENABLED" = "true" ] && echo "    Model: $LLM_MODEL"
+    fi
     echo "  Container Prefix: $CONTAINER_PREFIX"
     if [ "$EDITION" = "legacy" ]; then
         echo "  Startup Commands: $CMD_COUNT"
@@ -904,11 +1100,28 @@ print(c.get('api', {}).get('port', 8000))
     # Give hub a moment to fully initialize
     sleep 5
 
+    # Pull LLM model if local Ollama sidecar is running
+    if [ "$NEEDS_OLLAMA" = "true" ] && [ "$EDITION" = "py" ]; then
+        log_info "Pulling LLM model '${LLM_MODEL}' via Ollama (this may take a while on first run)..."
+        local ollama_container="${CONTAINER_PREFIX}-ollama"
+        docker exec "$ollama_container" ollama pull "$LLM_MODEL" 2>&1 | tail -5
+        if [ $? -eq 0 ]; then
+            log_success "Model '$LLM_MODEL' is ready"
+        else
+            log_warn "Failed to pull model '$LLM_MODEL' — LLM chat may not work"
+        fi
+    elif [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        log_info "LLM enabled with remote endpoint: ${LLM_BASE_URL}"
+        log_info "Skipping Ollama sidecar (not needed for remote providers)"
+    fi
+
+    # Post-start steps: TLS cert setup (both editions)
+    update_tls_certs || true
+
     # Post-start steps (legacy only — verlihub-py handles all of this from YAML)
     if [ "$EDITION" = "legacy" ]; then
         update_hub_settings || true
         update_motd || true
-        update_tls_certs || true
         register_users || true
 
         if [ "$first_run" = "true" ] || [ "$HAS_COMMANDS" = "true" ]; then
@@ -925,7 +1138,10 @@ print(c.get('api', {}).get('port', 8000))
     echo "  Edition: $EDITION"
     echo "  Hub:     dc://$HOSTNAME:$HUB_PORT"
     if [ "$TLS_ENABLED" = "true" ]; then
-        echo "  Hub TLS: nmdcs://$HOSTNAME:$HUB_PORT"
+        echo "  Hub TLS: nmdcs://$HOSTNAME:${TLS_PORT}"
+        if [ "$LE_ENABLED" = "true" ]; then
+            echo "  Certs:   Let's Encrypt (${LE_DOMAIN})"
+        fi
     fi
     if [ "$API_ENABLED" = "true" ]; then
         if [ "$EDITION" = "py" ]; then
@@ -935,6 +1151,10 @@ print(c.get('api', {}).get('port', 8000))
             echo "  API:       http://$HOSTNAME:$API_PORT"
             echo "  Web App:   http://$HOSTNAME:$API_PORT/app"
         fi
+    fi
+    if [ "$LLM_ENABLED" = "true" ] && [ "$EDITION" = "py" ]; then
+        echo "  LLM Chat:  http://$HOSTNAME:$API_PORT/api/v1/llm/chat"
+        echo "  LLM Model: $LLM_MODEL (via Ollama)"
     fi
     echo ""
     echo "Commands:"

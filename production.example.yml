@@ -3,11 +3,11 @@
 #
 # Usage:
 #   # Legacy C++ hub (MySQL only)
-#   sg docker ./run_production.sh --config production.yml
-#   sg docker ./run_production.sh --config production.yml --edition legacy
+#   sg docker -c "./run_production.sh --config production.yml"
+#   sg docker -c "./run_production.sh --config production.yml --edition legacy"
 #
 #   # verlihub-py Python hub (MySQL or PostgreSQL)
-#   sg docker ./run_production.sh --config production.yml --edition py
+#   sg docker -c "./run_production.sh --config production.yml --edition py"
 #
 # Both editions share the same YAML format. Set "edition" below to auto-detect,
 # or pass --edition on the command line. If database.type is "postgresql",
@@ -70,6 +70,13 @@ hub:
   # Common options: CP1252, UTF-8, ISO-8859-1
   encoding: "CP1252"
   
+  # Send "Your information" on connect (nick, IP, country, TLS, NAT)
+  # Set to false to disable the message entirely
+  send_user_info: true
+  # Deliver user info as a private message instead of main chat
+  # Default: false (main chat, visible only to the connecting user)
+  user_info_as_pm: false
+  
   # Network settings
   port: 4111
   listen_host: "0.0.0.0"
@@ -95,6 +102,65 @@ bots:
     description: "Operator chat"
     # Minimum class to access operator chat (default: 3 = operators)
     min_class: 3
+
+  # Bot behaviour — controls how the security bot interacts via LLM
+  behavior:
+    # Which LLM endpoint the bot should use (name from llm.endpoints).
+    # Empty = use the default (first) endpoint.
+    endpoint: ""
+
+    # Personality injected into every system prompt.
+    # Example: "You are cheerful and use DC++ slang."
+    personality: ""
+
+    # How eagerly the bot responds in main chat:
+    #   "direct"  — only when addressed: "Hub-Security: hello"
+    #   "mention" — whenever the bot name appears anywhere in a message
+    #   "keyword" — respond to bot name OR any word in 'triggers'
+    chat_mode: "direct"
+
+    # Extra trigger words for "keyword" mode (besides the bot nick)
+    # triggers:
+    #   - "hub"
+    #   - "help"
+
+    # Proactive messages — bot occasionally speaks unprompted (0 = off)
+    # Actual delay is randomised ±30% around this value for a human feel.
+    # proactive_interval: 3600  # base seconds between proactive messages
+    # proactive_prompts:
+    #   - "Share an interesting fact about file sharing."
+    #   - "Ask the chat room a fun trivia question."
+
+    # Periodic "Thinking…" feedback in PMs while LLM is processing (seconds)
+    thinking_interval: 15
+
+    # Max response length (characters) for main-chat replies
+    max_chat_length: 400
+
+    # ── Mood engine ──────────────────────────────────────────────────
+    # Dynamically adjusts the bot's personality based on hub activity:
+    # user count relative to 24-hour average + recent interaction rate.
+    # Mood states range from "lonely" (quiet hub) to "ecstatic" (busy hub).
+    # mood_enabled: true
+    # mood_window: 3600            # interaction tracking window (seconds)
+    # mood_low_interaction: 2.0    # msgs/hr below this → low activity
+    # mood_high_interaction: 10.0  # msgs/hr above this → high activity
+    # mood_low_user_ratio: 0.5     # current/avg below this → few users
+    # mood_high_user_ratio: 1.5    # current/avg above this → many users
+    # mood_user_history: 86400     # rolling average window (seconds, 24h)
+
+    # ── Web access ───────────────────────────────────────────────────
+    # Gives the bot tools to search the web, fetch pages, and read RSS
+    # feeds.  Uses DuckDuckGo (no API key required).
+    # web_enabled: true
+    # rss_feeds:
+    #   - "https://torrentfreak.com/feed/"
+    #   - "https://www.phoronix.com/rss.php"
+
+    # ── Persistent memory ────────────────────────────────────────────
+    # Lets the bot save/recall notes across restarts.  Notes are stored
+    # in the same database the hub uses (MySQL / PostgreSQL / SQLite).
+    # memory_enabled: true
 
 # =============================================================================
 # Connection Limits
@@ -408,30 +474,135 @@ api:
     - "https://your-domain.com"
     - "https://www.your-domain.com"
 
+# =============================================================================
+# LLM Chat Integration (verlihub-py only)
+# Enables AI assistant chat via a self-hosted LLM (Ollama sidecar).
+# When enabled, run_production.sh automatically starts an Ollama container
+# alongside the hub and pulls the configured model on first run.
+#
+# In "both" mode the hub security bot (Hub-Security) also becomes LLM-powered:
+#   - Users can PM Hub-Security for AI chat (tools based on user class)
+#   - Users can address Hub-Security in main chat (conversational only)
+# =============================================================================
+llm:
+  enabled: false
+  # Ollama-compatible OpenAI base URL.
+  # The default points to the Ollama sidecar container started by run_production.sh.
+  base_url: "http://vh-prod-ollama:11434/v1"
+  # Model to use. Recommendations:
+  #   Budget (CPU, ~2 GB):   qwen2.5:3b
+  #   Quality (GPU, ~4.5 GB): qwen2.5:7b
+  model: "qwen2.5:7b"
+  # API key (Ollama ignores this but it's required by the OpenAI client)
+  api_key: "ollama"
+  # LLM generation parameters
+  temperature: 0.3
+  max_tokens: 2048
+  # Max tool-calling rounds per request (prevents infinite loops)
+  max_tool_rounds: 8
+  # Minimum user class to access LLM chat (3 = operators)
+  min_class: 3
+  # Minimum user class for admin-level LLM tools (5 = masters)
+  admin_class: 5
+  # Ollama host port to expose on the Docker host (0 = don't expose)
+  # ollama_port: 11434
+
+  # Multiple LLM endpoints — users can select from a dropdown.
+  # When configured, these override the top-level base_url/model/api_key
+  # for the dashboard AI chat. The first endpoint is the default.
+  # endpoints:
+  #   - name: "Qwen3.5-35B (Traefik)"
+  #     base_url: "https://vllm-qwen35-35b.example.com/v1"
+  #     model: "Qwen/Qwen3.5-35B"
+  #     api_key: "none"
+  #   - name: "Qwen3.5-9B #0 (Traefik)"
+  #     base_url: "https://vllm-qwen35-9b.example.com/v1"
+  #     model: "Qwen/Qwen3.5-9B"
+  #     api_key: "none"
+  #   - name: "Qwen3.5-9B #1 (Traefik)"
+  #     base_url: "https://vllm-qwen35-9b-1.example.com/v1"
+  #     model: "Qwen/Qwen3.5-9B"
+  #     api_key: "none"
+  #   - name: "Ministral #0 (Traefik)"
+  #     base_url: "https://ministral.example.com/v1"
+  #     model: "ministral"
+  #     api_key: "none"
+  #   - name: "Ministral #1 (Traefik)"
+  #     base_url: "https://ministral-1-edge.example.com/v1"
+  #     model: "ministral"
+  #     api_key: "none"
+  #   - name: "LLM Catalog (Traefik)"
+  #     base_url: "https://llm-catalog.example.com/v1"
+  #     model: "catalog"
+  #     api_key: "none"
+
+# =============================================================================
+# MCP (Model Context Protocol) Server
+# Exposes hub tools/resources via MCP for external AI clients.
+# Mounted at /api/v1/mcp when enabled.
+# =============================================================================
+mcp:
+  enabled: false
+  min_class: 3
+  admin_class: 5
+
 # TLS Configuration
-# Enables encrypted NMDCS connections for clients
-# Requires Verlihub built with USE_FEARTLS_PROXY=ON or USE_TLS_PROXY=ON
+# Enables encrypted NMDCS connections for clients.
+# In Docker deployments, a Go TLS proxy sidecar terminates TLS and forwards
+# plaintext NMDC to the hub, injecting $MyIP for real client IPs.
+# For non-Docker (legacy C++), requires USE_FEARTLS_PROXY=ON or USE_TLS_PROXY=ON.
 tls:
   enabled: false
-  # Internal port for TLS proxy (leave 0 to auto-select)
-  # Clients connect to the regular hub port, TLS is handled transparently
-  internal_port: 411
+  # Port for NMDCS (TLS) connections — the TLS proxy listens here.
+  # Clients connect to this port for encrypted connections.
+  port: 411
   # Only allow TLS-encrypted connections (reject non-TLS clients)
   only_mode: false
-  # Minimum TLS version: 0=1.0, 1=1.1, 2=1.2 (default), 3=1.3
+  # Minimum TLS version: 0=1.0, 1=1.1, 2=1.2 (recommended), 3=1.3
   min_version: 2
-  # Certificate file path (relative to working directory or absolute)
-  # If not provided, Verlihub generates a self-signed certificate
+  # Custom certificate files — leave empty for self-signed auto-generation.
+  # If provided, these files are mounted into the TLS proxy container.
   cert_file: ""
-  # Private key file path
   key_file: ""
-  # Organization name for self-signed certificate generation
+  # Self-signed certificate metadata (used when cert_file is empty and
+  # Let's Encrypt is disabled)
   cert_org: "My Hub"
-  # Email for self-signed certificate generation
   cert_email: "admin@example.com"
-  # Example with Let's Encrypt:
-  # cert_file: "/etc/letsencrypt/live/hub.example.com/fullchain.pem"
-  # key_file: "/etc/letsencrypt/live/hub.example.com/privkey.pem"
+  cert_host: "localhost"
+  # For legacy C++ hubs: IP the TLS proxy is expected to connect from.
+  # Defaults to the TLS proxy container's Docker-internal IP.
+  # Leave empty unless you need to restrict $MyIP origin.
+  listen_ip: ""
+  #
+  # Let's Encrypt automatic certificate management.
+  # Runs a certbot sidecar that obtains and renews certificates automatically.
+  # Requires port 80 to be reachable from the internet for HTTP-01 challenge.
+  letsencrypt:
+    enabled: false
+    domain: "hub.example.com"
+    email: "admin@example.com"
+    # Use staging environment for testing (avoids rate limits)
+    staging: false
+  #
+  # Example configurations:
+  #
+  # 1. Self-signed (default when enabled with no cert files):
+  #   tls:
+  #     enabled: true
+  #
+  # 2. Custom certificates (e.g. from a CA or existing Let's Encrypt):
+  #   tls:
+  #     enabled: true
+  #     cert_file: "/path/to/fullchain.pem"
+  #     key_file: "/path/to/privkey.pem"
+  #
+  # 3. Automatic Let's Encrypt:
+  #   tls:
+  #     enabled: true
+  #     letsencrypt:
+  #       enabled: true
+  #       domain: "hub.example.com"
+  #       email: "admin@example.com"
 
 # Matterbridge Configuration
 # Bridges hub chat with Discord, Slack, IRC, Telegram, Matrix, etc.

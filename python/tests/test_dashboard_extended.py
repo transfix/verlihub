@@ -257,6 +257,12 @@ class TestUnauthenticatedRedirects:
         "/dashboard/chat",
         "/dashboard/plugins",
         "/dashboard/invites",
+        "/dashboard/triggers",
+        "/dashboard/redirects",
+        "/dashboard/clients",
+        "/dashboard/penalties",
+        "/dashboard/flood-config",
+        "/dashboard/protocol-stats",
     ])
     async def test_redirect_to_login(self, client, path):
         resp = await client.get(path)
@@ -308,6 +314,30 @@ class TestAuthenticatedPages:
 
     async def test_invites_page(self, client):
         resp = await client.get("/dashboard/invites", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_triggers_page(self, client):
+        resp = await client.get("/dashboard/triggers", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_redirects_page(self, client):
+        resp = await client.get("/dashboard/redirects", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_clients_page(self, client):
+        resp = await client.get("/dashboard/clients", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_penalties_page(self, client):
+        resp = await client.get("/dashboard/penalties", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_flood_config_page(self, client):
+        resp = await client.get("/dashboard/flood-config", cookies=_cookie())
+        assert resp.status_code == 200
+
+    async def test_protocol_stats_page(self, client):
+        resp = await client.get("/dashboard/protocol-stats", cookies=_cookie())
         assert resp.status_code == 200
 
 

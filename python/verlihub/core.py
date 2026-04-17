@@ -14,6 +14,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+import bcrypt
+from sqlmodel import select
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -67,11 +70,20 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
             'timer': [],
             'hub_started': [],
             'hub_stopping': [],
+            'ext_json': [],
+            'my_hub_url': [],
+            'user_in_update': [],
         }
         self._lock = threading.Lock()
         # Config dict for OnGetConfig callback — populated before Initialize().
         # Structure: {"hub": {"hub_name": "...", "hub_topic": "..."}, ...}
         self._config: dict[str, dict[str, str]] = {}
+        # Back-reference to HubContext (set by HubContext.__init__)
+        # Used by OnValidateNick/OnCheckPassword to read config values.
+        self._hub_context_ref: Optional["HubContext"] = None
+        # Explicit event loop reference for cross-thread DB access.
+        # Set by set_event_loop() after the async engine is created.
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
     
     # ------------------------------------------------------------------
     # Config bridge
@@ -158,6 +170,203 @@ class HubEventHandler(verlihub_core.IHubEventCallback):
     def OnHubStopping(self) -> None:
         self._dispatch('hub_stopping')
 
+    def OnExtJSON(self, nick: str, json: str) -> bool:
+        return self._dispatch('ext_json', nick, json)
+
+    def OnMyHubURL(self, nick: str, url: str) -> bool:
+        return self._dispatch('my_hub_url', nick, url)
+
+    def OnUserINUpdate(self, nick: str, data: str) -> bool:
+        return self._dispatch('user_in_update', nick, data)
+
+    # ------------------------------------------------------------------
+    # C++ log callback (called from C++ while m_log_mutex is held)
+    # ------------------------------------------------------------------
+
+    def OnLog(self, level: int, message: str) -> None:
+        """Receive a formatted log line from the C++ core.
+
+        Called from a C++ thread while ``m_log_mutex`` is held.
+        We store it in the ring buffer and push it to WebSocket clients.
+        Must NOT call back into C++ logging to avoid deadlock.
+        """
+        try:
+            from verlihub.log_buffer import _level_str
+            from verlihub.dashboard.websocket import emit_log
+            emit_log(
+                level=_level_str(level),
+                message=message,
+                log_type="core",
+            )
+        except Exception:
+            # Swallow — we MUST NOT raise here or the C++ caller will abort.
+            pass
+
+    # ------------------------------------------------------------------
+    # NMDC Authentication callbacks (called from C++ I/O thread)
+    # ------------------------------------------------------------------
+    # These must be synchronous (C++ blocks until they return).
+    # We bridge to the async DB via run_coroutine_threadsafe().
+    # ------------------------------------------------------------------
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store the running event loop for cross-thread DB calls.
+
+        Must be called from the async context that owns the DB engine
+        (e.g. during API lifespan startup) so that ``_sync_db_lookup``
+        can safely schedule coroutines on the correct loop.
+        """
+        self._event_loop = loop
+
+    def _get_event_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """Return the stored event loop if still running, else probe."""
+        # Prefer the explicitly stored loop (set by API lifespan)
+        if self._event_loop is not None and self._event_loop.is_running():
+            return self._event_loop
+        # Fallback: try the current thread's loop (works when called from
+        # within the same async context, e.g. hub-only mode)
+        try:
+            loop = asyncio.get_running_loop()
+            return loop
+        except RuntimeError:
+            pass
+        return None
+
+    def _sync_db_lookup(self, nick: str):
+        """
+        Synchronously look up a registered user by nick.
+        Returns (user_class, hashed_password, authorised) or None.
+        Called from the C++ I/O thread.
+        """
+        try:
+            from verlihub.models import RegUser
+            from verlihub.models.database import get_database
+
+            db = get_database()
+
+            async def _query():
+                async with db._session_factory() as session:
+                    result = await session.execute(
+                        select(RegUser).where(RegUser.nick == nick)
+                    )
+                    user = result.scalar_one_or_none()
+                    if user is None:
+                        return None
+                    return (user.user_class, user.login_pwd, user.authorised)
+
+            loop = self._get_event_loop()
+            if loop is not None:
+                future = asyncio.run_coroutine_threadsafe(_query(), loop)
+                return future.result(timeout=5)
+            else:
+                logger.warning(
+                    "No running event loop for DB lookup (nick=%s) — "
+                    "call set_event_loop() during startup",
+                    nick,
+                )
+                return None
+        except Exception:
+            logger.exception("DB lookup failed for nick=%s", nick)
+            return None
+
+    def _db_available(self) -> bool:
+        """Check if the database and event loop are ready for auth queries."""
+        try:
+            from verlihub.models.database import get_database
+            get_database()
+        except (RuntimeError, ImportError):
+            return False
+        return self._get_event_loop() is not None
+
+    def _get_config_value(self, key: str, default: str = "") -> str:
+        """Read a config value from the HubContext (thread-safe C++ call)."""
+        try:
+            if self._hub_context_ref is not None:
+                return self._hub_context_ref.get_config("config", key, default)
+        except Exception:
+            pass
+        return default
+
+    def OnValidateNick(self, nick: str, ip: str) -> int:
+        """
+        Called by C++ when a client sends $ValidateNick.
+        
+        Returns:
+            -1  → reject (nick denied)
+             0  → allow as guest (no password required)
+            >0  → registered user class (password required via OnCheckPassword)
+        """
+        try:
+            db_result = self._sync_db_lookup(nick)
+
+            if db_result is not None:
+                user_class, _pwd, authorised = db_result
+                if not authorised:
+                    logger.info("Rejecting disabled user: %s", nick)
+                    return -1
+                # Registered user → require password
+                return max(user_class, 1)
+
+            if db_result is None and not self._db_available():
+                # DB lookup failed (no event loop / DB not ready).
+                # Reject the connection rather than allowing a
+                # potentially-registered user in as a guest.
+                logger.warning(
+                    "Rejecting nick %s — database unavailable for auth", nick
+                )
+                return -1
+
+            # Nick not in DB → check allow_unregistered
+            allow_unreg = self._get_config_value("allow_unregistered", "1")
+            if allow_unreg != "1":
+                logger.info("Rejecting unregistered nick: %s (allow_unregistered=0)", nick)
+                return -1
+
+            # Allow as guest
+            return 0
+        except Exception:
+            logger.exception("OnValidateNick error for nick=%s", nick)
+            return -1
+
+    def OnCheckPassword(self, nick: str, password: str) -> int:
+        """
+        Called by C++ when a client sends $MyPass (registered users only).
+        
+        Returns:
+            -1  → wrong password
+            >=0 → user class on success
+        """
+        try:
+            db_result = self._sync_db_lookup(nick)
+            if db_result is None:
+                return -1
+
+            user_class, hashed_pwd, authorised = db_result
+            if not authorised:
+                return -1
+
+            # Verify password using bcrypt
+            if not hashed_pwd:
+                # No password set — accept if require_password is off
+                require_pw = self._get_config_value("require_password", "1")
+                if require_pw != "1":
+                    return user_class
+                return -1
+
+            try:
+                if bcrypt.checkpw(
+                    password.encode("utf-8"),
+                    hashed_pwd.encode("utf-8") if isinstance(hashed_pwd, str) else hashed_pwd,
+                ):
+                    return user_class
+            except (ValueError, TypeError):
+                logger.warning("Password hash format error for nick=%s", nick)
+
+            return -1
+        except Exception:
+            logger.exception("OnCheckPassword error for nick=%s", nick)
+            return -1
+
 
 class HubContext:
     """
@@ -174,6 +383,7 @@ class HubContext:
     def __init__(self, cpp_context: verlihub_core.HubContext) -> None:
         self._cpp = cpp_context
         self._event_handler = HubEventHandler()
+        self._event_handler._hub_context_ref = self
         self._cpp.SetEventCallback(self._event_handler)
         self._shutdown_event = asyncio.Event()
         self._start_time: float | None = None
@@ -306,39 +516,48 @@ class HubContext:
         try:
             # Prefer the efficient single-lock C++ method
             snapshots = self._cpp.GetUserInfoSnapshots()
-            user_list = []
-            for snap in snapshots:
-                user_list.append({
-                    "nick": snap.nick,
-                    "user_class": snap.user_class,
-                    "share": snap.share,
-                    "ip": snap.ip,
-                    "country": snap.country,
-                    "country_name": getattr(snap, 'country_name', ''),
-                    "city": getattr(snap, 'city', ''),
-                    "client": snap.client_name,
-                    "client_version": getattr(snap, 'client_version', ''),
-                    "description": snap.description,
-                    "tag": snap.tag,
-                    "speed": snap.speed,
-                    "email": snap.email,
-                    "mode": chr(getattr(snap, 'mode', 0)) if getattr(snap, 'mode', 0) else '',
-                    "slots": getattr(snap, 'slots', 0),
-                    "hubs_normal": getattr(snap, 'hubs_normal', 0),
-                    "hubs_registered": getattr(snap, 'hubs_registered', 0),
-                    "hubs_operator": getattr(snap, 'hubs_operator', 0),
-                    "status_flag": getattr(snap, 'status_flag', 0),
-                    "supports": getattr(snap, 'supports', ''),
-                    "login_time": getattr(snap, 'login_time', 0),
-                    "status": "",
-                })
-            return user_list
-        except (AttributeError, TypeError):
+        except AttributeError:
             # Fallback: SWIG module too old or method unavailable
             logger.warning("GetUserInfoSnapshots not available, falling back to nick list")
             return [{"nick": n, "user_class": 0, "share": 0, "ip": "",
                       "country": "", "client": "", "status": ""}
                      for n in self.get_user_nicks()]
+
+        user_list = []
+        for snap in snapshots:
+            # SWIG maps C++ char → Python str; normalise mode to a
+            # single-character string (or empty when unset).
+            raw_mode = getattr(snap, 'mode', '')
+            if isinstance(raw_mode, int):
+                mode = chr(raw_mode) if raw_mode else ''
+            else:
+                mode = raw_mode if raw_mode and raw_mode != '\x00' else ''
+
+            user_list.append({
+                "nick": snap.nick,
+                "user_class": snap.user_class,
+                "share": snap.share,
+                "ip": snap.ip,
+                "country": snap.country,
+                "country_name": getattr(snap, 'country_name', ''),
+                "city": getattr(snap, 'city', ''),
+                "client": snap.client_name,
+                "client_version": getattr(snap, 'client_version', ''),
+                "description": snap.description,
+                "tag": snap.tag,
+                "speed": snap.speed,
+                "email": snap.email,
+                "mode": mode,
+                "slots": getattr(snap, 'slots', 0),
+                "hubs_normal": getattr(snap, 'hubs_normal', 0),
+                "hubs_registered": getattr(snap, 'hubs_registered', 0),
+                "hubs_operator": getattr(snap, 'hubs_operator', 0),
+                "status_flag": getattr(snap, 'status_flag', 0),
+                "supports": getattr(snap, 'supports', ''),
+                "login_time": getattr(snap, 'login_time', 0),
+                "status": "",
+            })
+        return user_list
 
     def get_user_info(self, nick: str) -> dict | None:
         """
@@ -350,6 +569,12 @@ class HubContext:
             from verlihub import verlihub_core
             snap = verlihub_core.UserInfoSnapshot()
             if self._cpp.GetUserInfo(nick, snap):
+                raw_mode = getattr(snap, 'mode', '')
+                if isinstance(raw_mode, int):
+                    mode = chr(raw_mode) if raw_mode else ''
+                else:
+                    mode = raw_mode if raw_mode and raw_mode != '\x00' else ''
+
                 return {
                     "nick": snap.nick,
                     "user_class": snap.user_class,
@@ -364,7 +589,7 @@ class HubContext:
                     "tag": snap.tag,
                     "speed": snap.speed,
                     "email": snap.email,
-                    "mode": chr(getattr(snap, 'mode', 0)) if getattr(snap, 'mode', 0) else '',
+                    "mode": mode,
                     "slots": getattr(snap, 'slots', 0),
                     "hubs_normal": getattr(snap, 'hubs_normal', 0),
                     "hubs_registered": getattr(snap, 'hubs_registered', 0),
@@ -372,9 +597,10 @@ class HubContext:
                     "status_flag": getattr(snap, 'status_flag', 0),
                     "supports": getattr(snap, 'supports', ''),
                     "login_time": getattr(snap, 'login_time', 0),
+                    "tls_version": getattr(snap, 'tls_version', ''),
                     "status": "",
                 }
-        except (AttributeError, TypeError):
+        except (AttributeError, ImportError):
             pass
         return None
     
@@ -385,7 +611,18 @@ class HubContext:
     def send_to_user(self, nick: str, message: str) -> bool:
         """Send a message to a specific user."""
         return self._cpp.SendToUser(nick, message)
-    
+
+    def send_pm_as(self, from_nick: str, to_nick: str, message: str) -> bool:
+        """
+        Send a private message from *from_nick* to *to_nick*.
+
+        Constructs the raw NMDC PM protocol frame and delivers it via
+        ``SendToUser`` (→ ``SendToNick`` → ``SendToConn``).  The C++ layer
+        appends the trailing ``|`` terminator automatically.
+        """
+        raw = f"$To: {to_nick} From: {from_nick} $<{from_nick}> {message}"
+        return self._cpp.SendToUser(to_nick, raw)
+
     def send_to_all(self, message: str) -> bool:
         """Broadcast message to all users."""
         return self._cpp.SendToAll(message)
@@ -401,6 +638,170 @@ class HubContext:
     def kick_user(self, op_nick: str, nick: str, reason: str) -> bool:
         """Kick a user from the hub."""
         return self._cpp.KickUser(op_nick, nick, reason)
+
+    def force_move(self, nick: str, address: str) -> bool:
+        """Force-move (redirect) a user to another hub address."""
+        return self._cpp.ForceMove(nick, address)
+
+    def disconnect_user(self, nick: str) -> bool:
+        """Disconnect a user without redirect."""
+        return self._cpp.DisconnectUser(nick)
+
+    def send_to_opchat(self, message: str, from_nick: str = "") -> bool:
+        """Send a message to OpChat."""
+        return self._cpp.SendToOpChat(message, from_nick)
+
+    def get_protocol_stats(self) -> dict:
+        """Get protocol-level message counters."""
+        snap = self._cpp.GetProtocolStats()
+        return {
+            "messages_in": snap.messages_in,
+            "messages_out": snap.messages_out,
+            "chat_count": snap.chat_count,
+            "pm_count": snap.pm_count,
+            "search_count": snap.search_count,
+            "myinfo_count": snap.myinfo_count,
+            "ctm_count": snap.ctm_count,
+            "sr_count": snap.sr_count,
+            "mcto_count": snap.mcto_count,
+            "flood_blocked": snap.flood_blocked,
+            "ban_blocked": snap.ban_blocked,
+        }
+
+    def lookup_geoip(self, ip: str) -> dict:
+        """Look up GeoIP data for an IP address."""
+        info = self._cpp.LookupGeoIP(ip)
+        return {
+            "country_code": info.country_code,
+            "country_name": info.country_name,
+            "city": info.city,
+            "available": info.available,
+        }
+
+    def set_flood_config(self, flood_type: int, period_ms: int, max_tokens: int) -> None:
+        """Set flood protection config for a message type."""
+        self._cpp.SetFloodConfig(flood_type, period_ms, max_tokens)
+
+    def get_flood_config(self, flood_type: int) -> tuple[int, int]:
+        """Get flood protection config (period_ms, max_tokens) for a type."""
+        return self._cpp.GetFloodConfig(flood_type)
+
+    # Targeted messaging
+
+    def send_to_active(self, message: str) -> bool:
+        """Send a message to all active-mode users."""
+        return self._cpp.SendToActive(message)
+
+    def send_to_passive(self, message: str) -> bool:
+        """Send a message to all passive-mode users."""
+        return self._cpp.SendToPassive(message)
+
+    def send_to_active_class(self, message: str, min_class: int, max_class: int) -> bool:
+        """Send a message to active-mode users in a class range."""
+        return self._cpp.SendToActiveClass(message, min_class, max_class)
+
+    def send_to_passive_class(self, message: str, min_class: int, max_class: int) -> bool:
+        """Send a message to passive-mode users in a class range."""
+        return self._cpp.SendToPassiveClass(message, min_class, max_class)
+
+    def broadcast_chat(self, from_nick: str, message: str) -> bool:
+        """Broadcast a chat message as a specific nick."""
+        return self._cpp.BroadcastChat(from_nick, message)
+
+    # Bot management
+
+    def add_robot(self, nick: str, description: str, user_class: int) -> bool:
+        """Register a bot nick on the hub."""
+        return self._cpp.AddRobot(nick, description, user_class)
+
+    def remove_robot(self, nick: str) -> bool:
+        """Remove a bot from the hub."""
+        return self._cpp.RemoveRobot(nick)
+
+    # Active/passive counts
+
+    def get_active_user_count(self) -> int:
+        """Return the number of users in active mode."""
+        return self._cpp.GetActiveUserCount()
+
+    def get_passive_user_count(self) -> int:
+        """Return the number of users in passive mode."""
+        return self._cpp.GetPassiveUserCount()
+
+    # Plugin management
+
+    def load_plugin(self, path: str) -> bool:
+        """Load a native plugin from the given path."""
+        return self._cpp.LoadPlugin(path)
+
+    def unload_plugin(self, name: str) -> bool:
+        """Unload a native plugin by name."""
+        return self._cpp.UnloadPlugin(name)
+
+    def reload_plugin(self, name: str) -> bool:
+        """Reload a native plugin by name."""
+        return self._cpp.ReloadPlugin(name)
+
+    def get_loaded_plugins(self) -> list[dict]:
+        """Return info about loaded native plugins."""
+        infos = self._cpp.GetLoadedPlugins()
+        return [{"name": p.name, "path": p.path, "version": p.version} for p in infos]
+
+    def is_plugin_loaded(self, name: str) -> bool:
+        """Check if a plugin is currently loaded."""
+        return self._cpp.IsPluginLoaded(name)
+
+    # Lua script management
+
+    def execute_lua_script(self, path: str) -> bool:
+        """Load and execute a Lua script."""
+        return self._cpp.ExecuteLuaScript(path)
+
+    def unload_lua_script(self, path: str) -> bool:
+        """Unload a Lua script."""
+        return self._cpp.UnloadLuaScript(path)
+
+    def get_loaded_lua_scripts(self) -> list[str]:
+        """Return paths of loaded Lua scripts."""
+        return list(self._cpp.GetLoadedLuaScripts())
+
+    # Python script management
+
+    def execute_python_script(self, path: str) -> bool:
+        """Load and execute a Python script."""
+        return self._cpp.ExecutePythonScript(path)
+
+    def unload_python_script(self, path: str) -> bool:
+        """Unload a Python script."""
+        return self._cpp.UnloadPythonScript(path)
+
+    def get_loaded_python_scripts(self) -> list[str]:
+        """Return paths of loaded Python scripts."""
+        return list(self._cpp.GetLoadedPythonScripts())
+
+    # Ban cache management
+
+    def load_ban_cache(self) -> None:
+        """Reload ban cache from DB."""
+        self._cpp.LoadBanCache([], [])
+
+    def add_ban_cache_ip(self, ip: str) -> None:
+        """Add an IP to the ban cache."""
+        self._cpp.AddBanCacheIP(ip)
+
+    def add_ban_cache_nick(self, nick: str) -> None:
+        """Add a nick to the ban cache."""
+        self._cpp.AddBanCacheNick(nick)
+
+    def clear_ban_cache(self) -> None:
+        """Clear all ban cache entries."""
+        self._cpp.ClearBanCache()
+
+    # Reload
+
+    def request_reload(self) -> None:
+        """Request a configuration reload."""
+        self._cpp.RequestReload()
     
     # Configuration
     

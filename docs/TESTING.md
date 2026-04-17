@@ -179,7 +179,7 @@ src/core/tests/                          # C++ GTest unit tests (259 tests)
                                          #   ThreadSafeMap, LockFreeCounter, EventFlag,
                                          #   ThreadSafeUserCollection
 
-python/tests/                            # Python pytest suite (1025+ tests)
+python/tests/                            # Python pytest suite (1208+ tests)
 ├── conftest.py                          # Pytest fixtures and configuration
 ├── test_verlihub_core.py                # SWIG binding tests
 ├── test_plugins.py                      # Generic plugin management tests
@@ -200,6 +200,11 @@ python/tests/                            # Python pytest suite (1025+ tests)
 ├── test_websocket_e2e.py                # End-to-end WebSocket tests
 ├── test_dashboard_extended.py           # Dashboard HTML rendering tests
 ├── test_config.py                       # Configuration system tests
+├── test_hublist.py                      # Hublist registration server tests (59 tests)
+├── test_hublist_dashboard.py            # Hublist dashboard, blocking, GeoIP (84 tests)
+│                                        #   Block CRUD, block enforcement, search,
+│                                        #   master-only access, WebSocket events,
+│                                        #   two-hub integration, GeoIP enrichment
 └── test_benchmarks.py                   # Performance benchmarks
 
 docker/
@@ -374,3 +379,25 @@ pytest -vvs --tb=long tests/
 ```bash
 pytest tests/test_plugins.py::TestPluginManagement::test_load_plugin -v
 ```
+
+### TLS Integration Tests
+
+`test_tls_integration.py` verifies the TLS configuration pipeline end-to-end:
+
+| Test Class | What it covers |
+|---|---|
+| `TestApplyConfigTLS` | `apply_config.py` SQL generation for TLS enable/disable |
+| `TestComposeGenerationTLS` | Docker Compose output: TLS proxy, certbot, volumes, ports, legacy edition |
+| `TestMyIPProtocol` | `UserInfoSnapshot.tls_version` via SWIG (skipped when SWIG build lacks the field) |
+| `TestUserInfoTLSDisplay` | `user_info.py` Hub TLS display with/without TLS info |
+| `TestTLSConfigFiles` | YAML config validity, Dockerfile existence, entrypoint permissions |
+
+Run them with:
+
+```bash
+pytest python/tests/test_tls_integration.py -v
+```
+
+Docker TLS test configs live in `docker/tests/configs/`:
+- `tls-selfsigned.yml` — self-signed certificate mode
+- `tls-only.yml` — TLS-only (rejects plaintext connections)

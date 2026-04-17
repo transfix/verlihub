@@ -1,0 +1,43 @@
+# TLS test configuration
+# Used to verify TLS proxy sidecar and certbot integration.
+# This config uses self-signed certificates (default when no cert_file/key_file).
+environment: test
+mode: api
+
+database:
+  type: mysql
+  host: mysql
+  port: 3306
+  name: verlihub_test
+  user: verlihub
+  password: verlihub
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+
+hub:
+  name: "TLS Test Hub"
+  port: 4111
+  max_users: 100
+
+users:
+  masters:
+    - nick: admin
+      password: admin123
+
+tls:
+  enabled: true
+  port: 411
+  only_mode: false
+  min_version: 2
+  cert_org: "Verlihub Test"
+  cert_email: "test@localhost"
+  cert_host: "localhost"
+
+logging:
+  level: debug

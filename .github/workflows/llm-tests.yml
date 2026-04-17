@@ -1,0 +1,51 @@
+name: LLM Integration Tests
+
+on:
+  push:
+    branches: [master, main, develop, verlihub-py, verlihub-py-llm]
+  pull_request:
+    branches: [master, main, develop, verlihub-py]
+
+jobs:
+  llm-integration-tests:
+    name: LLM Chat + Tool-Calling Tests
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.??* 2>/dev/null || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean up previous LLM test resources
+        run: |
+          docker compose -f docker/docker-compose.llm-test.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+      - name: Run LLM integration tests
+        run: ./docker_test_launcher.sh llm
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose -f docker/docker-compose.llm-test.yml logs > /tmp/ci-logs/llm-test-compose.log 2>&1 || true
+          docker compose -f docker/docker-compose.llm-test.yml logs ollama > /tmp/ci-logs/ollama.log 2>&1 || true
+          docker compose -f docker/docker-compose.llm-test.yml logs llm-hub > /tmp/ci-logs/llm-hub.log 2>&1 || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-test-logs
+          path: /tmp/ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.llm-test.yml down --remove-orphans 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true

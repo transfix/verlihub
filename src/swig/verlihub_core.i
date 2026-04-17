@@ -50,6 +50,7 @@
 %{
 // Include headers needed for compilation
 #include "core/hub_context.h"
+#include "core/nmdc_protocol.h"
 #include "core/thread_safe_collections.h"
 
 using namespace nVerliHub;
@@ -400,19 +401,258 @@ Returns:
 ";
 
 // ============================================================================
+// Phase 1: Active/Passive Messaging Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SendToActive "
+Send raw NMDC message to all active-mode users.
+
+Args:
+    message: NMDC message to send
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToPassive "
+Send raw NMDC message to all passive-mode users.
+
+Args:
+    message: NMDC message to send
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToActiveClass "
+Send raw NMDC message to active-mode users in a class range.
+
+Args:
+    message: NMDC message to send
+    min_class: Minimum user class (inclusive)
+    max_class: Maximum user class (inclusive)
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::SendToPassiveClass "
+Send raw NMDC message to passive-mode users in a class range.
+
+Args:
+    message: NMDC message to send
+    min_class: Minimum user class (inclusive)
+    max_class: Maximum user class (inclusive)
+
+Returns:
+    True if hub is running
+";
+
+%feature("docstring") nVerliHub::HubContext::GetActiveUserCount "
+Get count of active-mode online users.
+";
+
+%feature("docstring") nVerliHub::HubContext::GetPassiveUserCount "
+Get count of passive-mode online users.
+";
+
+// ============================================================================
+// Phase 1: Disconnect / PM / BroadcastChat Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::DisconnectUser "
+Disconnect a user silently (no kick message).
+
+Args:
+    nick: User nickname to disconnect
+
+Returns:
+    True if user was found and disconnected
+";
+
+%feature("docstring") nVerliHub::HubContext::SendPM "
+Send a private message.
+
+Args:
+    from_nick: Sender nickname
+    to_nick: Recipient nickname
+    message: Message content
+
+Returns:
+    True if recipient was found and message sent
+";
+
+%feature("docstring") nVerliHub::HubContext::BroadcastChat "
+Broadcast a chat message from a given sender to all users.
+
+Args:
+    from_nick: Sender nickname
+    message: Chat message content
+
+Returns:
+    True if hub is running
+";
+
+// ============================================================================
+// Phase 1: Flood Protection Configuration Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SetFloodConfig "
+Set the rate limit for a specific flood message type.
+
+Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM, 5=ExtJSON
+
+Args:
+    type: Flood type integer (0-5)
+    period_ms: Token refill period in milliseconds
+    max_tokens: Maximum tokens (burst capacity)
+";
+
+%feature("docstring") nVerliHub::HubContext::GetFloodConfig "
+Get the current flood limit for a message type.
+
+Flood types: 0=Chat, 1=PM, 2=Search, 3=MyINFO, 4=CTM, 5=ExtJSON
+
+Args:
+    type: Flood type integer (0-5)
+
+Returns:
+    Tuple of (period_ms, max_tokens), or (0, 0) for invalid type
+";
+
+// ============================================================================
+// Phase 1: Ban Cache Management Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::LoadBanCache "
+Load the ban cache from Python-provided lists.
+Replaces the current cache atomically for fast-path rejection.
+
+Args:
+    ips: List of banned IP addresses
+    nicks: List of banned nicknames
+";
+
+%feature("docstring") nVerliHub::HubContext::AddBanCacheIP "
+Add a single IP to the ban cache.
+
+Args:
+    ip: IP address to ban
+";
+
+%feature("docstring") nVerliHub::HubContext::AddBanCacheNick "
+Add a single nick to the ban cache.
+
+Args:
+    nick: Nickname to ban
+";
+
+%feature("docstring") nVerliHub::HubContext::RemoveBanCacheIP "
+Remove a single IP from the ban cache.
+
+Args:
+    ip: IP address to unban
+";
+
+%feature("docstring") nVerliHub::HubContext::RemoveBanCacheNick "
+Remove a single nick from the ban cache.
+
+Args:
+    nick: Nickname to unban
+";
+
+%feature("docstring") nVerliHub::HubContext::ClearBanCache "
+Clear the entire ban cache.
+";
+
+// ============================================================================
+// Phase 2: ForceMove Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::ForceMove "
+Force-move (redirect) a user to another hub address.
+Sends $ForceMove and disconnects the user.
+
+Args:
+    nick: User to redirect
+    address: Hub address to redirect to (e.g. 'other-hub.example.com:411')
+
+Returns:
+    True if user was found and redirected
+";
+
+// ============================================================================
+// Phase 2: Protocol Statistics Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::GetProtocolStats "
+Get a snapshot of protocol-level statistics.
+
+Returns:
+    ProtocolStatsSnapshot with message counters
+";
+
+%feature("docstring") nVerliHub::HubContext::ProtocolStatsSnapshot "
+Snapshot of protocol-level message counters.
+
+Attributes:
+    messages_in: Total messages received
+    messages_out: Total messages sent
+    chat_count: Chat messages processed
+    pm_count: Private messages processed
+    search_count: Search requests processed
+    myinfo_count: MyINFO updates processed
+    ctm_count: ConnectToMe requests processed
+    sr_count: Search results relayed
+    mcto_count: MCTo messages processed
+    flood_blocked: Messages blocked by flood limiter
+    ban_blocked: Connections/nicks blocked by ban cache
+";
+
+// ============================================================================
+// Phase 2: GeoIP Lookup Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::LookupGeoIP "
+Look up GeoIP data for an IP address.
+
+Args:
+    ip: IPv4 or IPv6 address string
+
+Returns:
+    GeoIPInfo with country_code, country_name, city, and available flag
+";
+
+%feature("docstring") nVerliHub::HubContext::GeoIPInfo "
+Result of a GeoIP lookup.
+
+Attributes:
+    country_code: Two-letter ISO 3166-1 code (e.g. 'US')
+    country_name: English country name
+    city: City name
+    available: True if the lookup succeeded
+";
+
+// ============================================================================
 // unique_ptr handling for HubContext::Create
 // ============================================================================
 
-// Don't ignore Create - we'll use a typemap instead
-// %ignore nVerliHub::HubContext::Create;
+// SWIG 4.0.x generates SwigValueWrapper for unique_ptr return types, which
+// tries to copy-construct the unique_ptr (a deleted operation).  SWIG 4.2+
+// has a move-aware SwigValueWrapper so it compiles, but 4.0.x doesn't.
+//
+// Work-around: hide the original Create() from SWIG and provide a raw-pointer
+// returning wrapper via %extend with a different name, then alias it back to
+// Create in Python.  %newobject tells SWIG that Python owns the returned
+// object and should call delete when done.
+%ignore nVerliHub::HubContext::Create;
 
-// Typemap for unique_ptr return value: release ownership to Python
-%typemap(out) std::unique_ptr<nVerliHub::HubContext> {
-    $result = SWIG_NewPointerObj($1.release(), $descriptor(nVerliHub::HubContext*), SWIG_POINTER_OWN);
+%extend nVerliHub::HubContext {
+    static nVerliHub::HubContext *_Create(const std::string &config_path) {
+        return nVerliHub::HubContext::Create(config_path).release();
+    }
 }
-
-// Tell SWIG that Create should transfer ownership
-%newobject nVerliHub::HubContext::Create;
+%newobject nVerliHub::HubContext::_Create;
 
 // Ignore internal methods not needed in Python
 %ignore nVerliHub::HubContext::GetServer;
@@ -433,11 +673,129 @@ Returns:
 // Make enum values accessible as verlihub_core.HubEventType_UserConnect etc.
 
 // ============================================================================
+// Phase 3.6: Protocol Extension Callback Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnExtJSON "
+Called when a client sends $ExtJSON.
+Return false to block forwarding to other clients.
+
+Args:
+    nick: Sender's nickname
+    json: JSON data payload
+";
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnMyHubURL "
+Called when a client sends $MyHubURL.
+Return false to reject and disconnect.
+
+Args:
+    nick: Sender's nickname
+    url: Reported hub URL
+";
+
+%feature("docstring") nVerliHub::IHubEventCallback::OnUserINUpdate "
+Called when a client sends $IN (incremental info update).
+Return false to block forwarding.
+
+Args:
+    nick: Sender's nickname
+    data: Update data payload
+";
+
+// ============================================================================
+// Phase 3.6: SendToOpChat Docstring
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SendToOpChat "
+Send a message to the operator chat channel.
+All online operators receive the message as a PM from OpChat.
+
+Args:
+    message: Message content
+    from: Optional sender name (default: empty for hub)
+
+Returns:
+    True if hub is running
+";
+
+// ============================================================================
+// Phase 3.7: ZLib Compression Docstrings
+// ============================================================================
+
+%feature("docstring") nVerliHub::HubContext::SetZLibEnabled "
+Enable or disable ZLib compression for clients supporting ZPipe0.
+
+Args:
+    enabled: True to enable compression
+";
+
+%feature("docstring") nVerliHub::HubContext::IsZLibEnabled "
+Check if ZLib compression is enabled.
+";
+
+%feature("docstring") nVerliHub::HubContext::SetZLibMinSize "
+Set minimum data size (bytes) before compression is attempted.
+
+Args:
+    min_size: Minimum size in bytes (default: 128)
+";
+
+%feature("docstring") nVerliHub::HubContext::GetZLibMinSize "
+Get minimum data size for compression.
+";
+
+// ============================================================================
 // Include the headers to generate wrappers
 // ============================================================================
 
 %include "core/hub_context.h"
 // Don't include thread_safe_collections.h - internal implementation detail
+
+// ============================================================================
+// NMDCProtocol — expose parsing and message construction utilities
+// ============================================================================
+
+%feature("docstring") nVerliHub::NMDCProtocol::ParseTag
+"Parse an NMDC tag string like '<ClientName V:x.y,M:A,H:1/0/0,S:3>' into a TagData struct.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::ParseMyINFO
+"Parse a $MyINFO protocol message into a MyINFOData struct.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeForceMove
+"Construct a $ForceMove <address>| protocol message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeChat
+"Construct a main chat protocol message: <from> message|";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakePrivateMessage
+"Construct a PM: $To: <to> From: <from> $<<from>> <message>|";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeBotMyINFO
+"Construct a $MyINFO for a hub bot with default speed/share.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeBotList
+"Construct a $BotList nick1$$nick2$$| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeMCTo
+"Construct a $MCTo: <to> $<from> <message>| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::MakeHubTopic
+"Construct a $HubTopic <topic>| message.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::Escape
+"Escape special NMDC characters as /%DCNnnn%/ sequences.";
+
+%feature("docstring") nVerliHub::NMDCProtocol::UnEscape
+"Unescape /%DCNnnn%/ sequences in a string.";
+
+// Rename 'from' fields in protocol structs to avoid Python keyword clash.
+// SWIG would auto-rename to '_from' with a warning; we make it explicit.
+%rename("from_nick") nVerliHub::NMDCProtocol::PrivateMessageData::from;
+%rename("from_nick") nVerliHub::NMDCProtocol::MCToData::from;
+
+// Expose the full NMDCProtocol namespace — structs + free functions
+%include "core/nmdc_protocol.h"
 
 // ============================================================================
 // Additional Python-friendly methods
@@ -499,10 +857,66 @@ Returns:
         """Check if the hub is running."""
         return self.IsRunning()
     
+    @property
+    def active_user_count(self):
+        """Get the count of active-mode users."""
+        return self.GetActiveUserCount()
+    
+    @property
+    def passive_user_count(self):
+        """Get the count of passive-mode users."""
+        return self.GetPassiveUserCount()
+    
     @property 
     def has_pending_shutdown(self):
         """Check if shutdown has been requested."""
         return self.HasPendingShutdown()
+    
+    @staticmethod
+    def Create(config_path):
+        """Create a new HubContext (caller owns the returned object)."""
+        return HubContext._Create(config_path)
+    
+    def lookup_geoip(self, ip):
+        """
+        Look up GeoIP data for an IP address.
+
+        Args:
+            ip: IPv4 or IPv6 address string
+
+        Returns:
+            dict with country_code, country_name, city, available keys
+            or None if GeoIP is not available
+        """
+        info = self.LookupGeoIP(ip)
+        return {
+            'country_code': info.country_code,
+            'country_name': info.country_name,
+            'city': info.city,
+            'available': info.available,
+        }
+
+    def get_protocol_stats(self):
+        """
+        Get protocol-level message counters.
+
+        Returns:
+            dict with messages_in, messages_out, chat_count, pm_count, etc.
+        """
+        s = self.GetProtocolStats()
+        return {
+            'messages_in': s.messages_in,
+            'messages_out': s.messages_out,
+            'chat_count': s.chat_count,
+            'pm_count': s.pm_count,
+            'search_count': s.search_count,
+            'myinfo_count': s.myinfo_count,
+            'ctm_count': s.ctm_count,
+            'sr_count': s.sr_count,
+            'mcto_count': s.mcto_count,
+            'flood_blocked': s.flood_blocked,
+            'ban_blocked': s.ban_blocked,
+        }
     %}
 }
 

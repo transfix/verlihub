@@ -52,10 +52,10 @@
                     <div class="select is-fullwidth">
                         <select id="log-type" onchange="filterLogs()">
                             <option value="all">All Types</option>
+                            <option value="core">Core (C++)</option>
                             <option value="system">System</option>
-                            <option value="user">User Activity</option>
-                            <option value="chat">Chat</option>
-                            <option value="command">Commands</option>
+                            <option value="connection">Connection</option>
+                            <option value="pm">Private Messages</option>
                         </select>
                     </div>
                 </div>
@@ -66,7 +66,7 @@
                 <label class="label">Search</label>
                 <div class="control has-icons-left">
                     <input class="input" type="text" id="log-search" 
-                           placeholder="Search logs..." onkeyup="filterLogs()">
+                           placeholder="Search logs..." oninput="filterLogs()">
                     <span class="icon is-small is-left">
                         <i class="fas fa-search"></i>
                     </span>
@@ -85,23 +85,23 @@
 </div>
 
 <!-- Log viewer -->
-<div class="box">
-    <div id="log-container" class="log-viewer" style="height: 500px; overflow-y: auto; font-family: monospace; font-size: 0.85rem;">
+<div class="box" style="padding:0.5rem">
+    <div id="log-container" class="log-viewer">
         {% if logs %}
             {% for log in logs %}
-            <div class="log-entry log-{{ log.level }}" data-level="{{ log.level }}" data-type="{{ log.type }}">
-                <span class="log-time has-text-grey">{{ log.time }}</span>
-                <span class="log-level tag is-{% if log.level == 'error' %}danger{% elif log.level == 'warning' %}warning{% elif log.level == 'debug' %}light{% else %}info{% endif %} is-light">{{ log.level|upper }}</span>
-                <span class="log-message">{{ log.message }}</span>
-            </div>
+            <div class="log-entry log-{{ log.level }}" data-level="{{ log.level }}" data-type="{{ log.log_type }}"><span class="log-time">{{ log.time[-15:-6] if log.time|length > 15 else log.time }}</span> <span class="ll ll-{{ log.level }}">{{ log.level[0]|upper }}</span> <span class="lt">{{ log.log_type }}</span> <span class="log-message">{{ log.message }}</span></div>
             {% endfor %}
         {% else %}
-            <div class="has-text-centered has-text-grey py-6">
+            <div class="has-text-centered has-text-grey py-6" id="no-logs-placeholder">
                 <i class="fas fa-file-alt fa-3x mb-3"></i>
                 <p>No log entries</p>
                 <p class="is-size-7">Logs will appear here when events occur</p>
             </div>
         {% endif %}
+    </div>
+    <div class="is-size-7 has-text-grey mt-1" id="log-status">
+        <span id="log-count">{{ logs|length }}</span> entries loaded
+        &middot; <span id="ws-status" class="has-text-warning">Connecting&hellip;</span>
     </div>
 </div>
 
@@ -127,44 +127,37 @@
     .log-viewer {
         background-color: #1a1a2e;
         color: #e4e4e4;
-        padding: 1rem;
+        padding: 0.25rem 0.4rem;
         border-radius: 4px;
+        scroll-behavior: smooth;
+        height: calc(100vh - 340px);
+        min-height: 300px;
+        overflow-y: auto;
+        font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 0.75rem;
+        line-height: 1.35;
     }
-    
-    [data-theme="light"] .log-viewer {
-        background-color: #f5f5f5;
-        color: #363636;
-    }
-    
+    [data-theme="light"] .log-viewer { background-color: #f5f5f5; color: #363636; }
     .log-entry {
-        padding: 0.25rem 0;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0 0.2rem;
     }
-    
-    [data-theme="light"] .log-entry {
-        border-bottom: 1px solid rgba(0,0,0,0.1);
-    }
-    
-    .log-entry.hidden {
-        display: none;
-    }
-    
-    .log-time {
-        margin-right: 0.5rem;
-    }
-    
-    .log-level {
-        margin-right: 0.5rem;
-        font-size: 0.7rem;
-    }
-    
-    .log-entry.log-error {
-        background-color: rgba(241, 70, 104, 0.1);
-    }
-    
-    .log-entry.log-warning {
-        background-color: rgba(255, 221, 87, 0.1);
-    }
+    .log-entry:hover { white-space: pre-wrap; word-break: break-all; background-color: rgba(255,255,255,0.05); }
+    [data-theme="light"] .log-entry:hover { background-color: rgba(0,0,0,0.04); }
+    .log-entry.hidden { display: none; }
+    .log-time { color: #888; margin-right: 0.3rem; }
+    .ll { display: inline-block; width: 1.1em; text-align: center; border-radius: 2px; margin-right: 0.3rem; font-weight: 600; font-size: 0.7rem; }
+    .ll-info { color: #43b0f1; }
+    .ll-warning { color: #ffd254; }
+    .ll-error { color: #ff6b81; }
+    .ll-debug { color: #777; }
+    .lt { color: #666; margin-right: 0.3rem; }
+    .log-entry.log-error { background-color: rgba(241,70,104,0.08); }
+    .log-entry.log-warning { background-color: rgba(255,221,87,0.06); }
+    .log-entry:nth-child(even) { background-color: rgba(255,255,255,0.015); }
+    [data-theme="light"] .log-entry:nth-child(even) { background-color: rgba(0,0,0,0.02); }
 </style>
 
 <script>
@@ -185,15 +178,21 @@
             
             ws.onopen = () => {
                 console.log('Log WebSocket connected');
+                const el = document.getElementById('ws-status');
+                if (el) { el.textContent = 'Live'; el.className = 'has-text-success'; }
             };
             
             ws.onmessage = (event) => {
                 const log = JSON.parse(event.data);
-                addLogEntry(log);
+                if (log.type === 'log') {
+                    addLogEntry(log);
+                }
             };
             
             ws.onclose = () => {
                 console.log('Log WebSocket disconnected, reconnecting...');
+                const el = document.getElementById('ws-status');
+                if (el) { el.textContent = 'Disconnected — reconnecting\u2026'; el.className = 'has-text-warning'; }
                 setTimeout(connectWebSocket, 3000);
             };
             
@@ -208,8 +207,8 @@
     function addLogEntry(log) {
         const container = document.getElementById('log-container');
         
-        // Remove "no logs" message if present
-        const emptyMsg = container.querySelector('.has-text-centered');
+        // Remove "no logs" placeholder if present
+        const emptyMsg = document.getElementById('no-logs-placeholder');
         if (emptyMsg) {
             emptyMsg.remove();
         }
@@ -217,18 +216,13 @@
         const entry = document.createElement('div');
         entry.className = `log-entry log-${log.level}`;
         entry.dataset.level = log.level;
-        entry.dataset.type = log.type || 'system';
+        entry.dataset.type = log.log_type || log.type || 'system';
         
-        let levelClass = 'info';
-        if (log.level === 'error') levelClass = 'danger';
-        else if (log.level === 'warning') levelClass = 'warning';
-        else if (log.level === 'debug') levelClass = 'light';
-        
-        entry.innerHTML = `
-            <span class="log-time has-text-grey">${log.time || new Date().toISOString()}</span>
-            <span class="log-level tag is-${levelClass} is-light">${log.level?.toUpperCase() || 'INFO'}</span>
-            <span class="log-message">${escapeHtml(log.message)}</span>
-        `;
+        const logType = log.log_type || log.type || 'system';
+        const ts = (log.time || new Date().toISOString());
+        const short_ts = ts.length > 15 ? ts.slice(-15, -6) : ts;
+        const lvl = (log.level || 'info');
+        entry.innerHTML = `<span class="log-time">${short_ts}</span> <span class="ll ll-${lvl}">${lvl.charAt(0).toUpperCase()}</span> <span class="lt">${escapeHtml(logType)}</span> <span class="log-message">${escapeHtml(log.message)}</span>`;
         
         container.appendChild(entry);
         
@@ -241,8 +235,15 @@
         }
         
         // Limit entries
-        while (container.children.length > 1000) {
-            container.firstChild.remove();
+        while (container.querySelectorAll('.log-entry').length > 2000) {
+            const first = container.querySelector('.log-entry');
+            if (first) first.remove();
+        }
+
+        // Update counter
+        const countEl = document.getElementById('log-count');
+        if (countEl) {
+            countEl.textContent = container.querySelectorAll('.log-entry').length;
         }
     }
     
@@ -285,11 +286,13 @@
                 try {
                     await apiCall('DELETE', '/logs');
                     document.getElementById('log-container').innerHTML = `
-                        <div class="has-text-centered has-text-grey py-6">
+                        <div class="has-text-centered has-text-grey py-6" id="no-logs-placeholder">
                             <i class="fas fa-file-alt fa-3x mb-3"></i>
                             <p>Logs cleared</p>
                         </div>
                     `;
+                    const countEl = document.getElementById('log-count');
+                    if (countEl) countEl.textContent = '0';
                     showNotification('Logs cleared successfully', 'success');
                 } catch (error) {
                     showNotification('Failed to clear logs: ' + error.message, 'danger');

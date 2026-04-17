@@ -277,7 +277,7 @@ def _get_all_users(ctx) -> list[dict]:
 
 
 @router.get("/stats", response_model=HubStatistics)
-async def get_statistics(ctx=Depends(get_hub_context)) -> HubStatistics:
+def get_statistics(ctx=Depends(get_hub_context)) -> HubStatistics:
     """Get comprehensive hub statistics."""
     try:
         all_users = _get_all_users(ctx)
@@ -313,7 +313,7 @@ async def get_statistics(ctx=Depends(get_hub_context)) -> HubStatistics:
 
 
 @router.get("/geo", response_model=GeoStats)
-async def get_geographic_stats(ctx=Depends(get_hub_context)) -> GeoStats:
+def get_geographic_stats(ctx=Depends(get_hub_context)) -> GeoStats:
     """Get geographic distribution of users."""
     try:
         all_users = _get_all_users(ctx)
@@ -356,7 +356,7 @@ async def get_geographic_stats(ctx=Depends(get_hub_context)) -> GeoStats:
 
 
 @router.get("/share", response_model=ShareStats)
-async def get_share_stats(ctx=Depends(get_hub_context)) -> ShareStats:
+def get_share_stats(ctx=Depends(get_hub_context)) -> ShareStats:
     """Get share size statistics."""
     try:
         all_users = _get_all_users(ctx)
@@ -401,7 +401,7 @@ async def get_share_stats(ctx=Depends(get_hub_context)) -> ShareStats:
 
 
 @router.get("/ops", response_model=list[OperatorInfo])
-async def get_operators(ctx=Depends(get_hub_context)) -> list[OperatorInfo]:
+def get_operators(ctx=Depends(get_hub_context)) -> list[OperatorInfo]:
     """Get list of online operators (class >= 3)."""
     try:
         all_users = _get_all_users(ctx)
@@ -425,7 +425,7 @@ async def get_operators(ctx=Depends(get_hub_context)) -> list[OperatorInfo]:
 
 
 @router.get("/bots", response_model=list[BotInfo])
-async def get_bots(ctx=Depends(get_hub_context)) -> list[BotInfo]:
+def get_bots(ctx=Depends(get_hub_context)) -> list[BotInfo]:
     """Get list of hub bots."""
     try:
         bot_nicks = ctx.get_bot_nicks() if hasattr(ctx, 'get_bot_nicks') else []
@@ -444,7 +444,7 @@ async def get_bots(ctx=Depends(get_hub_context)) -> list[BotInfo]:
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check(ctx=Depends(get_hub_context)) -> HealthResponse:
+def health_check(ctx=Depends(get_hub_context)) -> HealthResponse:
     """Health check endpoint for monitoring."""
     try:
         hub_running = ctx.is_running if hasattr(ctx, 'is_running') else False
@@ -472,7 +472,7 @@ async def health_check(ctx=Depends(get_hub_context)) -> HealthResponse:
 
 
 @router.get("/users/detailed", response_model=list[OnlineUser])
-async def get_detailed_users(
+def get_detailed_users(
     ctx=Depends(get_hub_context),
     limit: Optional[int] = None,
     offset: int = 0,

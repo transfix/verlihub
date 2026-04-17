@@ -20,8 +20,10 @@
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
+#include <sys/socket.h>  // socketpair
 
 #include "../nmdc_hub_server.h"
+#include "../hub_context.h"   // IHubEventCallback full definition
 #include "../../casyncconn.h"
 
 using namespace nVerliHub;
@@ -87,6 +89,32 @@ TEST_F(NMDCHubServerTest, SetMaxUsers) {
     // We verify indirectly: no crash, and the value is stored
     // (max_users is private, but affects OnNewConn behavior)
     SUCCEED();
+}
+
+// =============================================================================
+// Runtime Configuration Setter Tests
+// =============================================================================
+
+TEST_F(NMDCHubServerTest, SetLoginTimeout) {
+    // Should not crash, and value is stored
+    EXPECT_NO_THROW(server.SetLoginTimeout(120));
+}
+
+TEST_F(NMDCHubServerTest, SetLoginTimeout_Zero) {
+    EXPECT_NO_THROW(server.SetLoginTimeout(0));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts) {
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(5));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts_One) {
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(1));
+}
+
+TEST_F(NMDCHubServerTest, SetMaxLoginAttempts_Zero) {
+    // Edge case: 0 attempts should still be settable
+    EXPECT_NO_THROW(server.SetMaxLoginAttempts(0));
 }
 
 // =============================================================================
@@ -156,9 +184,84 @@ TEST_F(NMDCHubServerTest, DisconnectUser_NotOnline) {
 // Callback Tests
 // =============================================================================
 
-TEST_F(NMDCHubServerTest, SetCallback_Nullptr) {
-    // Should not crash
-    EXPECT_NO_THROW(server.SetCallback(nullptr));
+// Minimal callback stub (IHubEventCallback defaults are sufficient)
+class StubCallback : public IHubEventCallback {};
+
+TEST_F(NMDCHubServerTest, HasCallback_InitiallyFalse) {
+    // Freshly constructed server has no callback
+    EXPECT_FALSE(server.HasCallback());
+}
+
+TEST_F(NMDCHubServerTest, SetCallback_Nullptr_Throws) {
+    // SetCallback(nullptr) must throw — verlihub-py requires a Python callback
+    EXPECT_THROW(server.SetCallback(nullptr), std::invalid_argument);
+}
+
+TEST_F(NMDCHubServerTest, SetCallback_ValidPointer) {
+    StubCallback stub;
+    EXPECT_NO_THROW(server.SetCallback(&stub));
+    EXPECT_TRUE(server.HasCallback());
+}
+
+TEST_F(NMDCHubServerTest, SetCallback_ReplacementAllowed) {
+    // Replacing one valid callback with another must succeed
+    StubCallback stub1, stub2;
+    server.SetCallback(&stub1);
+    EXPECT_TRUE(server.HasCallback());
+    server.SetCallback(&stub2);
+    EXPECT_TRUE(server.HasCallback());
+}
+
+TEST_F(NMDCHubServerTest, SetCallback_NullAfterValid_Throws) {
+    // Once a valid callback is set, clearing it with null must throw
+    StubCallback stub;
+    server.SetCallback(&stub);
+    EXPECT_THROW(server.SetCallback(nullptr), std::invalid_argument);
+    // Original callback must still be in place
+    EXPECT_TRUE(server.HasCallback());
+}
+
+// =============================================================================
+// OnNewConn Tests (protected method — exposed via Testable subclass)
+// =============================================================================
+
+/// Subclass that exposes protected OnNewConn for unit testing
+class TestableNMDCHubServer : public NMDCHubServer {
+public:
+    using NMDCHubServer::NMDCHubServer;
+    using NMDCHubServer::OnNewConn;
+};
+
+class NMDCHubServerOnNewConnTest : public ::testing::Test {
+protected:
+    TestableNMDCHubServer server;
+    NMDCHubServerOnNewConnTest() : server(".") {}
+};
+
+TEST_F(NMDCHubServerOnNewConnTest, RejectsNullConn) {
+    EXPECT_EQ(-1, server.OnNewConn(nullptr));
+}
+
+TEST_F(NMDCHubServerOnNewConnTest, RejectsWithoutCallback) {
+    // No callback  → must reject the connection (return -1)
+    nSocket::cAsyncConn conn(42, &server, nEnums::eCT_CLIENT);
+    EXPECT_EQ(-1, server.OnNewConn(&conn));
+}
+
+TEST_F(NMDCHubServerOnNewConnTest, AcceptsWithCallback) {
+    StubCallback stub;
+    server.SetCallback(&stub);
+    // Use a real socketpair so the $Lock write succeeds
+    int fds[2];
+    ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+    {
+        nSocket::cAsyncConn conn(fds[0], &server, nEnums::eCT_CLIENT);
+        // OnNewConn should accept (return 0) — sends $Lock to the client
+        EXPECT_EQ(0, server.OnNewConn(&conn));
+        // Clean up the client from m_clients before conn goes out of scope
+        server.OnClientDeleted(&conn);
+    }
+    close(fds[1]);
 }
 
 // =============================================================================

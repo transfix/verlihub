@@ -46,7 +46,7 @@ create_database() {
 # Clones ledokol and other configured Lua script repos
 setup_lua_scripts() {
     local SCRIPTS_DIR="/usr/local/share/verlihub/scripts"
-    mkdir -p "$SCRIPTS_DIR"
+    mkdir -p "$SCRIPTS_DIR" 2>/dev/null || true
     
     # Default: always fetch ledokol if not already present
     if [ ! -f "$SCRIPTS_DIR/ledokol.lua" ]; then
@@ -55,7 +55,8 @@ setup_lua_scripts() {
             cd /tmp
             git clone --depth 1 https://github.com/Verlihub/ledokol.git 2>/dev/null || true
             if [ -f /tmp/ledokol/ledokol.lua ]; then
-                cp /tmp/ledokol/ledokol.lua "$SCRIPTS_DIR/ledokol.lua"
+                cp /tmp/ledokol/ledokol.lua "$SCRIPTS_DIR/ledokol.lua" 2>/dev/null || \
+                    echo "[entrypoint] Note: Scripts directory is read-only, skipping ledokol copy"
                 echo "[entrypoint] ledokol.lua installed to $SCRIPTS_DIR"
             else
                 echo "[entrypoint] Note: Could not fetch ledokol.lua (network may be unavailable)"

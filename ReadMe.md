@@ -141,7 +141,7 @@ Once connected as admin via a DC client:
 
 The `python/` directory contains a complete Python-based management stack:
 
-  * **NMDC Hub Server** — database-free NMDC server with SQLite or MySQL backend
+  * **NMDC Hub Server** — C++ NMDC protocol server with Python-managed database (SQLite, PostgreSQL, or MySQL)
   * **REST API** — FastAPI-based API for hub management (users, bots, plugins, console, config)
   * **Web Dashboard** — Jinja2 + SPA dashboard with real-time monitoring via WebSockets
   * **YAML Configuration** — single config file for hub, API, plugins, Lua, and more
@@ -321,6 +321,58 @@ The online-user responses include extended fields: `client_version`, `mode`,
 `supports`, `login_time`, and GeoIP enrichment (`country_name`, `city`,
 `hostname`, `is_clone`, etc.).
 
+## Hub List Directory
+
+Verlihub-py has built-in hublist support with two complementary features:
+
+### 1. Registration Client — Register This Hub on External Hublists
+
+Periodically POSTs hub info (name, address, users, share, etc.) to external
+hublist servers using the standard NMDC hublist protocol.
+
+```yaml
+hub:
+  hublist_servers:
+    - hublist.te-home.net
+    - hublist.pwiam.com
+    - my-private-hublist.org
+```
+
+The registration client runs as a background task during the FastAPI lifespan
+and sends form-encoded requests every 10 minutes (configurable via
+`hublist.registration_interval`).
+
+### 2. Hublist Server — Act as a Hub Directory
+
+Turn this Verlihub-py instance into a hublist directory server that other hubs
+can register on. Enabled via configuration:
+
+```yaml
+hublist:
+  server_enabled: true
+  registration_interval: 600   # client re-registration interval (seconds)
+  stale_timeout: 1800          # prune hubs not pinged within 30 minutes
+```
+
+**API Endpoints** (under `/api/v1/hublist`):
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/v1/hublist/` | GET | Public | Download hublist (XML or JSON via `?fmt=json`) |
+| `/api/v1/hublist/stats` | GET | Public | Hublist stats (total hubs, users, share) |
+| `/api/v1/hublist/register` | POST | Public | Register / ping a hub (form-encoded or JSON) |
+| `/api/v1/hublist/{id}` | DELETE | Admin | Remove a hub entry |
+
+The registration endpoint accepts both NMDC-standard form fields (`Name`,
+`Host`, `Description`, `Users`, `Share`, etc.) and JSON payloads. Same-address
+registrations are upserted (updated, not duplicated).
+
+### Dashboard Configuration
+
+The Network tab in the dashboard settings (`/dashboard/config`) provides:
+  * **Register on Hub Lists** — toggle + multi-line server list
+  * **Run Built-in Hublist Server** — toggle to enable the directory
+
 # Docker Production Deployment
 
 The `run_production.sh` script and `docker-compose` setup provide a complete
@@ -387,7 +439,7 @@ src/                          ← shared C++ source (libverlihub.so)
 │
 ├── core/                     ← new C++20 core library (verlihub_core_lib)
 │   ├── hub_context.*         ← HubContext: thread-safe central state
-│   ├── nmdc_hub_server.*     ← database-free NMDC server
+│   ├── nmdc_hub_server.*     ← NMDC protocol server (auth via Python)
 │   ├── nmdc_protocol.*       ← standalone NMDC protocol utilities
 │   └── thread_safe_collections.* ← lock-free containers
 │
@@ -443,6 +495,11 @@ test_hub_context        ← 32 C++ tests: lifecycle, config, events, signals, sn
 test_geo_ip_lookup      ← 25 C++ tests: MaxMind .mmdb lookups
 test_thread_safe_collections ← 31 C++ tests: thread-safe maps, counters, user collections
 ```
+
+Python tests include 59 hublist-specific tests covering model CRUD,
+XML/JSON serialization, stale pruning, registration client mocking,
+endpoint integration (GET/POST/DELETE), config round-trip, and input
+validation.
 
 # Links
 

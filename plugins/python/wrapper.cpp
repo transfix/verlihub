@@ -397,12 +397,10 @@ const char *w_packprint(w_Targs *a)
 				snprintf(tmp, sizeof(tmp), "%ld ", a->args[i].l);
 				strcat(buf, tmp);
 				break;
-				
 			case 's':
 				snprintf(tmp, sizeof(tmp), "'%s' ", a->args[i].s);
 				strcat(buf, tmp);
 				break;
-				
 			case 'd':
 				snprintf(tmp, sizeof(tmp), "%f ", a->args[i].d);
 				strcat(buf, tmp);

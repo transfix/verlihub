@@ -30,6 +30,7 @@ class ConnectionManager:
         self.active_connections: dict[str, list[WebSocket]] = {
             "hub": [],
             "logs": [],
+            "hublist": [],
         }
         self._lock = asyncio.Lock()
     
@@ -112,6 +113,15 @@ async def get_user_from_ws_cookie(websocket: WebSocket) -> Optional[TokenData]:
         return decode_token(token)
     except Exception:
         return None
+
+
+@ws_router.websocket("/llm-chat")
+async def websocket_llm_chat(websocket: WebSocket):
+    """LLM chat WebSocket — delegates to the llm route module."""
+    from verlihub.api.routes.llm import ws_llm_chat
+    token = websocket.query_params.get("token")
+    session_id = websocket.query_params.get("session_id")
+    await ws_llm_chat(websocket, token=token, session_id=session_id)
 
 
 @ws_router.websocket("/hub")
@@ -235,6 +245,64 @@ async def websocket_logs(websocket: WebSocket):
         await manager.disconnect(websocket, "logs")
 
 
+@ws_router.websocket("/hublist")
+async def websocket_hublist(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time hublist updates (master-only).
+
+    Broadcasts events like:
+    - hublist_register: A new hub registered
+    - hublist_update: Existing hub refreshed
+    - hublist_offline: Hub went stale/offline
+    - hublist_removed: Hub deleted by admin
+    - hublist_blocked: Registration was blocked
+    - hublist_block_added / hublist_block_removed: Block rule changes
+    """
+    user = await get_user_from_ws_cookie(websocket)
+
+    if not user or user.user_class < 10:  # Require master
+        await websocket.close(code=4403, reason="Master access required")
+        return
+
+    if not await manager.connect(websocket, "hublist"):
+        return
+
+    try:
+        await manager.send_personal(websocket, {
+            "type": "connected",
+            "message": "Connected to hublist events",
+            "time": datetime.now(timezone.utc).isoformat(),
+        })
+
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0,
+                )
+
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await manager.send_personal(websocket, {
+                            "type": "pong",
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        })
+                except json.JSONDecodeError:
+                    pass
+
+            except asyncio.TimeoutError:
+                await manager.send_personal(websocket, {
+                    "type": "ping",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                })
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect(websocket, "hublist")
+
+
 # --- Functions to be called by the hub core to push events ---
 
 
@@ -286,7 +354,14 @@ def emit_hub_event(event_type: str, data: dict) -> None:
 
 
 def emit_log(level: str, message: str, log_type: str = "system") -> None:
-    """Schedule a log broadcast (safe to call from any thread)."""
+    """Schedule a log broadcast and persist in ring buffer (safe from any thread)."""
+    # Persist in the ring buffer so page refreshes see history
+    try:
+        from verlihub.log_buffer import get_log_buffer
+        get_log_buffer().add(level=level, message=message, log_type=log_type)
+    except Exception:
+        pass
+
     loop = _ws_loop
     if loop is not None and loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_log(level, message, log_type), loop)

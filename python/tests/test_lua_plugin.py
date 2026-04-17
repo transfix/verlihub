@@ -39,17 +39,12 @@ def get_lua_test_script(name: str) -> str:
 @pytest.fixture
 def hub_context():
     """Create a HubContext for testing."""
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    from verlihub import verlihub_core
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
         if ctx is None:
-            pytest.skip("Could not create HubContext")
+            pytest.fail("Could not create HubContext")
         yield ctx
 
 
@@ -177,7 +172,7 @@ class TestLuaScriptManagement:
     def test_get_loaded_scripts_empty(self, hub_context):
         """Get loaded scripts when none are loaded."""
         scripts = hub_context.GetLoadedLuaScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
         # Initially empty
     
     @pytest.mark.skipif(

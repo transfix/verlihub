@@ -1,0 +1,726 @@
+{% extends "base.html" %}
+
+{% block title %}Hub List - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-network-wired mr-2"></i> Hub List
+            </h1>
+        </div>
+        <div class="level-item">
+            <span class="tag is-info" id="ws-status">
+                <i class="fas fa-circle mr-1"></i> Connecting...
+            </span>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-warning" onclick="openBlockModal()">
+                <i class="fas fa-shield-alt mr-2"></i> Block Rules
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Stats cards -->
+<div class="columns">
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Total Hubs</p>
+            <p class="title" id="stat-total">{{ hubs|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Online</p>
+            <p class="title has-text-success" id="stat-online">{{ hubs|selectattr('status', 'equalto', 1)|list|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Offline</p>
+            <p class="title has-text-danger" id="stat-offline">{{ hubs|selectattr('status', 'equalto', 0)|list|length }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Total Users</p>
+            <p class="title" id="stat-users">{{ hubs|sum(attribute='users') }}</p>
+        </div>
+    </div>
+    <div class="column">
+        <div class="box has-text-centered">
+            <p class="heading">Active Blocks</p>
+            <p class="title has-text-warning" id="stat-blocks">{{ blocks|length }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- Search bar with autocomplete -->
+<div class="box">
+    <div class="field has-addons">
+        <div class="control is-expanded">
+            <div class="dropdown is-fullwidth" id="search-dropdown">
+                <div class="dropdown-trigger" style="width:100%">
+                    <input class="input" type="text" id="search-input"
+                           placeholder="Search hubs by name, address, owner, country..."
+                           autocomplete="off"
+                           oninput="onSearchInput(this.value)"
+                           onfocus="onSearchFocus()">
+                </div>
+                <div class="dropdown-menu" id="search-menu" role="menu" style="width:100%">
+                    <div class="dropdown-content" id="search-results">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="control">
+            <button class="button is-info" onclick="doSearch()">
+                <i class="fas fa-search"></i>
+            </button>
+        </div>
+        <div class="control">
+            <button class="button" onclick="clearSearch()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Hubs table -->
+<div class="box">
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+            <thead>
+                <tr>
+                    <th style="width:30px"></th>
+                    <th>Hub Name</th>
+                    <th>Address</th>
+                    <th>Owner</th>
+                    <th>Country</th>
+                    <th class="has-text-right">Users</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="hubs-tbody">
+                {% for hub in hubs %}
+                <tr class="hub-row {% if hub.status == 0 %}has-text-grey{% endif %}"
+                    data-hub-id="{{ hub.id }}"
+                    style="cursor:pointer"
+                    onclick="openHubModal({{ hub.id }})">
+                    <td>
+                        {% if hub.logo %}
+                        <img src="{{ hub.logo }}" alt="" style="width:24px;height:24px;border-radius:3px">
+                        {% else %}
+                        <i class="fas fa-server has-text-grey-light"></i>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ hub.name }}</strong>
+                    </td>
+                    <td>
+                        <code class="is-size-7">{{ hub.address }}</code>
+                    </td>
+                    <td>{{ hub.owner or '—' }}</td>
+                    <td>
+                        {% if hub.country %}
+                        <span class="fi fi-{{ hub.country|lower }}" title="{{ hub.country }}"></span>
+                        {{ hub.country }}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                    <td class="has-text-right">{{ hub.users }}</td>
+                    <td>
+                        {% if hub.status == 1 %}
+                        <span class="tag is-success is-light">Online</span>
+                        {% else %}
+                        <span class="tag is-danger is-light">Offline</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="buttons are-small" onclick="event.stopPropagation()">
+                            <button class="button is-danger is-outlined is-small"
+                                    title="Block this hub's IP"
+                                    onclick="quickBlock('ip', '{{ hub.ip }}', '{{ hub.name }}')">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                            <button class="button is-warning is-outlined is-small"
+                                    title="Remove"
+                                    onclick="removeHub({{ hub.id }}, '{{ hub.name }}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not hubs %}
+    <div class="has-text-centered has-text-grey py-5">
+        <i class="fas fa-inbox fa-3x mb-3"></i>
+        <p>No hubs registered yet.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Hub Detail Modal -->
+<div class="modal" id="hub-modal">
+    <div class="modal-background" onclick="closeHubModal()"></div>
+    <div class="modal-card" style="max-width:700px">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="modal-hub-title">Hub Details</p>
+            <button class="delete" aria-label="close" onclick="closeHubModal()"></button>
+        </header>
+        <section class="modal-card-body" id="modal-hub-body">
+            <!-- Filled by JS -->
+        </section>
+        <footer class="modal-card-foot">
+            <div class="buttons">
+                <button class="button is-danger" id="modal-block-ip" onclick="blockFromModal('ip')">
+                    <i class="fas fa-ban mr-1"></i> Block IP
+                </button>
+                <button class="button is-danger is-light" id="modal-block-domain" onclick="blockFromModal('domain')">
+                    <i class="fas fa-globe mr-1"></i> Block Domain
+                </button>
+                <button class="button is-danger is-light" id="modal-block-asn" onclick="blockFromModal('asn')">
+                    <i class="fas fa-building mr-1"></i> Block ASN
+                </button>
+                <button class="button is-danger is-light" id="modal-block-country" onclick="blockFromModal('country')">
+                    <i class="fas fa-flag mr-1"></i> Block Country
+                </button>
+                <button class="button is-warning" id="modal-remove" onclick="removeFromModal()">
+                    <i class="fas fa-trash mr-1"></i> Remove
+                </button>
+            </div>
+        </footer>
+    </div>
+</div>
+
+<!-- Block Rules Modal -->
+<div class="modal" id="block-modal">
+    <div class="modal-background" onclick="closeBlockModal()"></div>
+    <div class="modal-card" style="max-width:800px">
+        <header class="modal-card-head">
+            <p class="modal-card-title"><i class="fas fa-shield-alt mr-2"></i> Block Rules</p>
+            <button class="delete" aria-label="close" onclick="closeBlockModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <!-- Add block form -->
+            <div class="box mb-4">
+                <h5 class="title is-6 mb-3">Add New Block Rule</h5>
+                <div class="columns">
+                    <div class="column is-3">
+                        <div class="field">
+                            <label class="label is-small">Type</label>
+                            <div class="control">
+                                <div class="select is-fullwidth is-small">
+                                    <select id="block-type">
+                                        <option value="ip">IP</option>
+                                        <option value="hostname">Hostname</option>
+                                        <option value="domain">Domain</option>
+                                        <option value="asn">ASN</option>
+                                        <option value="city">City</option>
+                                        <option value="country">Country</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-4">
+                        <div class="field">
+                            <label class="label is-small">Value</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" id="block-value"
+                                       placeholder="e.g. 1.2.3.4 or DE">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-3">
+                        <div class="field">
+                            <label class="label is-small">Reason</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" id="block-reason"
+                                       placeholder="Optional reason">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-2">
+                        <div class="field">
+                            <label class="label is-small">&nbsp;</label>
+                            <div class="control">
+                                <button class="button is-danger is-small is-fullwidth" onclick="addBlockRule()">
+                                    <i class="fas fa-plus mr-1"></i> Add
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- Existing blocks list -->
+            <table class="table is-fullwidth is-striped is-narrow">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Value</th>
+                        <th>Reason</th>
+                        <th>Created By</th>
+                        <th>Created</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="blocks-tbody">
+                    {% for block in blocks %}
+                    <tr data-block-id="{{ block.id }}">
+                        <td><span class="tag is-dark">{{ block.block_type }}</span></td>
+                        <td><code>{{ block.value }}</code></td>
+                        <td>{{ block.reason or '—' }}</td>
+                        <td>{{ block.created_by or '—' }}</td>
+                        <td class="is-size-7">{{ block.created_at.strftime('%Y-%m-%d %H:%M') if block.created_at else '—' }}</td>
+                        <td>
+                            <button class="button is-small is-danger is-outlined"
+                                    onclick="removeBlockRule({{ block.id }})">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if not blocks %}
+            <p class="has-text-centered has-text-grey" id="no-blocks-msg">No block rules configured.</p>
+            {% endif %}
+        </section>
+    </div>
+</div>
+
+<script>
+// ============= Hub data store =============
+const hubsData = {};
+{% for hub in hubs %}
+hubsData[{{ hub.id }}] = {{ hub | tojson | safe }};
+{% endfor %}
+
+const apiBase = '/api/v1/hublist';
+let searchTimeout = null;
+
+function getAuthHeaders() {
+    const cookie = document.cookie.split(';').find(c => c.trim().startsWith('access_token='));
+    if (!cookie) return {};
+    let token = cookie.split('=').slice(1).join('=').trim();
+    if (token.startsWith('Bearer ')) token = token.substring(7);
+    return { 'Authorization': 'Bearer ' + token };
+}
+
+// ============= WebSocket =============
+let ws = null;
+let wsReconnectTimer = null;
+
+function connectWebSocket() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws/hublist`);
+
+    ws.onopen = () => {
+        document.getElementById('ws-status').className = 'tag is-success';
+        document.getElementById('ws-status').innerHTML = '<i class="fas fa-circle mr-1"></i> Live';
+    };
+
+    ws.onclose = () => {
+        document.getElementById('ws-status').className = 'tag is-danger';
+        document.getElementById('ws-status').innerHTML = '<i class="fas fa-circle mr-1"></i> Disconnected';
+        wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+    };
+
+    ws.onerror = () => {};
+
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleWsMessage(msg);
+    };
+}
+
+function handleWsMessage(msg) {
+    if (msg.type === 'ping') {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: 'ping'}));
+        return;
+    }
+    if (msg.type === 'connected') return;
+
+    if (msg.type === 'hublist_register' || msg.type === 'hublist_update') {
+        const hub = msg.hub;
+        hubsData[hub.id] = hub;
+        upsertHubRow(hub);
+        updateStats();
+        showToast(`Hub ${hub.name} ${msg.type === 'hublist_register' ? 'registered' : 'updated'}`, 'is-success');
+    } else if (msg.type === 'hublist_offline') {
+        const hub = msg.hub;
+        if (hubsData[hub.id]) hubsData[hub.id].status = 0;
+        upsertHubRow(hub);
+        updateStats();
+        showToast(`Hub ${hub.name} went offline`, 'is-warning');
+    } else if (msg.type === 'hublist_removed') {
+        const hub = msg.hub;
+        delete hubsData[hub.id];
+        const row = document.querySelector(`tr[data-hub-id="${hub.id}"]`);
+        if (row) row.remove();
+        updateStats();
+        showToast(`Hub ${hub.name} removed`, 'is-danger');
+    } else if (msg.type === 'hublist_blocked') {
+        showToast(`Blocked: ${msg.name} (${msg.block_type}: ${msg.block_value})`, 'is-warning');
+    } else if (msg.type === 'hublist_block_added') {
+        showToast(`Block rule added: ${msg.block.block_type} = ${msg.block.value}`, 'is-danger');
+    } else if (msg.type === 'hublist_block_removed') {
+        showToast(`Block rule #${msg.block_id} removed`, 'is-info');
+    }
+}
+
+// ============= Table manipulation =============
+function upsertHubRow(hub) {
+    const tbody = document.getElementById('hubs-tbody');
+    let row = tbody.querySelector(`tr[data-hub-id="${hub.id}"]`);
+    const html = buildHubRow(hub);
+    if (row) {
+        row.outerHTML = html;
+    } else {
+        tbody.insertAdjacentHTML('afterbegin', html);
+    }
+}
+
+function buildHubRow(hub) {
+    const grey = hub.status === 0 ? 'has-text-grey' : '';
+    const logo = hub.logo
+        ? `<img src="${escHtml(hub.logo)}" alt="" style="width:24px;height:24px;border-radius:3px">`
+        : '<i class="fas fa-server has-text-grey-light"></i>';
+    const flag = hub.country
+        ? `<span class="fi fi-${hub.country.toLowerCase()}" title="${escHtml(hub.country)}"></span> ${escHtml(hub.country)}`
+        : '—';
+    const statusTag = hub.status === 1
+        ? '<span class="tag is-success is-light">Online</span>'
+        : '<span class="tag is-danger is-light">Offline</span>';
+    return `<tr class="hub-row ${grey}" data-hub-id="${hub.id}" style="cursor:pointer" onclick="openHubModal(${hub.id})">
+        <td>${logo}</td>
+        <td><strong>${escHtml(hub.name)}</strong></td>
+        <td><code class="is-size-7">${escHtml(hub.address)}</code></td>
+        <td>${escHtml(hub.owner || '—')}</td>
+        <td>${flag}</td>
+        <td class="has-text-right">${hub.users}</td>
+        <td>${statusTag}</td>
+        <td><div class="buttons are-small" onclick="event.stopPropagation()">
+            <button class="button is-danger is-outlined is-small" title="Block IP" onclick="quickBlock('ip','${escHtml(hub.ip)}','${escHtml(hub.name)}')"><i class="fas fa-ban"></i></button>
+            <button class="button is-warning is-outlined is-small" title="Remove" onclick="removeHub(${hub.id},'${escHtml(hub.name)}')"><i class="fas fa-trash"></i></button>
+        </div></td>
+    </tr>`;
+}
+
+function updateStats() {
+    const all = Object.values(hubsData);
+    document.getElementById('stat-total').textContent = all.length;
+    document.getElementById('stat-online').textContent = all.filter(h => h.status === 1).length;
+    document.getElementById('stat-offline').textContent = all.filter(h => h.status !== 1).length;
+    document.getElementById('stat-users').textContent = all.reduce((s, h) => s + (h.users || 0), 0);
+}
+
+// ============= Hub Detail Modal =============
+let currentModalHub = null;
+
+function openHubModal(hubId) {
+    const hub = hubsData[hubId];
+    if (!hub) return;
+    currentModalHub = hub;
+    document.getElementById('modal-hub-title').textContent = hub.name;
+
+    const flag = hub.country
+        ? `<span class="fi fi-${hub.country.toLowerCase()}"></span> ${escHtml(hub.country)}`
+        : '—';
+    const statusTag = hub.status === 1
+        ? '<span class="tag is-success">Online</span>'
+        : '<span class="tag is-danger">Offline</span>';
+
+    let shareStr = hub.share ? formatBytes(hub.share) : '0';
+    let minShareStr = hub.min_share ? formatBytes(hub.min_share) : '0';
+
+    const body = `
+        <div class="columns is-multiline">
+            <div class="column is-6">
+                <table class="table is-fullwidth is-narrow is-bordered">
+                    <tbody>
+                        <tr><th>Name</th><td>${escHtml(hub.name)}</td></tr>
+                        <tr><th>Address</th><td><code>${escHtml(hub.address)}</code></td></tr>
+                        <tr><th>Status</th><td>${statusTag}</td></tr>
+                        <tr><th>Users</th><td>${hub.users} / ${hub.max_users || '∞'}</td></tr>
+                        <tr><th>Share</th><td>${shareStr}</td></tr>
+                        <tr><th>Min Share</th><td>${minShareStr}</td></tr>
+                        <tr><th>Software</th><td>${escHtml(hub.software || '—')}</td></tr>
+                        <tr><th>Encoding</th><td>${escHtml(hub.encoding || '—')}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="column is-6">
+                <table class="table is-fullwidth is-narrow is-bordered">
+                    <tbody>
+                        <tr><th>Owner</th><td>${escHtml(hub.owner || '—')}</td></tr>
+                        <tr><th>Email</th><td>${escHtml(hub.email || '—')}</td></tr>
+                        <tr><th>Website</th><td>${hub.website ? '<a href="'+escHtml(hub.website)+'" target="_blank">'+escHtml(hub.website)+'</a>' : '—'}</td></tr>
+                        <tr><th>Country</th><td>${flag}</td></tr>
+                        <tr><th>City</th><td>${escHtml(hub.city || '—')}</td></tr>
+                        <tr><th>IP</th><td><code>${escHtml(hub.ip || '—')}</code></td></tr>
+                        <tr><th>Hostname</th><td>${escHtml(hub.hostname || '—')}</td></tr>
+                        <tr><th>ASN</th><td>${escHtml(hub.asn || '—')}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="column is-12">
+                <p class="is-size-7 has-text-grey">
+                    <strong>Description:</strong> ${escHtml(hub.description || 'No description.')}
+                </p>
+                <p class="is-size-7 has-text-grey mt-1">
+                    <strong>Registered:</strong> ${hub.registered_at || '—'} &nbsp;|&nbsp;
+                    <strong>Last seen:</strong> ${hub.last_seen || '—'}
+                </p>
+            </div>
+        </div>
+    `;
+    document.getElementById('modal-hub-body').innerHTML = body;
+    document.getElementById('hub-modal').classList.add('is-active');
+}
+
+function closeHubModal() {
+    document.getElementById('hub-modal').classList.remove('is-active');
+    currentModalHub = null;
+}
+
+function blockFromModal(blockType) {
+    if (!currentModalHub) return;
+    let value = '';
+    if (blockType === 'ip') value = currentModalHub.ip;
+    else if (blockType === 'domain') {
+        const hostname = currentModalHub.hostname || '';
+        const parts = hostname.split('.');
+        value = parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
+    }
+    else if (blockType === 'asn') value = currentModalHub.asn;
+    else if (blockType === 'country') value = currentModalHub.country;
+
+    if (!value) { alert('No ' + blockType + ' information available for this hub.'); return; }
+    const reason = prompt(`Block ${blockType} "${value}" — reason (optional):`);
+    if (reason === null) return;  // cancelled
+    doCreateBlock(blockType, value, reason);
+    closeHubModal();
+}
+
+function removeFromModal() {
+    if (!currentModalHub) return;
+    removeHub(currentModalHub.id, currentModalHub.name);
+    closeHubModal();
+}
+
+// ============= Search / Autocomplete =============
+function onSearchInput(q) {
+    clearTimeout(searchTimeout);
+    if (q.length < 1) {
+        closeSearchDropdown();
+        filterTable('');
+        return;
+    }
+    searchTimeout = setTimeout(() => doAutocomplete(q), 200);
+}
+
+function onSearchFocus() {
+    const q = document.getElementById('search-input').value;
+    if (q.length >= 1) doAutocomplete(q);
+}
+
+async function doAutocomplete(q) {
+    try {
+        const resp = await fetch(`${apiBase}/search?q=${encodeURIComponent(q)}`, {
+            headers: getAuthHeaders()
+        });
+        if (!resp.ok) return;
+        const results = await resp.json();
+        const container = document.getElementById('search-results');
+        if (results.length === 0) {
+            container.innerHTML = '<div class="dropdown-item has-text-grey">No results</div>';
+        } else {
+            container.innerHTML = results.slice(0, 10).map(h => `
+                <a class="dropdown-item" onclick="selectSearchResult(${h.id})">
+                    <strong>${escHtml(h.name)}</strong>
+                    <span class="is-size-7 has-text-grey ml-2">${escHtml(h.address)}</span>
+                    ${h.country ? '<span class="fi fi-'+h.country.toLowerCase()+' ml-2"></span>' : ''}
+                </a>
+            `).join('');
+        }
+        document.getElementById('search-dropdown').classList.add('is-active');
+    } catch(e) {}
+}
+
+function selectSearchResult(hubId) {
+    closeSearchDropdown();
+    openHubModal(hubId);
+}
+
+function closeSearchDropdown() {
+    document.getElementById('search-dropdown').classList.remove('is-active');
+}
+
+function doSearch() {
+    const q = document.getElementById('search-input').value.toLowerCase();
+    filterTable(q);
+    closeSearchDropdown();
+}
+
+function clearSearch() {
+    document.getElementById('search-input').value = '';
+    filterTable('');
+    closeSearchDropdown();
+}
+
+function filterTable(q) {
+    document.querySelectorAll('#hubs-tbody tr').forEach(row => {
+        if (!q) { row.style.display = ''; return; }
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+    });
+}
+
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#search-dropdown')) closeSearchDropdown();
+});
+
+// ============= Block Rules Modal =============
+function openBlockModal() {
+    document.getElementById('block-modal').classList.add('is-active');
+}
+
+function closeBlockModal() {
+    document.getElementById('block-modal').classList.remove('is-active');
+}
+
+function quickBlock(blockType, value, hubName) {
+    if (!value) { alert('No ' + blockType + ' information available.'); return; }
+    const reason = prompt(`Block ${blockType} "${value}" for hub "${hubName}" — reason (optional):`);
+    if (reason === null) return;
+    doCreateBlock(blockType, value, reason);
+}
+
+async function addBlockRule() {
+    const blockType = document.getElementById('block-type').value;
+    const value = document.getElementById('block-value').value.trim();
+    const reason = document.getElementById('block-reason').value.trim();
+    if (!value) { alert('Value is required.'); return; }
+    await doCreateBlock(blockType, value, reason);
+    document.getElementById('block-value').value = '';
+    document.getElementById('block-reason').value = '';
+}
+
+async function doCreateBlock(blockType, value, reason) {
+    try {
+        const resp = await fetch(`${apiBase}/blocks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ block_type: blockType, value: value, reason: reason || '' }),
+        });
+        if (!resp.ok) { const e = await resp.json(); alert(e.detail || 'Error'); return; }
+        const block = await resp.json();
+        // Add to blocks table
+        const tbody = document.getElementById('blocks-tbody');
+        const noMsg = document.getElementById('no-blocks-msg');
+        if (noMsg) noMsg.remove();
+        tbody.insertAdjacentHTML('beforeend', buildBlockRow(block));
+        const cnt = parseInt(document.getElementById('stat-blocks').textContent) + 1;
+        document.getElementById('stat-blocks').textContent = cnt;
+        showToast(`Block added: ${blockType} = ${value}`, 'is-danger');
+    } catch(e) { alert('Network error'); }
+}
+
+async function removeBlockRule(blockId) {
+    if (!confirm('Remove this block rule?')) return;
+    try {
+        const resp = await fetch(`${apiBase}/blocks/${blockId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+        });
+        if (!resp.ok) { alert('Error'); return; }
+        const row = document.querySelector(`tr[data-block-id="${blockId}"]`);
+        if (row) row.remove();
+        const cnt = Math.max(0, parseInt(document.getElementById('stat-blocks').textContent) - 1);
+        document.getElementById('stat-blocks').textContent = cnt;
+        showToast('Block rule removed', 'is-info');
+    } catch(e) { alert('Network error'); }
+}
+
+function buildBlockRow(block) {
+    const created = block.created_at ? new Date(block.created_at).toISOString().slice(0,16).replace('T',' ') : '—';
+    return `<tr data-block-id="${block.id}">
+        <td><span class="tag is-dark">${escHtml(block.block_type)}</span></td>
+        <td><code>${escHtml(block.value)}</code></td>
+        <td>${escHtml(block.reason || '—')}</td>
+        <td>${escHtml(block.created_by || '—')}</td>
+        <td class="is-size-7">${created}</td>
+        <td><button class="button is-small is-danger is-outlined" onclick="removeBlockRule(${block.id})"><i class="fas fa-trash"></i></button></td>
+    </tr>`;
+}
+
+// ============= Hub removal =============
+async function removeHub(hubId, hubName) {
+    if (!confirm(`Remove hub "${hubName}" from the list?`)) return;
+    try {
+        const resp = await fetch(`${apiBase}/${hubId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+        });
+        if (!resp.ok) { alert('Error removing hub'); return; }
+        const row = document.querySelector(`tr[data-hub-id="${hubId}"]`);
+        if (row) row.remove();
+        delete hubsData[hubId];
+        updateStats();
+        showToast(`Hub ${hubName} removed`, 'is-danger');
+    } catch(e) { alert('Network error'); }
+}
+
+// ============= Utilities =============
+function escHtml(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function showToast(message, cls) {
+    const container = document.getElementById('toast-container') || createToastContainer();
+    const toast = document.createElement('div');
+    toast.className = `notification ${cls || 'is-info'} is-light`;
+    toast.style.cssText = 'margin-bottom:0.5rem;padding:0.75rem 1.5rem;min-width:300px;animation:fadeIn .3s';
+    toast.innerHTML = `<button class="delete" onclick="this.parentElement.remove()"></button>${escHtml(message)}`;
+    container.appendChild(toast);
+    setTimeout(() => { if (toast.parentElement) toast.remove(); }, 5000);
+}
+
+function createToastContainer() {
+    const c = document.createElement('div');
+    c.id = 'toast-container';
+    c.style.cssText = 'position:fixed;top:70px;right:20px;z-index:9999;display:flex;flex-direction:column;align-items:flex-end';
+    document.body.appendChild(c);
+    return c;
+}
+
+// ============= Init =============
+document.addEventListener('DOMContentLoaded', () => {
+    connectWebSocket();
+});
+</script>
+{% endblock %}

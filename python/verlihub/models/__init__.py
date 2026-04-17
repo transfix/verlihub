@@ -7,7 +7,7 @@ allowing the Python layer to read/write hub data.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Optional
 
 from sqlalchemy import DateTime as SADateTime
@@ -61,6 +61,7 @@ class RegUserBase(SQLModel):
     """Base model for registered users."""
     nick: str = Field(index=True, max_length=64)
     login_pwd: str = Field(default="", max_length=128)  # Hashed password
+    email: str = Field(default="", max_length=256)  # User email address
     login_last_ip: str = Field(default="", max_length=45)  # IPv4/IPv6
     login_last: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     login_count: int = 0
@@ -98,6 +99,7 @@ class RegUserRead(RegUserBase):
 class RegUserUpdate(SQLModel):
     """Schema for updating a registered user."""
     login_pwd: Optional[str] = None
+    email: Optional[str] = None
     user_class: Optional[int] = None
     authorised: Optional[bool] = None
     note_op: Optional[str] = None
@@ -134,6 +136,10 @@ class BanBase(SQLModel):
     reason: str = Field(default="", max_length=512)
     last_hit: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
     this_kick: bool = False
+    # IP range fields for subnet/CIDR bans (BanType.RANGE)
+    ip_range_min: str = Field(default="", max_length=45)
+    ip_range_max: str = Field(default="", max_length=45)
+    cidr: str = Field(default="", max_length=49)  # e.g. "192.168.1.0/24"
 
 
 class Ban(BanBase, table=True):
@@ -150,6 +156,48 @@ class BanCreate(BanBase):
 
 class BanRead(BanBase):
     """Schema for reading a ban."""
+    id: int
+
+
+# =============================================================================
+# Penalty Models (temporary per-user restrictions)
+# =============================================================================
+
+
+class PenaltyType(IntEnum):
+    """Penalty types — what capability is restricted."""
+    GAG = 1       # Cannot send main chat
+    NO_PM = 2     # Cannot send private messages
+    NO_SEARCH = 4 # Cannot search
+    NO_CTM = 8    # Cannot do file transfers
+    NO_MYINFO = 16 # Cannot update $MyINFO
+
+
+class PenaltyBase(SQLModel):
+    """Base model for penalties."""
+    nick: str = Field(max_length=64, index=True)
+    ip: str = Field(default="", max_length=45)
+    penalty_type: int = Field(default=PenaltyType.GAG)
+    reason: str = Field(default="", max_length=512)
+    op_nick: str = Field(default="", max_length=64)
+    date_start: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    date_end: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
+
+
+class Penalty(PenaltyBase, table=True):
+    """Active penalty (temporary restriction) on a user."""
+    __tablename__ = "penalties"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class PenaltyCreate(PenaltyBase):
+    """Schema for creating a penalty."""
+    pass
+
+
+class PenaltyRead(PenaltyBase):
+    """Schema for reading a penalty."""
     id: int
 
 
@@ -181,6 +229,16 @@ class Trigger(TriggerBase, table=True):
     __tablename__ = "trigger"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class TriggerCreate(TriggerBase):
+    """Schema for creating a trigger."""
+    pass
+
+
+class TriggerRead(TriggerBase):
+    """Schema for reading a trigger."""
+    id: int
 
 
 # =============================================================================
@@ -224,6 +282,16 @@ class Redirect(RedirectBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
 
+class RedirectCreate(RedirectBase):
+    """Schema for creating a redirect."""
+    pass
+
+
+class RedirectRead(RedirectBase):
+    """Schema for reading a redirect."""
+    id: int
+
+
 # =============================================================================
 # DC Client Models
 # =============================================================================
@@ -244,6 +312,16 @@ class DCClient(DCClientBase, table=True):
     __tablename__ = "dc_clients"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class DCClientCreate(DCClientBase):
+    """Schema for creating a DC client rule."""
+    pass
+
+
+class DCClientRead(DCClientBase):
+    """Schema for reading a DC client rule."""
+    id: int
 
 
 # =============================================================================
@@ -330,4 +408,136 @@ class RegisterRequest(SQLModel):
     """Schema for public self-registration."""
     nick: str = Field(max_length=64)
     password: str = Field(max_length=128)
+    email: Optional[str] = Field(default=None, max_length=256)
     invite_code: Optional[str] = Field(default=None, max_length=64)
+
+
+# =============================================================================
+# Hub List Entry Models (for hublist server feature)
+# =============================================================================
+
+
+class HubListEntryBase(SQLModel):
+    """Base model for a hub registered on our hublist server."""
+    name: str = Field(max_length=255, index=True)
+    address: str = Field(max_length=512, index=True)  # dchub://host:port or adcs://host:port
+    description: str = Field(default="", max_length=1024)
+    users: int = Field(default=0)
+    share: int = Field(default=0)  # Total share in bytes
+    min_share: int = Field(default=0)  # Minimum share required (bytes)
+    max_users: int = Field(default=0)
+    country: str = Field(default="", max_length=2)  # Two-letter ISO
+    encoding: str = Field(default="UTF-8", max_length=32)
+    owner: str = Field(default="", max_length=128)
+    email: str = Field(default="", max_length=256)
+    website: str = Field(default="", max_length=512)
+    logo: str = Field(default="", max_length=512)  # URL to hub icon/logo
+    status: int = Field(default=1)  # 1=online
+    software: str = Field(default="", max_length=128)
+    # GeoIP enrichment (resolved server-side on registration)
+    ip: str = Field(default="", max_length=45)
+    hostname: str = Field(default="", max_length=256)
+    city: str = Field(default="", max_length=128)
+    asn: str = Field(default="", max_length=128)  # e.g. "AS13335 Cloudflare"
+    last_seen: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    registered_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+
+
+class HubListEntry(HubListEntryBase, table=True):
+    """A hub registered on our hublist server."""
+    __tablename__ = "hublist_entries"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class HubListEntryRead(HubListEntryBase):
+    """Schema for reading a hublist entry."""
+    id: int
+
+
+class HubListEntryCreate(SQLModel):
+    """Schema for creating / updating a hublist entry via HTTP POST."""
+    name: str = Field(max_length=255)
+    address: str = Field(max_length=512)
+    description: str = Field(default="", max_length=1024)
+    users: int = Field(default=0, ge=0)
+    share: int = Field(default=0, ge=0)
+    min_share: int = Field(default=0, ge=0)
+    max_users: int = Field(default=0, ge=0)
+    country: str = Field(default="", max_length=2)
+    encoding: str = Field(default="UTF-8", max_length=32)
+    owner: str = Field(default="", max_length=128)
+    email: str = Field(default="", max_length=256)
+    website: str = Field(default="", max_length=512)
+    logo: str = Field(default="", max_length=512)
+    software: str = Field(default="", max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# Block-level enum and models for hublist blocking
+# ---------------------------------------------------------------------------
+
+class HubListBlockType(str, Enum):
+    """The level at which a hub is blocked from the hublist."""
+    IP = "ip"
+    HOSTNAME = "hostname"
+    DOMAIN = "domain"
+    ASN = "asn"
+    CITY = "city"
+    COUNTRY = "country"
+
+
+class HubListBlockBase(SQLModel):
+    """Base model for a hublist block rule."""
+    block_type: HubListBlockType = Field(index=True)
+    value: str = Field(max_length=512, index=True)       # e.g. IP, hostname, "AS13335", "DE"
+    reason: str = Field(default="", max_length=1024)
+    created_by: str = Field(default="", max_length=128)   # nick of creator
+    created_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    expires_at: Optional[datetime] = Field(default=None, sa_type=_TZDateTime)
+
+
+class HubListBlock(HubListBlockBase, table=True):  # type: ignore[call-arg]
+    """Persisted hublist block rule."""
+    __tablename__ = "hublist_blocks"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class HubListBlockRead(HubListBlockBase):
+    """Schema returned via API."""
+    id: int
+
+
+class HubListBlockCreate(SQLModel):
+    """Schema for creating a new block rule."""
+    block_type: HubListBlockType
+    value: str = Field(max_length=512)
+    reason: str = Field(default="", max_length=1024)
+    expires_at: Optional[datetime] = None
+
+
+# =============================================================================
+# Bot Memory (persistent notes for LLM bot)
+# =============================================================================
+
+
+class BotNoteBase(SQLModel):
+    """Base model for bot memory notes."""
+    topic: str = Field(max_length=255, index=True)
+    content: str = Field(default="", max_length=4096)
+    mood: str = Field(default="", max_length=64)  # mood name when note was saved
+    created_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+    updated_at: datetime = Field(default_factory=utc_now, sa_type=_TZDateTime)
+
+
+class BotNote(BotNoteBase, table=True):
+    """Persistent note stored by the LLM bot."""
+    __tablename__ = "bot_notes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+
+class BotNoteRead(BotNoteBase):
+    """Schema for reading a bot note."""
+    id: int

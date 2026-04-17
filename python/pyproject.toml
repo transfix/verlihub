@@ -42,6 +42,8 @@ dependencies = [
     "jinja2>=3.1.0",  # For dashboard templates
     "python-multipart>=0.0.6",  # For form parsing in FastAPI/Starlette
     "pyyaml>=6.0.0",  # For YAML configuration files
+    "click>=8.0.0",  # For CLI tools
+    "dnspython>=2.4.0",  # For email deliverability checks (MX lookup)
 ]
 
 [project.optional-dependencies]
@@ -53,12 +55,23 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.8.0",
 ]
+llm = [
+    "openai>=1.12.0",  # OpenAI-compatible chat completions client
+]
+mcp = [
+    "mcp[cli]>=1.0.0",  # Model Context Protocol SDK
+    "httpx>=0.26.0",
+]
+ai = [
+    "verlihub[llm,mcp]",  # All AI integrations
+]
 
 [project.scripts]
 verlihub-server = "verlihub.server:main"
 verlihub-api = "verlihub.api.app:main"
 verlihub-cli = "verlihub.cli:main"
 verlihub-bench = "verlihub.benchmarks.cli:main"
+verlihub-mcp = "verlihub.client.mcp:main"
 
 [project.urls]
 Homepage = "https://verlihub.net"
@@ -102,6 +115,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
 [tool.coverage.run]

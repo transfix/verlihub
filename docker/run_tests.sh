@@ -16,6 +16,7 @@
 #   dual          Run dual-build tests (original + verlihub-py) (Docker)
 #   full          Run full integration tests (Docker, requires running hubs)
 #   sql-semantics Compare SQL semantics across databases (Docker)
+#   llm           Run LLM integration tests (Ollama + qwen2.5:0.5b) (Docker)
 #   docker        Run all tests via Docker (no local dependencies needed)
 #   help          Show this help message
 #
@@ -48,6 +49,8 @@ show_help() {
     echo "  dual          Run dual-build tests (original + verlihub-py)"
     echo "  full          Run full integration tests (Docker, requires running hubs)"
     echo "  sql-semantics Compare SQL semantics across databases (Docker)"
+    echo "  llm           Run LLM integration tests (Ollama + qwen2.5:0.5b) (Docker)"
+    echo "  bot-chat      Run NMDC bot chat LLM tests (PM + main chat via NMDC) (Docker)"
     echo "  playwright    Run Playwright E2E tests for dashboard (Docker)"
     echo "  docker        Run all tests via Docker (no local deps needed)"
     echo "  help          Show this help message"
@@ -191,6 +194,28 @@ run_sql_semantics() {
     docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit sql-semantics-tests
 }
 
+run_llm_tests() {
+    echo -e "${YELLOW}Running LLM integration tests (Ollama + qwen2.5:0.5b)...${NC}"
+    cd "$PROJECT_DIR"
+
+    docker compose -f docker/docker-compose.llm-test.yml up \
+        --build --abort-on-container-exit llm-tests
+    local exit_code=$?
+    docker compose -f docker/docker-compose.llm-test.yml down --remove-orphans 2>/dev/null || true
+    return $exit_code
+}
+
+run_bot_chat_tests() {
+    echo -e "${YELLOW}Running NMDC bot chat LLM integration tests...${NC}"
+    cd "$PROJECT_DIR"
+
+    docker compose -f docker/docker-compose.bot-chat-test.yml up \
+        --build --abort-on-container-exit bot-tests
+    local exit_code=$?
+    docker compose -f docker/docker-compose.bot-chat-test.yml down --remove-orphans 2>/dev/null || true
+    return $exit_code
+}
+
 run_playwright_tests() {
     echo -e "${YELLOW}Running Playwright E2E tests for dashboard...${NC}"
     cd "$PROJECT_DIR"
@@ -317,6 +342,12 @@ case $COMMAND in
         ;;
     sql-semantics)
         run_sql_semantics
+        ;;
+    llm)
+        run_llm_tests
+        ;;
+    bot-chat)
+        run_bot_chat_tests
         ;;
     playwright)
         run_playwright_tests

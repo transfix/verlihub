@@ -1,0 +1,121 @@
+# Docker Compose for Bot Chat LLM Integration Tests
+#
+# Validates the NMDC bot chat pipeline:
+#   - PM to Hub-Security → LLM response at user's permission level
+#   - Main chat mention → LLM response at lowest security (no tools)
+#   - Permission enforcement (admin vs operator vs guest)
+#
+# Architecture:
+#   ollama          — Ollama inference server, pulls qwen2.5:0.5b on first run
+#   bot-hub         — verlihub-py in "both" mode (NMDC hub + API) with LLM enabled
+#   bot-tests       — Python test runner connecting via NMDC to test bot responses
+#
+# Usage:
+#   docker compose -f docker/docker-compose.bot-chat-test.yml up --build --abort-on-container-exit bot-tests
+#
+#   # Clean up
+#   docker compose -f docker/docker-compose.bot-chat-test.yml down -v
+
+services:
+  # ==========================================================================
+  # Ollama Inference Server
+  # ==========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bot-chat-test-ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+    networks:
+      - bot-chat-test-network
+    volumes:
+      - ollama-models:/root/.ollama
+
+  # ==========================================================================
+  # Model puller — ensures qwen2.5:0.5b is available
+  # ==========================================================================
+  ollama-pull:
+    image: curlimages/curl:latest
+    container_name: bot-chat-test-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling qwen2.5:0.5b model..."
+        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:0.5b","stream":false}' \
+          --max-time 600 \
+          -o /dev/null \
+          && echo "Model pull complete" \
+          || { echo "Model pull failed"; exit 1; }
+    networks:
+      - bot-chat-test-network
+
+  # ==========================================================================
+  # Verlihub-py in "both" mode (NMDC hub + API) with LLM + bot chat
+  # ==========================================================================
+  bot-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: bot-chat-test-hub
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/bot-chat-test.yml
+        --mode both
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    ports:
+      - "4112:4112"  # NMDC hub
+      - "8001:8000"  # REST API
+    networks:
+      - bot-chat-test-network
+
+  # ==========================================================================
+  # Bot Chat Integration Test Runner
+  # ==========================================================================
+  bot-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: bot-chat-test-runner
+    depends_on:
+      bot-hub:
+        condition: service_healthy
+    command: >
+      python docker/tests/test_bot_chat_e2e.py
+        --hub-host bot-hub
+        --hub-port 4112
+        --api-url http://bot-hub:8000
+        --admin-user admin
+        --admin-pass admin123
+        --operator-user operator1
+        --operator-pass oper123
+        --registered-user regular1
+        --registered-pass reg123
+    networks:
+      - bot-chat-test-network
+
+volumes:
+  ollama-models:
+
+networks:
+  bot-chat-test-network:
+    driver: bridge

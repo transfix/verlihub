@@ -204,13 +204,13 @@ TEST_F(GeoIPLookupTest, ConcurrentLookups) {
         threads.emplace_back([this, t]() {
             for (int i = 0; i < ITERATIONS; ++i) {
                 // Mix of IP types to hit all code paths
-                geo.Lookup("127.0.0.1");
-                geo.Lookup("10.0.0.1");
-                geo.Lookup("192.168.1.1");
-                geo.Lookup("8.8.8.8");
-                geo.Lookup("");
-                geo.Lookup("::1");
-                geo.Lookup("fe80::1");
+                (void)geo.Lookup("127.0.0.1");
+                (void)geo.Lookup("10.0.0.1");
+                (void)geo.Lookup("192.168.1.1");
+                (void)geo.Lookup("8.8.8.8");
+                (void)geo.Lookup("");
+                (void)geo.Lookup("::1");
+                (void)geo.Lookup("fe80::1");
             }
         });
     }

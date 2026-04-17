@@ -76,6 +76,30 @@
         .motd pre { margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 0.95em; }
         .sort-arrow { margin-left: 6px; opacity: 0.5; }
         .sort-arrow.active { opacity: 1; font-weight: bold; }
+
+        /* Chat tab styles */
+        .chat-container { display: flex; flex-direction: column; height: 500px; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 12px; border: 1px solid #e0e0e0; border-radius: 6px; background: #fafafa; margin-bottom: 12px; }
+        .chat-msg { margin-bottom: 14px; line-height: 1.5; }
+        .chat-msg.user { text-align: right; }
+        .chat-msg.user .chat-bubble { background: #0066cc; color: #fff; display: inline-block; padding: 8px 14px; border-radius: 14px 14px 4px 14px; max-width: 75%; text-align: left; }
+        .chat-msg.assistant .chat-bubble { background: #e9e9e9; display: inline-block; padding: 8px 14px; border-radius: 14px 14px 14px 4px; max-width: 75%; text-align: left; }
+        .chat-msg.status { text-align: center; font-size: 0.85em; color: #999; }
+        .chat-msg.status .chat-bubble { background: none; display: inline; padding: 0; }
+        .chat-tool-badge { display: inline-block; background: #fff3cd; color: #856404; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin: 2px 0; }
+        .chat-input-row { display: flex; gap: 8px; }
+        .chat-input-row input { flex: 1; padding: 10px 14px; border: 1px solid #ccc; border-radius: 20px; font-size: 1em; outline: none; }
+        .chat-input-row input:focus { border-color: #0066cc; }
+        .chat-input-row button { padding: 10px 20px; border: none; background: #0066cc; color: #fff; border-radius: 20px; cursor: pointer; font-size: 1em; }
+        .chat-input-row button:disabled { background: #999; cursor: not-allowed; }
+        .chat-input-row button:hover:not(:disabled) { background: #0052a3; }
+        .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .chat-header .chat-status { font-size: 0.85em; color: #999; }
+        .chat-header .chat-status.connected { color: #28a745; }
+        .chat-header .chat-status.error { color: #dc3545; }
+        .chat-admin-toggle { font-size: 0.85em; }
+        .chat-admin-toggle label { cursor: pointer; }
+
         .page-header { text-align: center; margin-bottom: 20px; }
         .hub-name { font-size: 2em; margin: 0; }
         .hub-desc { font-size: 1.1em; color: #555; margin: 10px 0 0 0; }
@@ -99,6 +123,7 @@
             <span class="tab" data-tab="cities">Cities</span>
             <span class="tab" data-tab="asns">ASNs</span>
             <span class="tab" data-tab="ips">IPs</span>
+            <span class="tab" data-tab="chat">💬 Chat</span>
         </div>
         <div id="content">Loading...</div>
     </div>
@@ -135,6 +160,14 @@
         let traceroutePollingInterval = null;
         let osDetectionPollingInterval = null;
         let pingPollingInterval = null;
+
+        // Chat state
+        const CHAT_GATEWAY_URL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.hostname + ':8001';
+        let chatSocket = null;
+        let chatMessages = [];
+        let chatConnected = false;
+        let chatAdminMode = false;
+        let chatWaiting = false;
 
         const sortState = {
             users: { key: 'share', asc: false },
@@ -902,6 +935,10 @@
                         } else {
                             lastIPsHtml = html;
                         }
+                        break;
+                    case 'chat':
+                        html = renderChat();
+                        shouldUpdate = true;
                         break;
                 }
 
@@ -2113,6 +2150,189 @@
             }
         }
 
+        // =================================================================
+        // Chat tab — LLM chatbot via WebSocket to the chat gateway
+        // =================================================================
+
+        function renderChat() {
+            const statusClass = chatConnected ? 'connected' : (chatSocket ? 'error' : '');
+            const statusText = chatConnected ? 'Connected' : (chatSocket ? 'Connecting...' : 'Disconnected');
+            const adminChecked = chatAdminMode ? 'checked' : '';
+
+            let msgsHtml = '';
+            if (chatMessages.length === 0) {
+                msgsHtml = '<div class="chat-msg status"><span class="chat-bubble">Ask anything about the hub — try "who is online?" or "show me share statistics"</span></div>';
+            }
+            for (const msg of chatMessages) {
+                if (msg.type === 'user') {
+                    msgsHtml += `<div class="chat-msg user"><span class="chat-bubble">${escapeHtml(msg.text)}</span></div>`;
+                } else if (msg.type === 'assistant') {
+                    msgsHtml += `<div class="chat-msg assistant"><span class="chat-bubble">${formatChatResponse(msg.text)}</span></div>`;
+                } else if (msg.type === 'tool') {
+                    msgsHtml += `<div class="chat-msg status"><span class="chat-tool-badge">🔧 ${escapeHtml(msg.name)}(${escapeHtml(JSON.stringify(msg.args || {}))})</span></div>`;
+                } else if (msg.type === 'thinking') {
+                    msgsHtml += `<div class="chat-msg status"><span class="chat-bubble">⏳ Thinking...</span></div>`;
+                } else if (msg.type === 'status') {
+                    msgsHtml += `<div class="chat-msg status"><span class="chat-bubble">${escapeHtml(msg.text)}</span></div>`;
+                }
+            }
+
+            return `
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <span class="chat-status ${statusClass}">● ${statusText}</span>
+                        <span class="chat-admin-toggle">
+                            <label><input type="checkbox" id="chat-admin-check" ${adminChecked} onchange="chatToggleAdmin(this.checked)"> Admin mode</label>
+                        </span>
+                        <button onclick="chatConnect()" style="font-size:0.8em; padding:4px 12px; border:1px solid #ccc; border-radius:12px; background:#fff; cursor:pointer;">
+                            ${chatConnected ? 'Reconnect' : 'Connect'}
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="chat-messages-box">${msgsHtml}</div>
+                    <div class="chat-input-row">
+                        <input type="text" id="chat-input" placeholder="Ask about the hub..." 
+                               onkeydown="if(event.key==='Enter')chatSend()" ${chatWaiting || !chatConnected ? 'disabled' : ''}>
+                        <button onclick="chatSend()" ${chatWaiting || !chatConnected ? 'disabled' : ''}>Send</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatChatResponse(text) {
+            // Basic markdown-like formatting for LLM responses
+            let html = escapeHtml(text);
+            // Bold **text**
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            // Inline code `text`
+            html = html.replace(/`(.+?)`/g, '<code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;">$1</code>');
+            // Newlines
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        function chatConnect() {
+            if (chatSocket) {
+                chatSocket.close();
+                chatSocket = null;
+            }
+            chatConnected = false;
+            chatWaiting = false;
+
+            const adminToken = chatAdminMode ? prompt('Enter admin token (leave empty for user-level access):') : '';
+            const wsUrl = CHAT_GATEWAY_URL + '/ws/chat/stream' + (adminToken ? '?token=' + encodeURIComponent(adminToken) : '');
+
+            chatMessages.push({ type: 'status', text: 'Connecting to chat gateway...' });
+            refreshChat();
+
+            try {
+                chatSocket = new WebSocket(wsUrl);
+            } catch(e) {
+                chatMessages.push({ type: 'status', text: 'Failed to create WebSocket: ' + e.message });
+                refreshChat();
+                return;
+            }
+
+            chatSocket.onopen = () => {
+                console.log('Chat WebSocket opened');
+            };
+
+            chatSocket.onmessage = (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch(e) {
+                    return;
+                }
+
+                switch(data.type) {
+                    case 'connected':
+                        chatConnected = true;
+                        chatMessages.push({ type: 'status', text: `Connected as ${data.access} — model: ${data.model}` });
+                        // Remove any "thinking" placeholder
+                        chatMessages = chatMessages.filter(m => m.type !== 'thinking');
+                        break;
+                    case 'thinking':
+                        // Add thinking indicator (replace any existing one)
+                        chatMessages = chatMessages.filter(m => m.type !== 'thinking');
+                        chatMessages.push({ type: 'thinking' });
+                        break;
+                    case 'tool_call':
+                        chatMessages = chatMessages.filter(m => m.type !== 'thinking');
+                        chatMessages.push({ type: 'tool', name: data.name, args: data.args });
+                        break;
+                    case 'tool_result':
+                        // Optional: could annotate success/failure
+                        chatMessages.push({ type: 'thinking' });
+                        break;
+                    case 'response':
+                        chatMessages = chatMessages.filter(m => m.type !== 'thinking');
+                        chatMessages.push({ type: 'assistant', text: data.content });
+                        chatWaiting = false;
+                        break;
+                    case 'error':
+                        chatMessages = chatMessages.filter(m => m.type !== 'thinking');
+                        chatMessages.push({ type: 'status', text: '❌ ' + data.content });
+                        chatWaiting = false;
+                        break;
+                }
+                refreshChat();
+            };
+
+            chatSocket.onclose = () => {
+                chatConnected = false;
+                chatMessages.push({ type: 'status', text: 'Disconnected from chat gateway.' });
+                refreshChat();
+            };
+
+            chatSocket.onerror = (err) => {
+                chatConnected = false;
+                chatMessages.push({ type: 'status', text: 'WebSocket error — is the chat gateway running on port 8001?' });
+                refreshChat();
+            };
+        }
+
+        function chatSend() {
+            const input = document.getElementById('chat-input');
+            if (!input || !chatSocket || chatWaiting) return;
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            chatMessages.push({ type: 'user', text: msg });
+            chatWaiting = true;
+            input.value = '';
+
+            chatSocket.send(JSON.stringify({ message: msg }));
+            refreshChat();
+        }
+
+        function chatToggleAdmin(checked) {
+            chatAdminMode = checked;
+            // Reconnect If already connected to switch access level
+            if (chatConnected) {
+                chatMessages.push({ type: 'status', text: 'Admin mode changed — reconnect to apply.' });
+                refreshChat();
+            }
+        }
+
+        function refreshChat() {
+            // Only re-render if chat tab is active
+            if (currentTab !== 'chat') return;
+            const contentEl = document.getElementById('content');
+            contentEl.innerHTML = renderChat();
+            // Scroll messages to bottom
+            const box = document.getElementById('chat-messages-box');
+            if (box) box.scrollTop = box.scrollHeight;
+            // Re-focus input
+            const input = document.getElementById('chat-input');
+            if (input && !chatWaiting && chatConnected) input.focus();
+        }
+
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
                 console.log('Tab clicked:', tab.dataset.tab, 'Current tab:', currentTab);
@@ -2125,6 +2345,8 @@
         function startPolling() {
             if (pollInterval) clearInterval(pollInterval);
             pollInterval = setInterval(() => {
+                // Don't poll data tabs while on chat (avoids overwriting chat HTML)
+                if (currentTab === 'chat') return;
                 fetchOpsAndBots().then(() => loadTab(currentTab));
             }, 30000);
         }

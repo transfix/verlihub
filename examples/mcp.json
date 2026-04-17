@@ -1,0 +1,12 @@
+{
+    "servers": {
+        "verlihub": {
+            "type": "stdio",
+            "command": "python",
+            "args": ["plugins/python/scripts/verlihub_mcp_server.py"],
+            "env": {
+                "VERLIHUB_API_URL": "http://localhost:8000"
+            }
+        }
+    }
+}

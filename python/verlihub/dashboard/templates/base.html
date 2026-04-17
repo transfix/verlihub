@@ -314,6 +314,86 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
+        /* ── Responsive burger navbar ─────────────────────────────── */
+        /* On small/medium screens (≤1023 px) the burger is visible and
+           the menu opens as a dropdown overlay.  On wide screens the
+           standard Bulma horizontal navbar is used instead. */
+
+        /* Mobile/tablet: burger always visible, dropdown overlay menu */
+        @media screen and (max-width: 1023px) {
+            .navbar-burger {
+                display: flex !important;   /* show the burger */
+            }
+
+            .navbar-menu {
+                display: none !important;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                z-index: 40;
+                background: var(--vh-navbar-bg, #fff);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+                border-top: 1px solid rgba(0,0,0,0.06);
+                padding: 0.5rem 0;
+                max-height: calc(100vh - 52px);
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .navbar-menu.is-active {
+                display: block !important;
+            }
+
+            /* Items render as stacked list */
+            .navbar-menu .navbar-start,
+            .navbar-menu .navbar-end {
+                display: flex;
+                flex-direction: column;
+            }
+            .navbar-menu .navbar-end {
+                border-top: 1px solid rgba(0,0,0,0.06);
+                margin-top: 0.25rem;
+                padding-top: 0.25rem;
+            }
+            .navbar-menu .navbar-item {
+                padding: 0.55rem 1.25rem;
+            }
+            .navbar-menu .navbar-item:hover {
+                background: rgba(0,0,0,0.04);
+            }
+            .navbar-menu .navbar-item i.fas,
+            .navbar-menu .navbar-item i.far {
+                width: 1.4em;
+                text-align: center;
+            }
+        }
+
+        /* Tablet portrait: cap the dropdown width */
+        @media screen and (min-width: 769px) and (max-width: 1023px) {
+            .navbar-menu {
+                left: auto;
+                right: 0;
+                width: 280px;
+                border-radius: 0 0 8px 8px;
+            }
+        }
+
+        /* Dark theme overrides for mobile/tablet dropdown */
+        @media screen and (max-width: 1023px) {
+            [data-theme="dark"] .navbar-menu {
+                --vh-navbar-bg: var(--vh-dark-card);
+                background: var(--vh-dark-card);
+                border-top-color: var(--vh-dark-border);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-end {
+                border-top-color: var(--vh-dark-border);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-item:hover {
+                background: rgba(255,255,255,0.06);
+            }
+        }
     </style>
     
     {% block extra_head %}{% endblock %}
@@ -365,12 +445,47 @@
                 <a class="navbar-item" href="/dashboard/config">
                     <i class="fas fa-cog mr-2"></i> Config
                 </a>
+                {% if llm_enabled %}
+                <a class="navbar-item" href="/dashboard/ai-chat">
+                    <i class="fas fa-robot mr-2"></i> AI Chat
+                </a>
+                {% endif %}
                 <a class="navbar-item" href="/dashboard/logs">
                     <i class="fas fa-file-alt mr-2"></i> Logs
                 </a>
                 <a class="navbar-item" href="/dashboard/invites">
                     <i class="fas fa-ticket-alt mr-2"></i> Invites
                 </a>
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">
+                        <i class="fas fa-toolbox mr-2"></i> Tools
+                    </a>
+                    <div class="navbar-dropdown">
+                        <a class="navbar-item" href="/dashboard/triggers">
+                            <i class="fas fa-bolt mr-2"></i> Triggers
+                        </a>
+                        <a class="navbar-item" href="/dashboard/redirects">
+                            <i class="fas fa-directions mr-2"></i> Redirects
+                        </a>
+                        <a class="navbar-item" href="/dashboard/clients">
+                            <i class="fas fa-desktop mr-2"></i> Client Rules
+                        </a>
+                        <a class="navbar-item" href="/dashboard/penalties">
+                            <i class="fas fa-gavel mr-2"></i> Penalties
+                        </a>
+                        <a class="navbar-item" href="/dashboard/flood-config">
+                            <i class="fas fa-shield-alt mr-2"></i> Flood Config
+                        </a>
+                        <a class="navbar-item" href="/dashboard/protocol-stats">
+                            <i class="fas fa-chart-bar mr-2"></i> Protocol Stats
+                        </a>
+                    </div>
+                </div>
+                {% if user and user.user_class >= 10 %}
+                <a class="navbar-item" href="/dashboard/hublist">
+                    <i class="fas fa-network-wired mr-2"></i> Hub List
+                </a>
+                {% endif %}
                 {% endif %}
             </div>
             
@@ -380,32 +495,21 @@
                     <span id="ws-status-label">{% if hub_running %}Online{% else %}Offline{% endif %}</span>
                 </div>
                 
-                <a class="navbar-item theme-toggle" onclick="toggleTheme()">
-                    <i class="fas fa-moon" id="theme-icon"></i>
+                <a class="navbar-item theme-toggle" onclick="toggleTheme(); return false;" href="#">
+                    <i class="fas fa-moon" id="theme-icon"></i> Theme
                 </a>
                 
                 {% if user %}
-                <div class="navbar-item has-dropdown is-hoverable">
-                    <a class="navbar-link">
-                        <i class="fas fa-user mr-2"></i>
-                        {{ user.nick }}
-                    </a>
-                    <div class="navbar-dropdown is-right">
-                        <a class="navbar-item" href="/dashboard/profile">
-                            <i class="fas fa-id-card mr-2"></i> Profile
-                        </a>
-                        <hr class="navbar-divider">
-                        <a class="navbar-item" href="/dashboard/logout">
-                            <i class="fas fa-sign-out-alt mr-2"></i> Logout
-                        </a>
-                    </div>
-                </div>
+                <a class="navbar-item" href="/dashboard/profile">
+                    <i class="fas fa-user mr-2"></i> {{ user.nick }}
+                </a>
+                <a class="navbar-item" href="/dashboard/logout">
+                    <i class="fas fa-sign-out-alt mr-2"></i> Logout
+                </a>
                 {% else %}
-                <div class="navbar-item">
-                    <a class="button is-primary" href="/dashboard/login">
-                        <i class="fas fa-sign-in-alt mr-2"></i> Login
-                    </a>
-                </div>
+                <a class="navbar-item" href="/dashboard/login">
+                    <i class="fas fa-sign-in-alt mr-2"></i> Login
+                </a>
                 {% endif %}
             </div>
         </div>
@@ -435,10 +539,37 @@
         document.addEventListener('DOMContentLoaded', () => {
             const burgers = document.querySelectorAll('.navbar-burger');
             burgers.forEach(burger => {
-                burger.addEventListener('click', () => {
+                burger.addEventListener('click', (e) => {
+                    e.stopPropagation();
                     const target = document.getElementById(burger.dataset.target);
-                    burger.classList.toggle('is-active');
+                    const isActive = burger.classList.toggle('is-active');
                     target.classList.toggle('is-active');
+                    burger.setAttribute('aria-expanded', isActive);
+                });
+            });
+
+            // Close burger menu on outside click
+            document.addEventListener('click', (e) => {
+                const menu = document.getElementById('navbarMain');
+                if (!menu || !menu.classList.contains('is-active')) return;
+                if (!e.target.closest('.navbar')) {
+                    menu.classList.remove('is-active');
+                    document.querySelectorAll('.navbar-burger').forEach(b => {
+                        b.classList.remove('is-active');
+                        b.setAttribute('aria-expanded', 'false');
+                    });
+                }
+            });
+
+            // Close burger menu when a nav link is clicked
+            document.querySelectorAll('#navbarMain a.navbar-item').forEach(link => {
+                link.addEventListener('click', () => {
+                    const menu = document.getElementById('navbarMain');
+                    if (menu) menu.classList.remove('is-active');
+                    document.querySelectorAll('.navbar-burger').forEach(b => {
+                        b.classList.remove('is-active');
+                        b.setAttribute('aria-expanded', 'false');
+                    });
                 });
             });
             

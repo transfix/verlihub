@@ -10,7 +10,7 @@ jobs:
   docker-multi-db-tests:
     name: Multi-DB Docker Tests
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Clean workspace

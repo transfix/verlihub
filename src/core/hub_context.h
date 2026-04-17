@@ -21,6 +21,14 @@
 #ifndef HUB_CONTEXT_H
 #define HUB_CONTEXT_H
 
+// SWIG 4.0.x cannot parse C++17 [[ ]] attribute syntax.
+// Use VH_NODISCARD so the attribute is stripped when SWIG processes this header.
+#ifdef SWIG
+#define VH_NODISCARD
+#else
+#define VH_NODISCARD [[nodiscard]]
+#endif
+
 #include <memory>
 #include <shared_mutex>
 #include <mutex>
@@ -91,16 +99,36 @@ struct HubConfig {
     std::string hub_security{"Hub-Security"};
     std::string opchat_name{"OpChat"};
     
+    std::string hub_category;
+
     int listen_port{411};
     std::string listen_ip{"0.0.0.0"};
     int max_users{1000};
     int min_share{0};
     int max_share{0};
+    int min_slots{0};
+    int max_hubs_user{0};
+    int max_hubs_op{0};
+    int max_conn_per_ip{5};
     
     bool tls_enabled{false};
     int tls_port{0};
     std::string tls_cert_file;
     std::string tls_key_file;
+
+    bool use_regserver{false};
+    std::string regserver_host;
+
+    // Security settings (persisted via Python config store)
+    bool allow_unregistered{true};
+    bool require_password{true};
+    int login_timeout{60};
+    int max_pass_attempts{3};
+    int flood_protection{2};
+    bool chat_filter{false};
+    bool anti_clone{false};
+    bool registration_require_invite{false};
+    bool send_user_info{true};  ///< PM user info on connect (legacy DisplayInfo)
 };
 
 /**
@@ -130,6 +158,36 @@ struct UserInfoSnapshot {
     unsigned char status_flag{0}; ///< Status byte (away/TLS/firewall/etc.)
     std::string supports;      ///< Raw $Supports features
     long login_time{0};        ///< Seconds since connection
+    std::string tls_version;   ///< TLS version string from proxy (e.g. "1.3"), empty if no TLS
+};
+
+/**
+ * Snapshot of protocol-level message counters.
+ * Returned by HubContext::GetProtocolStats().
+ */
+struct ProtocolStatsSnapshot {
+    uint64_t messages_in{0};
+    uint64_t messages_out{0};
+    uint64_t chat_count{0};
+    uint64_t pm_count{0};
+    uint64_t search_count{0};
+    uint64_t myinfo_count{0};
+    uint64_t ctm_count{0};
+    uint64_t sr_count{0};
+    uint64_t mcto_count{0};
+    uint64_t flood_blocked{0};
+    uint64_t ban_blocked{0};
+};
+
+/**
+ * Result of a GeoIP lookup.
+ * Returned by HubContext::LookupGeoIP().
+ */
+struct GeoIPInfo {
+    std::string country_code;  ///< Two-letter ISO 3166-1 (e.g. "US")
+    std::string country_name;  ///< English country name
+    std::string city;          ///< City name
+    bool available{false};     ///< True if lookup succeeded
 };
 
 /**
@@ -205,13 +263,36 @@ public:
     
     // Search
     virtual bool OnSearch(std::string_view nick, std::string_view query) { return true; }
-    
+
+    // Protocol extensions
+    /**
+     * Called when a client sends $ExtJSON.
+     * @return false to block forwarding to other clients
+     */
+    virtual bool OnExtJSON(std::string_view nick, std::string_view json) { return true; }
+
+    /**
+     * Called when a client sends $MyHubURL.
+     * @return false to reject and disconnect
+     */
+    virtual bool OnMyHubURL(std::string_view nick, std::string_view url) { return true; }
+
+    /**
+     * Called when a client sends $IN (incremental info update).
+     * @return false to block forwarding
+     */
+    virtual bool OnUserINUpdate(std::string_view nick, std::string_view data) { return true; }
+
     // Timer
     virtual void OnTimer(std::int64_t timestamp) {}
     
     // Hub lifecycle
     virtual void OnHubStarted() {}
     virtual void OnHubStopping() {}
+
+    // Logging — called by HubContext::Log() so the Python layer can
+    // capture C++ diagnostic output for the dashboard log viewer.
+    virtual void OnLog(int level, const std::string& message) {}
     
     // Configuration — called by LoadConfiguration() so the Python layer
     // can supply values from the YAML config without env-var indirection.
@@ -271,7 +352,7 @@ public:
      * @param config_dir Path to verlihub configuration directory
      * @return unique_ptr to new context, or nullptr on failure
      */
-    [[nodiscard]] static std::unique_ptr<HubContext> Create(std::string_view config_dir);
+    VH_NODISCARD static std::unique_ptr<HubContext> Create(std::string_view config_dir);
     
     // Destructor
     ~HubContext();
@@ -289,7 +370,7 @@ public:
      * 
      * @return true on success
      */
-    [[nodiscard]] bool Initialize();
+    VH_NODISCARD bool Initialize();
     
     /**
      * Start the hub server.
@@ -298,7 +379,7 @@ public:
      * @param listen_ip IP to bind to (empty = use config)
      * @return true if started successfully
      */
-    [[nodiscard]] bool Start(int port = 0, std::string_view listen_ip = "");
+    VH_NODISCARD bool Start(int port = 0, std::string_view listen_ip = "");
     
     /**
      * Stop the hub server.
@@ -311,14 +392,14 @@ public:
     /**
      * Check if hub is currently running.
      */
-    [[nodiscard]] bool IsRunning() const noexcept {
+    VH_NODISCARD bool IsRunning() const noexcept {
         return m_running.load(std::memory_order_acquire);
     }
     
     /**
      * Get the configuration directory path.
      */
-    [[nodiscard]] std::string_view GetConfigDir() const noexcept {
+    VH_NODISCARD std::string_view GetConfigDir() const noexcept {
         return m_config_dir;
     }
     
@@ -348,21 +429,21 @@ public:
     /**
      * Check if shutdown has been requested.
      */
-    [[nodiscard]] bool HasPendingShutdown() const noexcept {
+    VH_NODISCARD bool HasPendingShutdown() const noexcept {
         return m_pending_shutdown.load(std::memory_order_acquire);
     }
     
     /**
      * Check if reload has been requested.
      */
-    [[nodiscard]] bool HasPendingReload() const noexcept {
+    VH_NODISCARD bool HasPendingReload() const noexcept {
         return m_pending_reload.load(std::memory_order_acquire);
     }
     
     /**
      * Get shutdown signal code (0 if not set).
      */
-    [[nodiscard]] int GetShutdownSignal() const noexcept {
+    VH_NODISCARD int GetShutdownSignal() const noexcept {
         return m_shutdown_signal.load(std::memory_order_acquire);
     }
     
@@ -382,7 +463,7 @@ public:
      * 
      * WARNING: Returns borrowed pointer. Do not store long-term.
      */
-    [[nodiscard]] NMDCHubServer* GetNMDCServer() const noexcept {
+    VH_NODISCARD NMDCHubServer* GetNMDCServer() const noexcept {
         return m_nmdc_server;
     }
     
@@ -390,28 +471,28 @@ public:
      * Get the legacy server instance (nullptr in verlihub-py mode).
      * Kept for plugin API compatibility.
      */
-    [[nodiscard]] nSocket::cServerDC* GetServer() const noexcept {
+    VH_NODISCARD nSocket::cServerDC* GetServer() const noexcept {
         return nullptr;
     }
     
     /**
      * Get the plugin manager.
      */
-    [[nodiscard]] nPlugin::cVHPluginMgr* GetPluginManager() const noexcept {
+    VH_NODISCARD nPlugin::cVHPluginMgr* GetPluginManager() const noexcept {
         return m_plugin_mgr;
     }
     
     /**
      * Get the ICU converter for encoding.
      */
-    [[nodiscard]] nUtils::cICUConvert* GetICUConverter() const noexcept {
+    VH_NODISCARD nUtils::cICUConvert* GetICUConverter() const noexcept {
         return m_icu_convert;
     }
     
     /**
      * Get the GeoIP database.
      */
-    [[nodiscard]] nUtils::cMaxMindDB* GetGeoIP() const noexcept {
+    VH_NODISCARD nUtils::cMaxMindDB* GetGeoIP() const noexcept {
         return m_geoip;
     }
     
@@ -423,14 +504,14 @@ public:
      * Get current online user count.
      * Delegates to NMDCHubServer when available, falls back to local counter.
      */
-    [[nodiscard]] std::size_t GetUserCount() const noexcept;
+    VH_NODISCARD std::size_t GetUserCount() const noexcept;
     
     /**
      * Get snapshot of all online user nicknames.
      * 
      * @return Vector of nicknames (copy, safe to use after call)
      */
-    [[nodiscard]] std::vector<std::string> GetUserNicks() const;
+    VH_NODISCARD std::vector<std::string> GetUserNicks() const;
     
     /**
      * Find a user by nickname (legacy compatibility, returns opaque cUser*).
@@ -440,7 +521,7 @@ public:
      * 
      * @return Pointer to user, or nullptr if not found / not supported
      */
-    [[nodiscard]] cUser* FindUser(std::string_view nick) const;
+    VH_NODISCARD cUser* FindUser(std::string_view nick) const;
     
     /**
      * Get a snapshot of a single user's info by nick.
@@ -450,7 +531,7 @@ public:
      * @param[out] out  Filled with user data on success
      * @return true if user was found
      */
-    [[nodiscard]] bool GetUserInfo(std::string_view nick, UserInfoSnapshot& out) const;
+    VH_NODISCARD bool GetUserInfo(std::string_view nick, UserInfoSnapshot& out) const;
     
     /**
      * Get snapshots of ALL online users.
@@ -458,7 +539,7 @@ public:
      *
      * @return Vector of UserInfoSnapshot (empty if hub not running)
      */
-    [[nodiscard]] std::vector<UserInfoSnapshot> GetUserInfoSnapshots() const;
+    VH_NODISCARD std::vector<UserInfoSnapshot> GetUserInfoSnapshots() const;
     
     /**
      * Execute callback for each online user (thread-safe).
@@ -495,12 +576,12 @@ public:
      * @param message Message to send
      * @return true if user was found and message sent
      */
-    [[nodiscard]] bool SendToUser(std::string_view nick, std::string_view message);
+    VH_NODISCARD bool SendToUser(std::string_view nick, std::string_view message);
     
     /**
      * Broadcast message to all users.
      */
-    [[nodiscard]] bool SendToAll(std::string_view message);
+    VH_NODISCARD bool SendToAll(std::string_view message);
     
     /**
      * Send message to users in class range.
@@ -509,12 +590,171 @@ public:
      * @param min_class Minimum user class (inclusive)
      * @param max_class Maximum user class (inclusive)
      */
-    [[nodiscard]] bool SendToClass(std::string_view message, int min_class, int max_class);
+    VH_NODISCARD bool SendToClass(std::string_view message, int min_class, int max_class);
     
     /**
      * Send message to operator chat.
      */
-    [[nodiscard]] bool SendToOpChat(std::string_view message, std::string_view from = "");
+    VH_NODISCARD bool SendToOpChat(std::string_view message, std::string_view from = "");
+
+    // =========================================================================
+    // Active / Passive Messaging
+    // =========================================================================
+
+    /**
+     * Send raw NMDC message to all active-mode users.
+     */
+    bool SendToActive(std::string_view message);
+
+    /**
+     * Send raw NMDC message to all passive-mode users.
+     */
+    bool SendToPassive(std::string_view message);
+
+    /**
+     * Send raw NMDC message to active-mode users in a class range.
+     */
+    bool SendToActiveClass(std::string_view message, int min_class, int max_class);
+
+    /**
+     * Send raw NMDC message to passive-mode users in a class range.
+     */
+    bool SendToPassiveClass(std::string_view message, int min_class, int max_class);
+
+    /**
+     * Get count of active-mode users.
+     */
+    VH_NODISCARD size_t GetActiveUserCount() const;
+
+    /**
+     * Get count of passive-mode users.
+     */
+    VH_NODISCARD size_t GetPassiveUserCount() const;
+
+    // =========================================================================
+    // Disconnect / PM / BroadcastChat
+    // =========================================================================
+
+    /**
+     * Disconnect a user silently (no kick message).
+     */
+    bool DisconnectUser(std::string_view nick);
+
+    /**
+     * Send a private message.
+     */
+    bool SendPM(std::string_view from, std::string_view to, std::string_view message);
+
+    /**
+     * Broadcast a chat message from a given sender to all users.
+     */
+    bool BroadcastChat(std::string_view from, std::string_view message);
+
+    // =========================================================================
+    // ForceMove (Redirect)
+    // =========================================================================
+
+    /**
+     * Force-move (redirect) a user to another hub address.
+     * Sends $ForceMove and disconnects the user.
+     *
+     * @param nick    User to redirect
+     * @param address Hub address to redirect to (e.g. "other-hub.example.com:411")
+     * @return true if user was found and redirected
+     */
+    bool ForceMove(std::string_view nick, std::string_view address);
+
+    // =========================================================================
+    // Protocol Statistics
+    // =========================================================================
+
+    /**
+     * Get a snapshot of protocol-level statistics.
+     */
+    VH_NODISCARD ProtocolStatsSnapshot GetProtocolStats() const;
+
+    // =========================================================================
+    // GeoIP Lookup
+    // =========================================================================
+
+    /**
+     * Look up GeoIP data for an IP address.
+     *
+     * @param ip IPv4 or IPv6 address string
+     * @return GeoIPInfo with country/city data
+     */
+    VH_NODISCARD GeoIPInfo LookupGeoIP(std::string_view ip) const;
+
+    // =========================================================================
+    // Flood Protection Configuration
+    // =========================================================================
+
+    /**
+     * Set the rate limit for a specific flood message type.
+     * @param type       Flood type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM)
+     * @param period_ms  Token refill period in milliseconds
+     * @param max_tokens Maximum tokens (burst capacity)
+     */
+    void SetFloodConfig(int type, int period_ms, int max_tokens);
+
+    /**
+     * Get the current flood limit for a message type.
+     * @param type Flood type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM,5=ExtJSON)
+     * @return FloodLimit with period_ms and max_tokens, or {0,0} if invalid type
+     */
+    VH_NODISCARD std::pair<int, int> GetFloodConfig(int type) const;
+
+    // =========================================================================
+    // Ban Cache Management
+    // =========================================================================
+
+    /**
+     * Load the ban cache from Python-provided lists.
+     * Replaces the current cache atomically.
+     */
+    void LoadBanCache(const std::vector<std::string>& ips,
+                      const std::vector<std::string>& nicks);
+
+    /**
+     * Add a single IP to the ban cache.
+     */
+    void AddBanCacheIP(const std::string& ip);
+
+    /**
+     * Add a single nick to the ban cache.
+     */
+    void AddBanCacheNick(const std::string& nick);
+
+    /**
+     * Remove a single IP from the ban cache.
+     */
+    void RemoveBanCacheIP(const std::string& ip);
+
+    /**
+     * Remove a single nick from the ban cache.
+     */
+    void RemoveBanCacheNick(const std::string& nick);
+
+    /**
+     * Clear the entire ban cache.
+     */
+    void ClearBanCache();
+
+    // =========================================================================
+    // ZLib Compression Configuration
+    // =========================================================================
+
+    /**
+     * Enable/disable ZLib compression for clients that support ZPipe0.
+     */
+    void SetZLibEnabled(bool enabled);
+    VH_NODISCARD bool IsZLibEnabled() const;
+
+    /**
+     * Set minimum data size before compression is attempted.
+     */
+    void SetZLibMinSize(size_t min_size);
+    VH_NODISCARD size_t GetZLibMinSize() const;
     
     // =========================================================================
     // Thread-Safe User Management
@@ -528,7 +768,7 @@ public:
      * @param reason Kick reason
      * @return true if user was found and kicked
      */
-    [[nodiscard]] bool KickUser(std::string_view op_nick, std::string_view nick, 
+    VH_NODISCARD bool KickUser(std::string_view op_nick, std::string_view nick, 
                                  std::string_view reason);
     
     /**
@@ -539,13 +779,13 @@ public:
      * @param user_class Bot's user class
      * @return true if bot was added successfully
      */
-    [[nodiscard]] bool AddRobot(std::string_view nick, std::string_view description,
+    VH_NODISCARD bool AddRobot(std::string_view nick, std::string_view description,
                                  int user_class);
     
     /**
      * Remove a robot/bot.
      */
-    [[nodiscard]] bool RemoveRobot(std::string_view nick);
+    VH_NODISCARD bool RemoveRobot(std::string_view nick);
     
     // =========================================================================
     // Thread-Safe Hub Information
@@ -554,28 +794,34 @@ public:
     /**
      * Get hub name.
      */
-    [[nodiscard]] std::string GetHubName() const;
+    VH_NODISCARD std::string GetHubName() const;
     
     /**
      * Get hub topic.
      */
-    [[nodiscard]] std::string GetHubTopic() const;
+    VH_NODISCARD std::string GetHubTopic() const;
     
     /**
      * Set hub topic.
      */
     bool SetHubTopic(std::string_view topic);
-    
+
+    /**
+     * Set the Message of the Day (MOTD).
+     * Pushes to the live NMDCHubServer so new logins see it immediately.
+     */
+    void SetMOTD(const std::string& motd);
+
     /**
      * Get total share size.
      * Delegates to NMDCHubServer when available, falls back to local counter.
      */
-    [[nodiscard]] std::uint64_t GetTotalShare() const noexcept;
+    VH_NODISCARD std::uint64_t GetTotalShare() const noexcept;
     
     /**
      * Get hub character encoding.
      */
-    [[nodiscard]] std::string GetHubEncoding() const;
+    VH_NODISCARD std::string GetHubEncoding() const;
     
     // =========================================================================
     // Thread-Safe Configuration Access
@@ -589,7 +835,7 @@ public:
      * @param default_val Value to return if not found
      * @return Configuration value or default
      */
-    [[nodiscard]] std::string GetConfig(std::string_view section, std::string_view key,
+    VH_NODISCARD std::string GetConfig(std::string_view section, std::string_view key,
                                          std::string_view default_val = "") const;
     
     /**
@@ -597,13 +843,13 @@ public:
      * 
      * @return true if value was set successfully
      */
-    [[nodiscard]] bool SetConfig(std::string_view section, std::string_view key,
+    VH_NODISCARD bool SetConfig(std::string_view section, std::string_view key,
                                   std::string_view value);
     
     /**
      * Get hub configuration structure (snapshot).
      */
-    [[nodiscard]] HubConfig GetHubConfig() const;
+    VH_NODISCARD HubConfig GetHubConfig() const;
     
     // =========================================================================
     // Plugin Management (for Python/Lua through SWIG)
@@ -615,7 +861,7 @@ public:
      * @param plugin_path Path to plugin .so file
      * @return true if plugin was loaded successfully
      */
-    [[nodiscard]] bool LoadPlugin(std::string_view plugin_path);
+    VH_NODISCARD bool LoadPlugin(std::string_view plugin_path);
     
     /**
      * Unload a plugin by name.
@@ -623,7 +869,7 @@ public:
      * @param plugin_name Name of the plugin to unload
      * @return true if plugin was unloaded successfully
      */
-    [[nodiscard]] bool UnloadPlugin(std::string_view plugin_name);
+    VH_NODISCARD bool UnloadPlugin(std::string_view plugin_name);
     
     /**
      * Reload a plugin.
@@ -631,14 +877,14 @@ public:
      * @param plugin_name Name of the plugin to reload
      * @return true if plugin was reloaded successfully
      */
-    [[nodiscard]] bool ReloadPlugin(std::string_view plugin_name);
+    VH_NODISCARD bool ReloadPlugin(std::string_view plugin_name);
     
     /**
      * Get list of loaded plugins.
      * 
      * @return Vector of plugin information
      */
-    [[nodiscard]] std::vector<PluginInfo> GetLoadedPlugins() const;
+    VH_NODISCARD std::vector<PluginInfo> GetLoadedPlugins() const;
     
     /**
      * Check if a specific plugin is loaded.
@@ -646,7 +892,7 @@ public:
      * @param plugin_name Name of the plugin
      * @return true if the plugin is loaded
      */
-    [[nodiscard]] bool IsPluginLoaded(std::string_view plugin_name) const;
+    VH_NODISCARD bool IsPluginLoaded(std::string_view plugin_name) const;
     
     /**
      * Execute a Lua script (requires Lua plugin to be loaded).
@@ -654,7 +900,7 @@ public:
      * @param script_path Path to the Lua script
      * @return true if script executed successfully
      */
-    [[nodiscard]] bool ExecuteLuaScript(std::string_view script_path);
+    VH_NODISCARD bool ExecuteLuaScript(std::string_view script_path);
     
     /**
      * Unload a Lua script.
@@ -662,14 +908,14 @@ public:
      * @param script_path Path to the Lua script
      * @return true if script was unloaded successfully
      */
-    [[nodiscard]] bool UnloadLuaScript(std::string_view script_path);
+    VH_NODISCARD bool UnloadLuaScript(std::string_view script_path);
     
     /**
      * Get list of loaded Lua scripts.
      * 
      * @return Vector of script paths
      */
-    [[nodiscard]] std::vector<std::string> GetLoadedLuaScripts() const;
+    VH_NODISCARD std::vector<std::string> GetLoadedLuaScripts() const;
     
     /**
      * Execute a Python script (requires Python plugin to be loaded).
@@ -677,7 +923,7 @@ public:
      * @param script_path Path to the Python script
      * @return true if script executed successfully
      */
-    [[nodiscard]] bool ExecutePythonScript(std::string_view script_path);
+    VH_NODISCARD bool ExecutePythonScript(std::string_view script_path);
     
     /**
      * Unload a Python script.
@@ -685,14 +931,14 @@ public:
      * @param script_path Path to the Python script
      * @return true if script was unloaded successfully
      */
-    [[nodiscard]] bool UnloadPythonScript(std::string_view script_path);
+    VH_NODISCARD bool UnloadPythonScript(std::string_view script_path);
     
     /**
      * Get list of loaded Python scripts.
      * 
      * @return Vector of script paths
      */
-    [[nodiscard]] std::vector<std::string> GetLoadedPythonScripts() const;
+    VH_NODISCARD std::vector<std::string> GetLoadedPythonScripts() const;
     
     // =========================================================================
     // Event Callback Registration (for Python bridge)
@@ -782,7 +1028,7 @@ private:
     // Owned Components
     // =========================================================================
     
-    /// Database-free NMDC hub server (verlihub-py)
+    /// NMDC hub server (verlihub-py, delegates auth to Python)
     NMDCHubServer* m_nmdc_server{nullptr};
 
     /// GeoIP lookup engine (new core, no cServerDC dependency)

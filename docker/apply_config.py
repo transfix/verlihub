@@ -126,10 +126,15 @@ CONFIG_MAPPINGS: List[Tuple[str, str, Any, Optional[callable]]] = [
     
     # TLS Settings (handled separately but included for completeness)
     ('tls.internal_port', 'tls_listen_port', None, None),
+    ('tls.port', 'tls_listen_port', None, None),      # new-style alias
     ('tls.only_mode', 'tls_only_mode', None, lambda x: '1' if x else '0'),
     ('tls.min_version', 'tls_min_ver', None, None),
     ('tls.cert_org', 'tls_cert_org', None, None),
     ('tls.cert_email', 'tls_cert_mail', None, None),
+    ('tls.cert_host', 'tls_cert_host', None, None),
+    ('tls.cert_file', 'tls_cert_file', None, None),
+    ('tls.key_file', 'tls_key_file', None, None),
+    ('tls.listen_ip', 'tls_listen_ip', None, None),
 ]
 
 
@@ -157,6 +162,10 @@ def generate_settings_sql(config: Dict, tls_enabled: bool = False) -> str:
     """Generate SQL to update SetupList with config values."""
     values = []
     
+    # Explicitly disable TLS when not enabled (regardless of YAML fields)
+    if not tls_enabled:
+        values.append("('config', 'tls_listen_port', '0')")
+
     for yaml_path, db_var, default, transform in CONFIG_MAPPINGS:
         value = get_nested_value(config, yaml_path)
         
@@ -168,11 +177,8 @@ def generate_settings_sql(config: Dict, tls_enabled: bool = False) -> str:
         if isinstance(value, str) and value == '':
             continue
             
-        # Skip TLS settings if TLS not enabled (except for disabling)
+        # Skip TLS settings when TLS not enabled (already handled above)
         if yaml_path.startswith('tls.') and not tls_enabled:
-            if yaml_path == 'tls.internal_port':
-                # Set to 0 to disable TLS
-                values.append(f"('config', '{db_var}', '0')")
             continue
         
         # Apply transformation if specified

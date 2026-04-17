@@ -25,6 +25,7 @@
 #include <chrono>
 #include <sstream>
 #include <fstream>
+#include <filesystem>
 #include <thread>
 
 namespace nVerliHub {
@@ -126,12 +127,40 @@ bool HubContext::Start(int port, std::string_view listen_ip) {
     
     Log(0, vh::fmt("Starting hub on {}:{}", actual_ip, actual_port));
     
+    // Require event callback — verlihub-py must set it before starting
+    if (!m_event_callback) {
+        Log(0, "Cannot start hub: no event callback set (call SetEventCallback first)");
+        return false;
+    }
+    
     // Configure the NMDC server
     m_nmdc_server->SetHubName(m_hub_config.hub_name);
     m_nmdc_server->SetHubTopic(m_hub_config.hub_topic);
     m_nmdc_server->SetHubSecurity(m_hub_config.hub_security);
+    m_nmdc_server->SetOpChatName(m_hub_config.opchat_name);
     m_nmdc_server->SetMaxUsers(m_hub_config.max_users);
     m_nmdc_server->SetCallback(m_event_callback);
+
+    // Load MOTD from file and push to NMDC server
+    {
+        auto motd_path = std::filesystem::path(m_config_dir) / "motd";
+        if (std::filesystem::exists(motd_path)) {
+            std::ifstream ifs(motd_path, std::ios::in);
+            if (ifs) {
+                std::string motd((std::istreambuf_iterator<char>(ifs)),
+                                  std::istreambuf_iterator<char>());
+                // Trim trailing whitespace
+                while (!motd.empty() && (motd.back() == '\n' || motd.back() == '\r' || motd.back() == ' '))
+                    motd.pop_back();
+                m_nmdc_server->SetMOTD(motd);
+                Log(0, vh::fmt("Loaded MOTD ({} chars)", motd.size()));
+            } else {
+                Log(0, vh::fmt("MOTD file exists but failed to open: {}", motd_path.string()));
+            }
+        } else {
+            Log(1, vh::fmt("No MOTD file at: {}", motd_path.string()));
+        }
+    }
     
     // Set the listen address on the server
     if (!actual_ip.empty()) {
@@ -294,6 +323,186 @@ bool HubContext::SendToOpChat(std::string_view message, std::string_view from) {
 }
 
 // =============================================================================
+// Active / Passive Messaging
+// =============================================================================
+
+bool HubContext::SendToActive(std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToActive(std::string(message));
+    return true;
+}
+
+bool HubContext::SendToPassive(std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToPassive(std::string(message));
+    return true;
+}
+
+bool HubContext::SendToActiveClass(std::string_view message, int min_class, int max_class) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToActiveClass(std::string(message), min_class, max_class);
+    return true;
+}
+
+bool HubContext::SendToPassiveClass(std::string_view message, int min_class, int max_class) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendToPassiveClass(std::string(message), min_class, max_class);
+    return true;
+}
+
+size_t HubContext::GetActiveUserCount() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetActiveUserCount();
+}
+
+size_t HubContext::GetPassiveUserCount() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetPassiveUserCount();
+}
+
+// =============================================================================
+// Disconnect / PM / BroadcastChat
+// =============================================================================
+
+bool HubContext::DisconnectUser(std::string_view nick) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->DisconnectUser(std::string(nick));
+}
+
+bool HubContext::SendPM(std::string_view from, std::string_view to, std::string_view message) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->SendPM(std::string(from), std::string(to), std::string(message));
+}
+
+bool HubContext::BroadcastChat(std::string_view from, std::string_view message) {
+    if (!m_nmdc_server) return false;
+    m_nmdc_server->SendChatToAll(std::string(from), std::string(message));
+    return true;
+}
+
+// =============================================================================
+// ForceMove
+// =============================================================================
+
+bool HubContext::ForceMove(std::string_view nick, std::string_view address) {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->ForceMove(std::string(nick), std::string(address));
+}
+
+// =============================================================================
+// Protocol Statistics
+// =============================================================================
+
+ProtocolStatsSnapshot HubContext::GetProtocolStats() const {
+    ProtocolStatsSnapshot result;
+    if (!m_nmdc_server) return result;
+    auto s = m_nmdc_server->GetProtocolStats();
+    result.messages_in  = s.messages_in;
+    result.messages_out = s.messages_out;
+    result.chat_count   = s.chat_count;
+    result.pm_count     = s.pm_count;
+    result.search_count = s.search_count;
+    result.myinfo_count = s.myinfo_count;
+    result.ctm_count    = s.ctm_count;
+    result.sr_count     = s.sr_count;
+    result.mcto_count   = s.mcto_count;
+    result.flood_blocked= s.flood_blocked;
+    result.ban_blocked  = s.ban_blocked;
+    return result;
+}
+
+// =============================================================================
+// GeoIP Lookup
+// =============================================================================
+
+GeoIPInfo HubContext::LookupGeoIP(std::string_view ip) const {
+    GeoIPInfo info;
+    if (!m_geo_lookup) return info;
+    auto result = m_geo_lookup->Lookup(std::string(ip));
+    info.country_code = std::move(result.country_code);
+    info.country_name = std::move(result.country_name);
+    info.city = std::move(result.city);
+    info.available = (info.country_code != "--");
+    return info;
+}
+
+// =============================================================================
+// Flood Protection Configuration
+// =============================================================================
+
+void HubContext::SetFloodConfig(int type, int period_ms, int max_tokens) {
+    if (!m_nmdc_server) return;
+    if (type < 0 || type >= static_cast<int>(FloodType::Count)) return;
+    m_nmdc_server->SetFloodConfig(static_cast<FloodType>(type), period_ms, max_tokens);
+}
+
+std::pair<int, int> HubContext::GetFloodConfig(int type) const {
+    if (!m_nmdc_server) return {0, 0};
+    if (type < 0 || type >= static_cast<int>(FloodType::Count)) return {0, 0};
+    auto fl = m_nmdc_server->GetFloodConfig(static_cast<FloodType>(type));
+    return {fl.period_ms, fl.max_tokens};
+}
+
+// =============================================================================
+// Ban Cache Management
+// =============================================================================
+
+void HubContext::LoadBanCache(const std::vector<std::string>& ips,
+                               const std::vector<std::string>& nicks) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->LoadBanCache(ips, nicks);
+}
+
+void HubContext::AddBanCacheIP(const std::string& ip) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->AddBanCacheIP(ip);
+}
+
+void HubContext::AddBanCacheNick(const std::string& nick) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->AddBanCacheNick(nick);
+}
+
+void HubContext::RemoveBanCacheIP(const std::string& ip) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->RemoveBanCacheIP(ip);
+}
+
+void HubContext::RemoveBanCacheNick(const std::string& nick) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->RemoveBanCacheNick(nick);
+}
+
+void HubContext::ClearBanCache() {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->ClearBanCache();
+}
+
+// =============================================================================
+// ZLib Compression
+// =============================================================================
+
+void HubContext::SetZLibEnabled(bool enabled) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->SetZLibEnabled(enabled);
+}
+
+bool HubContext::IsZLibEnabled() const {
+    if (!m_nmdc_server) return false;
+    return m_nmdc_server->IsZLibEnabled();
+}
+
+void HubContext::SetZLibMinSize(size_t min_size) {
+    if (!m_nmdc_server) return;
+    m_nmdc_server->SetZLibMinSize(min_size);
+}
+
+size_t HubContext::GetZLibMinSize() const {
+    if (!m_nmdc_server) return 0;
+    return m_nmdc_server->GetZLibMinSize();
+}
+
+// =============================================================================
 // User Management
 // =============================================================================
 
@@ -337,8 +546,17 @@ bool HubContext::SetHubTopic(std::string_view topic) {
         m_hub_config.hub_topic = topic;
     }
     
-    // TODO: Broadcast topic change to users
+    // Push to NMDC server so all connected clients see the change immediately
+    if (m_nmdc_server) {
+        m_nmdc_server->SetHubTopic(std::string(topic));
+    }
     return true;
+}
+
+void HubContext::SetMOTD(const std::string& motd) {
+    if (m_nmdc_server) {
+        m_nmdc_server->SetMOTD(motd);
+    }
 }
 
 std::string HubContext::GetHubEncoding() const {
@@ -364,6 +582,30 @@ std::string HubContext::GetConfig(std::string_view section, std::string_view key
         if (key == "hub_encoding") return m_hub_config.hub_encoding;
         if (key == "hub_security") return m_hub_config.hub_security;
         if (key == "opchat_name") return m_hub_config.opchat_name;
+        if (key == "hub_category") return m_hub_config.hub_category;
+        // Network settings
+        if (key == "listen_ip") return m_hub_config.listen_ip;
+        if (key == "listen_port") return std::to_string(m_hub_config.listen_port);
+        if (key == "tls_enabled") return m_hub_config.tls_enabled ? "1" : "0";
+        if (key == "use_regserver") return m_hub_config.use_regserver ? "1" : "0";
+        if (key == "regserver_host") return m_hub_config.regserver_host;
+        // Security settings
+        if (key == "allow_unregistered") return m_hub_config.allow_unregistered ? "1" : "0";
+        if (key == "require_password") return m_hub_config.require_password ? "1" : "0";
+        if (key == "login_timeout") return std::to_string(m_hub_config.login_timeout);
+        if (key == "max_pass_attempts") return std::to_string(m_hub_config.max_pass_attempts);
+        if (key == "flood_protection") return std::to_string(m_hub_config.flood_protection);
+        if (key == "chat_filter") return m_hub_config.chat_filter ? "1" : "0";
+        if (key == "anti_clone") return m_hub_config.anti_clone ? "1" : "0";
+        if (key == "registration_require_invite") return m_hub_config.registration_require_invite ? "1" : "0";
+        if (key == "send_user_info") return m_hub_config.send_user_info ? "1" : "0";
+        // Limits
+        if (key == "max_users") return std::to_string(m_hub_config.max_users);
+        if (key == "min_share") return std::to_string(m_hub_config.min_share);
+        if (key == "min_slots") return std::to_string(m_hub_config.min_slots);
+        if (key == "max_hubs_user") return std::to_string(m_hub_config.max_hubs_user);
+        if (key == "max_hubs_op") return std::to_string(m_hub_config.max_hubs_op);
+        if (key == "max_conn_per_ip") return std::to_string(m_hub_config.max_conn_per_ip);
     }
     
     return std::string(default_val);
@@ -375,14 +617,105 @@ bool HubContext::SetConfig(std::string_view section, std::string_view key,
     std::unique_lock lock(m_config_mutex);
     
     if (section == "config") {
-        if (key == "hub_name") { m_hub_config.hub_name = value; return true; }
+        if (key == "hub_name") {
+            m_hub_config.hub_name = value;
+            if (m_nmdc_server) { m_nmdc_server->SetHubName(std::string(value)); }
+            return true;
+        }
         if (key == "hub_desc") { m_hub_config.hub_desc = value; return true; }
         if (key == "hub_topic") { m_hub_config.hub_topic = value; return true; }
         if (key == "hub_host") { m_hub_config.hub_host = value; return true; }
         if (key == "hub_owner") { m_hub_config.hub_owner = value; return true; }
         if (key == "hub_encoding") { m_hub_config.hub_encoding = value; return true; }
-        if (key == "hub_security") { m_hub_config.hub_security = value; return true; }
-        if (key == "opchat_name") { m_hub_config.opchat_name = value; return true; }
+        if (key == "hub_security") {
+            m_hub_config.hub_security = value;
+            if (m_nmdc_server) { m_nmdc_server->SetHubSecurity(std::string(value)); }
+            return true;
+        }
+        if (key == "opchat_name") {
+            m_hub_config.opchat_name = value;
+            if (m_nmdc_server) { m_nmdc_server->SetOpChatName(std::string(value)); }
+            return true;
+        }
+        if (key == "hub_category") { m_hub_config.hub_category = value; return true; }
+        // Network settings
+        if (key == "listen_ip") { m_hub_config.listen_ip = value; return true; }
+        if (key == "listen_port") {
+            int v = 411;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.listen_port = v;
+            return true;
+        }
+        if (key == "tls_enabled") { m_hub_config.tls_enabled = (value == "1"); return true; }
+        if (key == "use_regserver") { m_hub_config.use_regserver = (value == "1"); return true; }
+        if (key == "regserver_host") { m_hub_config.regserver_host = value; return true; }
+        // Security settings
+        if (key == "allow_unregistered") { m_hub_config.allow_unregistered = (value == "1"); return true; }
+        if (key == "require_password") { m_hub_config.require_password = (value == "1"); return true; }
+        if (key == "login_timeout") {
+            int v = 60;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.login_timeout = v;
+            // Push to NMDCHubServer if running
+            if (m_nmdc_server) { m_nmdc_server->SetLoginTimeout(v); }
+            return true;
+        }
+        if (key == "max_pass_attempts") {
+            int v = 3;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_pass_attempts = v;
+            // Push to NMDCHubServer if running
+            if (m_nmdc_server) { m_nmdc_server->SetMaxLoginAttempts(v); }
+            return true;
+        }
+        if (key == "flood_protection") {
+            int v = 2;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.flood_protection = v;
+            return true;
+        }
+        if (key == "chat_filter") { m_hub_config.chat_filter = (value == "1"); return true; }
+        if (key == "anti_clone") { m_hub_config.anti_clone = (value == "1"); return true; }
+        if (key == "registration_require_invite") { m_hub_config.registration_require_invite = (value == "1"); return true; }
+        if (key == "send_user_info") { m_hub_config.send_user_info = (value == "1"); return true; }
+        // Limits
+        if (key == "max_users") {
+            int v = 1000;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_users = v;
+            if (m_nmdc_server) { m_nmdc_server->SetMaxUsers(v); }
+            return true;
+        }
+        if (key == "min_share") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.min_share = v;
+            return true;
+        }
+        if (key == "min_slots") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.min_slots = v;
+            return true;
+        }
+        if (key == "max_hubs_user") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_hubs_user = v;
+            return true;
+        }
+        if (key == "max_hubs_op") {
+            int v = 0;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_hubs_op = v;
+            return true;
+        }
+        if (key == "max_conn_per_ip") {
+            int v = 5;
+            try { v = std::stoi(std::string(value)); } catch (...) {}
+            m_hub_config.max_conn_per_ip = v;
+            return true;
+        }
     }
     
     return false;
@@ -431,17 +764,32 @@ void HubContext::Log(int level, std::string_view message,
         return;
     }
     
-    std::lock_guard lock(m_log_mutex);
-    
-    // Get current time
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    
-    // Format: [timestamp] [level] [file:line] message
-    std::cerr << vh::fmt("[{}] [L{}] [{}:{}] {}\n",
-                         time_t_now, level,
-                         loc.file_name(), loc.line(),
-                         message);
+    std::string formatted;
+    {
+        std::lock_guard lock(m_log_mutex);
+
+        // Get current time
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+
+        // Format: [timestamp] [level] [file:line] message
+        formatted = vh::fmt("[{}] [L{}] [{}:{}] {}",
+                            time_t_now, level,
+                            loc.file_name(), loc.line(),
+                            message);
+        std::cerr << formatted << '\n';
+    }
+
+    // Forward to Python callback (if set) so the dashboard log viewer
+    // can capture C++ diagnostic output.  This MUST be called outside
+    // m_log_mutex — the SWIG director call acquires the Python GIL,
+    // and holding the mutex while waiting for the GIL causes a
+    // priority-inversion deadlock with API threads that call Log()
+    // while the GIL is held.
+    auto* cb = m_event_callback;
+    if (cb) {
+        cb->OnLog(level, formatted);
+    }
 }
 
 // =============================================================================
@@ -488,10 +836,16 @@ bool HubContext::LoadConfiguration() {
         .max_users    = cfgInt("max_users",    1000),
         .min_share    = 0,
         .max_share    = 0,
+        .min_slots    = 0,
+        .max_hubs_user = 0,
+        .max_hubs_op  = 0,
+        .max_conn_per_ip = cfgInt("max_conn_per_ip", 5),
         .tls_enabled  = false,
         .tls_port     = 0,
         .tls_cert_file = {},
-        .tls_key_file  = {}
+        .tls_key_file  = {},
+        .use_regserver = false,
+        .regserver_host = {}
     };
     
     Log(0, vh::fmt("Config: hub_name='{}', hub_topic='{}'",
@@ -507,9 +861,9 @@ bool HubContext::ConnectDatabase() {
 }
 
 bool HubContext::InitializeComponents() {
-    // Create the database-free NMDC hub server
+    // Create the NMDC hub server
     try {
-        Log(0, "Creating NMDCHubServer (database-free mode)");
+        Log(0, "Creating NMDCHubServer");
         m_nmdc_server = new NMDCHubServer(m_config_dir);
         
         if (!m_nmdc_server) {

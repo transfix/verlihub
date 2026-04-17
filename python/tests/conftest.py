@@ -14,33 +14,46 @@ Environment Variables:
 - VH_INTEGRATION_TESTS: "1" to enable integration tests
 - VH_FULL_INTEGRATION: "1" to enable full integration tests (requires running hub)
 """
+from __future__ import annotations
+
 import asyncio
 import os
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator, Generator, Optional
+from typing import AsyncGenerator, Optional
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import SQLModel
 
-from verlihub.models import (
-    RegUser,
-    Ban,
-    SetupList,
-    UserClass,
-    BanType,
-)
-from verlihub.models.database import (
-    Database,
-    DatabaseConfig,
-    init_database,
-    close_database,
-    get_database,
-)
+# Heavy dependencies (sqlalchemy, sqlmodel, pytest_asyncio) are optional.
+# When running lightweight SWIG-only tests (e.g. via CTest's SwigWrapperTests)
+# these packages may not be installed.  Guard them so conftest.py loads cleanly.
+try:
+    import pytest_asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlmodel import SQLModel
+
+    from verlihub.models import (
+        RegUser,
+        Ban,
+        SetupList,
+        UserClass,
+        BanType,
+    )
+    from verlihub.models.database import (
+        Database,
+        DatabaseConfig,
+        init_database,
+        close_database,
+        get_database,
+    )
+
+    import verlihub.models.database as _db_module  # for restoring global _database
+
+    _HAS_DB_DEPS = True
+except ImportError:
+    _HAS_DB_DEPS = False
 
 
 # =============================================================================
@@ -94,244 +107,265 @@ def is_full_integration_enabled() -> bool:
 
 
 # =============================================================================
-# Event Loop Configuration
-# =============================================================================
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-# =============================================================================
 # Database Configuration Fixtures
+# (only defined when DB dependencies are available)
 # =============================================================================
 
-@pytest.fixture(scope="function")
-def sqlite_config() -> DatabaseConfig:
-    """Create SQLite in-memory database config."""
-    return DatabaseConfig(use_sqlite=True, sqlite_path=None)
+if _HAS_DB_DEPS:
 
+    @pytest.fixture(scope="session")
+    def sqlite_config() -> DatabaseConfig:
+        """Create SQLite in-memory database config."""
+        return DatabaseConfig(use_sqlite=True, sqlite_path=None)
 
-@pytest.fixture(scope="function")
-def mysql_config() -> DatabaseConfig:
-    """Create MySQL database config from environment."""
-    cfg = get_mysql_config()
-    return DatabaseConfig(
-        db_type="mysql",
-        host=cfg["host"],
-        port=cfg["port"],
-        user=cfg["user"],
-        password=cfg["password"],
-        database=cfg["database"],
-    )
+    @pytest.fixture(scope="session")
+    def mysql_config() -> DatabaseConfig:
+        """Create MySQL database config from environment."""
+        cfg = get_mysql_config()
+        return DatabaseConfig(
+            db_type="mysql",
+            host=cfg["host"],
+            port=cfg["port"],
+            user=cfg["user"],
+            password=cfg["password"],
+            database=cfg["database"],
+        )
 
+    @pytest.fixture(scope="session")
+    def postgres_config() -> DatabaseConfig:
+        """Create PostgreSQL database config from environment."""
+        cfg = get_postgres_config()
+        return DatabaseConfig(
+            db_type="postgresql",
+            host=cfg["host"],
+            port=cfg["port"],
+            user=cfg["user"],
+            password=cfg["password"],
+            database=cfg["database"],
+        )
 
-@pytest.fixture(scope="function")
-def postgres_config() -> DatabaseConfig:
-    """Create PostgreSQL database config from environment."""
-    cfg = get_postgres_config()
-    return DatabaseConfig(
-        db_type="postgresql",
-        host=cfg["host"],
-        port=cfg["port"],
-        user=cfg["user"],
-        password=cfg["password"],
-        database=cfg["database"],
-    )
+    @pytest.fixture(scope="session")
+    def db_config(sqlite_config, mysql_config, postgres_config) -> DatabaseConfig:
+        """
+        Get database config based on VH_DB_BACKEND environment variable.
 
+        Defaults to SQLite in-memory for fastest testing.
+        """
+        backend = get_db_backend()
 
-@pytest.fixture(scope="function")
-def db_config(sqlite_config, mysql_config, postgres_config) -> DatabaseConfig:
-    """
-    Get database config based on VH_DB_BACKEND environment variable.
-    
-    Defaults to SQLite in-memory for fastest testing.
-    """
-    backend = get_db_backend()
-    
-    if backend == "mysql":
-        return mysql_config
-    elif backend in ("postgresql", "postgres"):
-        return postgres_config
-    else:
-        return sqlite_config
+        if backend == "mysql":
+            return mysql_config
+        elif backend in ("postgresql", "postgres"):
+            return postgres_config
+        else:
+            return sqlite_config
 
+    @pytest_asyncio.fixture(scope="session")
+    async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
+        """
+        Session-scoped test database.
 
-@pytest_asyncio.fixture(scope="function")
-async def db(db_config: DatabaseConfig) -> AsyncGenerator[Database, None]:
-    """
-    Create a test database using configured backend.
-    
-    Creates all tables and yields the database instance.
-    Tables are dropped after each test.
-    
-    Backend is controlled by VH_DB_BACKEND environment variable:
-    - "sqlite" (default): SQLite in-memory database
-    - "mysql": MySQL database
-    - "postgresql": PostgreSQL database
-    """
-    database = await init_database(config=db_config)
-    
-    # For persistent backends (MySQL/PostgreSQL), drop and recreate tables
-    # to ensure test isolation even if a previous run left stale data.
-    # SQLite in-memory databases are always fresh, so this is not needed.
-    if not db_config.use_sqlite:
-        async with database._engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.drop_all)
-            await conn.run_sync(SQLModel.metadata.create_all)
-    
-    yield database
-    
-    # Drop all tables during teardown for persistent backends to
-    # prevent data from leaking into the next test.
-    if not db_config.use_sqlite and database._engine is not None:
-        async with database._engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.drop_all)
-    
-    # Cleanup engine
-    await close_database()
+        Creates the engine and tables ONCE for the entire test session.
+        Per-test isolation is provided by the db_session fixture which uses
+        transaction savepoints that are rolled back after each test.
 
+        This avoids expensive DDL (DROP/CREATE) per test, which is the main
+        bottleneck when running against MySQL/PostgreSQL over the network.
 
-@pytest_asyncio.fixture(scope="function")
-async def db_session(db: Database) -> AsyncGenerator[AsyncSession, None]:
-    """Get a database session for testing."""
-    async with db._session_factory() as session:
-        yield session
+        Backend is controlled by VH_DB_BACKEND environment variable:
+        - "sqlite" (default): SQLite in-memory database
+        - "mysql": MySQL database
+        - "postgresql": PostgreSQL database
+        """
+        database = await init_database(config=db_config)
 
+        # For persistent backends (MySQL/PostgreSQL), drop and recreate tables
+        # once at session start to ensure a clean schema.
+        if not db_config.use_sqlite:
+            async with database._engine.begin() as conn:
+                await conn.run_sync(SQLModel.metadata.drop_all)
+                await conn.run_sync(SQLModel.metadata.create_all)
 
-# =============================================================================
-# Test Data Fixtures
-# =============================================================================
+        yield database
 
-@pytest_asyncio.fixture
-async def test_users(db_session: AsyncSession) -> list[RegUser]:
-    """Create test users in the database."""
-    users = [
-        RegUser(
-            nick="admin_user",
-            login_pwd="hashed_admin_password",
-            user_class=UserClass.ADMIN,
-            reg_date=datetime.now(timezone.utc),
-            reg_op="setup",
-        ),
-        RegUser(
-            nick="regular_user",
-            login_pwd="hashed_user_password",
-            user_class=UserClass.REGISTERED,
-            reg_date=datetime.now(timezone.utc),
-            reg_op="admin_user",
-        ),
-        RegUser(
-            nick="vip_user",
-            login_pwd="hashed_vip_password",
-            user_class=UserClass.VIP,
-            reg_date=datetime.now(timezone.utc),
-            reg_op="admin_user",
-        ),
-        RegUser(
-            nick="operator",
-            login_pwd="hashed_op_password",
-            user_class=UserClass.OPERATOR,
-            reg_date=datetime.now(timezone.utc),
-            reg_op="admin_user",
-        ),
-    ]
-    
-    for user in users:
-        db_session.add(user)
-    
-    await db_session.commit()
-    
-    # Refresh to get IDs
-    for user in users:
-        await db_session.refresh(user)
-    
-    return users
+        # Drop tables once at session end.
+        if not db_config.use_sqlite and database._engine is not None:
+            async with database._engine.begin() as conn:
+                await conn.run_sync(SQLModel.metadata.drop_all)
 
+        await close_database()
 
-@pytest_asyncio.fixture
-async def test_bans(db_session: AsyncSession) -> list[Ban]:
-    """Create test bans in the database."""
-    bans = [
-        Ban(
-            ip="192.168.1.100",
-            nick="banned_user1",
-            ban_type=BanType.IP | BanType.NICK,
-            nick_op="admin_user",
-            reason="Spamming",
-            date_start=datetime.now(timezone.utc),
-        ),
-        Ban(
-            ip="10.0.0.0/8",
-            nick="",
-            ban_type=BanType.RANGE,
-            nick_op="admin_user",
-            reason="Range ban for abuse",
-            date_start=datetime.now(timezone.utc),
-        ),
-        Ban(
-            ip="",
-            nick="badnick",
-            ban_type=BanType.NICK,
-            nick_op="operator",
-            reason="Impersonation attempt",
-            date_start=datetime.now(timezone.utc),
-        ),
-    ]
-    
-    for ban in bans:
-        db_session.add(ban)
-    
-    await db_session.commit()
-    
-    # Refresh to get IDs
-    for ban in bans:
-        await db_session.refresh(ban)
-    
-    return bans
+    @pytest_asyncio.fixture(autouse=True, scope="function")
+    async def _clean_db_between_tests() -> AsyncGenerator[None, None]:
+        """
+        Autouse fixture: DELETE all rows from all tables between tests.
 
+        Checks if a global database is initialized (via init_database()).  If so,
+        deletes all row data — fast even for MySQL because no DDL is involved.
 
-@pytest_asyncio.fixture
-async def test_config(db_session: AsyncSession) -> list[SetupList]:
-    """Create test hub configuration in the database."""
-    config_items = [
-        SetupList(file="config", var="hub_name", val="Test Hub"),
-        SetupList(file="config", var="hub_host", val="localhost"),
-        SetupList(file="config", var="hub_port", val="4111"),
-        SetupList(file="config", var="max_users", val="1000"),
-        SetupList(file="config", var="hub_desc", val="A test hub for unit testing"),
-        SetupList(file="config", var="hub_owner", val="Test Admin"),
-    ]
-    
-    for item in config_items:
-        db_session.add(item)
-    
-    await db_session.commit()
-    
-    return config_items
+        On teardown, restores the global ``_database`` reference if a test cleared
+        it by calling ``close_database()`` directly (e.g. test_database_config.py).
+        """
+        saved_db = _db_module._database
+        if saved_db is not None and saved_db._engine is not None:
+            try:
+                async with saved_db._engine.begin() as conn:
+                    for table in reversed(SQLModel.metadata.sorted_tables):
+                        await conn.execute(table.delete())
+            except Exception:
+                pass  # engine may be disposed; skip cleanup
+        yield
+        # Restore the global _database if a test cleared it.  The session-scoped
+        # ``db`` fixture's Database instance is still alive, so just reassign.
+        if saved_db is not None and _db_module._database is None:
+            _db_module._database = saved_db
+
+    @pytest_asyncio.fixture(scope="function")
+    async def db_session(db: Database) -> AsyncGenerator[AsyncSession, None]:
+        """
+        Per-test database session with isolation.
+
+        Uses a simple session from the factory for all backends.  Data cleanup
+        is handled by the autouse ``_clean_db_between_tests`` fixture which
+        DELETEs all rows between tests, so every test starts with empty tables.
+
+        A previous implementation used a savepoint/rollback pattern for MySQL
+        and PostgreSQL, but that caused data inserted via the test session to be
+        invisible to production code that opens its own sessions (e.g.
+        ``prune_stale_hubs``, ``OnValidateNick``).  The DELETE-based cleanup is
+        sufficient and avoids the cross-session visibility problem.
+        """
+        async with db._session_factory() as session:
+            yield session
 
 
 # =============================================================================
-# Combined Fixtures
-# =============================================================================
+    # Test Data Fixtures
+    # =============================================================================
 
-@pytest_asyncio.fixture
-async def populated_db(
-    db: Database,
-    db_session: AsyncSession,
-    test_users: list[RegUser],
-    test_bans: list[Ban],
-    test_config: list[SetupList],
-) -> Database:
-    """
-    Database with test data already populated.
-    
-    Returns the database instance with users, bans, and config loaded.
-    """
-    return db
+    @pytest_asyncio.fixture
+    async def test_users(db_session: AsyncSession) -> list[RegUser]:
+        """Create test users in the database."""
+        users = [
+            RegUser(
+                nick="admin_user",
+                login_pwd="hashed_admin_password",
+                user_class=UserClass.ADMIN,
+                reg_date=datetime.now(timezone.utc),
+                reg_op="setup",
+            ),
+            RegUser(
+                nick="regular_user",
+                login_pwd="hashed_user_password",
+                user_class=UserClass.REGISTERED,
+                reg_date=datetime.now(timezone.utc),
+                reg_op="admin_user",
+            ),
+            RegUser(
+                nick="vip_user",
+                login_pwd="hashed_vip_password",
+                user_class=UserClass.VIP,
+                reg_date=datetime.now(timezone.utc),
+                reg_op="admin_user",
+            ),
+            RegUser(
+                nick="operator",
+                login_pwd="hashed_op_password",
+                user_class=UserClass.OPERATOR,
+                reg_date=datetime.now(timezone.utc),
+                reg_op="admin_user",
+            ),
+        ]
+
+        for user in users:
+            db_session.add(user)
+
+        await db_session.commit()
+
+        # Refresh to get IDs
+        for user in users:
+            await db_session.refresh(user)
+
+        return users
+
+    @pytest_asyncio.fixture
+    async def test_bans(db_session: AsyncSession) -> list[Ban]:
+        """Create test bans in the database."""
+        bans = [
+            Ban(
+                ip="192.168.1.100",
+                nick="banned_user1",
+                ban_type=BanType.IP | BanType.NICK,
+                nick_op="admin_user",
+                reason="Spamming",
+                date_start=datetime.now(timezone.utc),
+            ),
+            Ban(
+                ip="10.0.0.0/8",
+                nick="",
+                ban_type=BanType.RANGE,
+                nick_op="admin_user",
+                reason="Range ban for abuse",
+                date_start=datetime.now(timezone.utc),
+            ),
+            Ban(
+                ip="",
+                nick="badnick",
+                ban_type=BanType.NICK,
+                nick_op="operator",
+                reason="Impersonation attempt",
+                date_start=datetime.now(timezone.utc),
+            ),
+        ]
+
+        for ban in bans:
+            db_session.add(ban)
+
+        await db_session.commit()
+
+        # Refresh to get IDs
+        for ban in bans:
+            await db_session.refresh(ban)
+
+        return bans
+
+    @pytest_asyncio.fixture
+    async def test_config(db_session: AsyncSession) -> list[SetupList]:
+        """Create test hub configuration in the database."""
+        config_items = [
+            SetupList(file="config", var="hub_name", val="Test Hub"),
+            SetupList(file="config", var="hub_host", val="localhost"),
+            SetupList(file="config", var="hub_port", val="4111"),
+            SetupList(file="config", var="max_users", val="1000"),
+            SetupList(file="config", var="hub_desc", val="A test hub for unit testing"),
+            SetupList(file="config", var="hub_owner", val="Test Admin"),
+        ]
+
+        for item in config_items:
+            db_session.add(item)
+
+        await db_session.commit()
+
+        return config_items
+
+    # =========================================================================
+    # Combined Fixtures
+    # =========================================================================
+
+    @pytest_asyncio.fixture
+    async def populated_db(
+        db: Database,
+        db_session: AsyncSession,
+        test_users: list[RegUser],
+        test_bans: list[Ban],
+        test_config: list[SetupList],
+    ) -> Database:
+        """
+        Database with test data already populated.
+
+        Returns the database instance with users, bans, and config loaded.
+        """
+        return db
 
 
 # =============================================================================
@@ -345,20 +379,13 @@ def hub_context():
     
     Returns a temporary hub context that can be used to test
     plugin loading and management.
-    
-    Skips if verlihub_core module is not available.
     """
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    from verlihub import verlihub_core
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
         if ctx is None:
-            pytest.skip("Could not create HubContext")
+            pytest.fail("Could not create HubContext")
         yield ctx
 
 

@@ -22,13 +22,8 @@ if _build_python_dir.exists() and str(_build_python_dir) not in sys.path:
 
 
 def _require_swig():
-    """Import and return verlihub_core, skipping if SWIG module not available."""
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    """Import and return verlihub_core."""
+    from verlihub import verlihub_core
     return verlihub_core
 
 
@@ -40,17 +35,12 @@ def _require_swig():
 @pytest.fixture
 def hub_context():
     """Create a HubContext for testing."""
-    try:
-        from verlihub import verlihub_core
-    except ImportError:
-        pytest.skip("verlihub_core module not available")
-    if verlihub_core is None:
-        pytest.skip("verlihub_core SWIG module not built")
+    from verlihub import verlihub_core
     
     with tempfile.TemporaryDirectory() as tmpdir:
         ctx = verlihub_core.HubContext.Create(tmpdir)
         if ctx is None:
-            pytest.skip("Could not create HubContext")
+            pytest.fail("Could not create HubContext")
         yield ctx
 
 
@@ -158,7 +148,7 @@ class TestPluginManagement:
     def test_get_loaded_plugins_empty(self, hub_context):
         """Test getting loaded plugins when none are loaded."""
         plugins = hub_context.GetLoadedPlugins()
-        assert isinstance(plugins, list)
+        assert isinstance(plugins, (list, tuple))
         # Initially no plugins loaded
     
     @pytest.mark.skipif(
@@ -227,7 +217,7 @@ class TestLuaPlugin:
     def test_get_loaded_lua_scripts_empty(self, hub_context):
         """Test getting loaded Lua scripts when none are loaded."""
         scripts = hub_context.GetLoadedLuaScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
     
     @pytest.mark.skipif(
         os.environ.get("VH_INTEGRATION_TESTS") != "1",
@@ -275,7 +265,7 @@ class TestPythonPlugin:
     def test_get_loaded_python_scripts_empty(self, hub_context):
         """Test getting loaded Python scripts when none are loaded."""
         scripts = hub_context.GetLoadedPythonScripts()
-        assert isinstance(scripts, list)
+        assert isinstance(scripts, (list, tuple))
 
 
 # =============================================================================

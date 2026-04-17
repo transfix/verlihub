@@ -1,0 +1,45 @@
+# LLM integration test configuration
+# Uses SQLite in-memory for speed; Ollama sidecar provides the LLM.
+environment: development
+mode: api
+
+database:
+  type: sqlite
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+
+hub:
+  name: "LLM Integration Test Hub"
+  port: 4111
+  max_users: 100
+
+users:
+  masters:
+    - nick: admin
+      password: admin123
+      note: "LLM test admin"
+
+llm:
+  enabled: true
+  base_url: "http://ollama:11434/v1"
+  model: "qwen2.5:0.5b"
+  api_key: "ollama"
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 5
+  min_class: 3
+  admin_class: 5
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+logging:
+  level: debug

@@ -9,6 +9,7 @@ This module sets up the FastAPI application with:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -44,7 +45,7 @@ async def lifespan(app: FastAPI):
     
     Handles startup and shutdown of:
     - Database connection (Python-managed: SQLite, PostgreSQL, or MySQL)
-    - Hub context (C++ core, database-free NMDC protocol server)
+    - Hub context (C++ core, NMDC protocol server — auth via Python callback)
     """
     logger.info("Starting Thin Verlihub...")
     
@@ -76,7 +77,8 @@ async def lifespan(app: FastAPI):
         # Continue anyway - API will work with limited functionality
     
     # Initialize hub context (if SWIG module is available)
-    # The C++ core is now database-free - it only handles NMDC protocol
+    # The C++ core handles NMDC protocol; auth and persistence go through
+    # the Python callback which uses the database initialized above.
     #
     # In "both" mode the hub is started by run_both() / run_hub() *before*
     # uvicorn boots, so the global hub context is already populated.  We
@@ -86,6 +88,10 @@ async def lifespan(app: FastAPI):
 
     if existing_ctx is not None:
         logger.info("Re-using existing hub context (started externally)")
+        # Give the event handler a reference to *this* event loop so that
+        # cross-thread DB lookups (OnValidateNick etc.) schedule coroutines
+        # on the loop that owns the async DB engine.
+        existing_ctx.events.set_event_loop(asyncio.get_running_loop())
     else:
         try:
             from verlihub.core import HubContext
@@ -96,6 +102,7 @@ async def lifespan(app: FastAPI):
             ctx = HubContext.create(config_dir)
             if ctx is not None:
                 set_hub_context(ctx)
+                ctx.events.set_event_loop(asyncio.get_running_loop())
 
                 # Feed YAML config to the C++ director callback so
                 # Initialize() → LoadConfiguration() sees the right values.
@@ -161,10 +168,122 @@ async def lifespan(app: FastAPI):
         except Exception as ws_err:
             logger.warning("WebSocket event wiring failed: %s", ws_err)
 
+    # Send "Your information" PM to users on connect (like legacy send_user_info)
+    if ctx is not None:
+        try:
+            from verlihub.user_info import register as register_user_info
+            register_user_info(ctx)
+        except Exception as ui_err:
+            logger.warning("User-info on-connect handler failed: %s", ui_err)
+
+    # Wire LLM bot chat handler (PM + main chat → security bot)
+    _bot_chat_handler = None
+    if ctx is not None:
+        try:
+            llm_cfg = cfg.llm if cfg else None
+            bot_behavior = cfg.bots.behavior if cfg else None
+            if llm_cfg and llm_cfg.enabled:
+                from verlihub.bot.chat import BotChatHandler
+                _bot_chat_handler = BotChatHandler(
+                    ctx, llm_cfg, behavior=bot_behavior,
+                )
+                _bot_chat_handler.register(ctx.events)
+                _bot_chat_handler.start_proactive(asyncio.get_event_loop())
+                logger.info("LLM bot chat handler enabled")
+        except Exception as bot_err:
+            logger.warning("Bot chat handler failed to start: %s", bot_err)
+
+    # Start in-process MCP session manager (if enabled & SDK installed)
+    _mcp_session_mgr = None
+    _mcp_stop_event = None
+    _mcp_task = None
+    try:
+        mcp_cfg = cfg.mcp if cfg else None
+        if mcp_cfg and mcp_cfg.enabled:
+            from verlihub.api.routes.mcp import create_mcp_mount
+            mcp_app, _mcp_session_mgr = create_mcp_mount()
+            if _mcp_session_mgr is not None:
+                # run() is an async context manager that keeps the internal
+                # task-group alive.  We drive it from a background task that
+                # blocks until _mcp_stop_event is set during shutdown.
+                _mcp_stop_event = asyncio.Event()
+                _mcp_ready_event = asyncio.Event()
+
+                async def _run_mcp_session_manager():
+                    async with _mcp_session_mgr.run():
+                        _mcp_ready_event.set()
+                        await _mcp_stop_event.wait()
+
+                _mcp_task = asyncio.create_task(_run_mcp_session_manager())
+                # Give the task-group a chance to initialise before proceeding
+                try:
+                    await asyncio.wait_for(_mcp_ready_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("MCP session manager startup timed out")
+                logger.info("In-process MCP session manager started")
+    except Exception as mcp_err:
+        logger.warning("MCP session manager failed to start: %s", mcp_err)
+
+    # Start hublist registration client if configured
+    _hublist_client = None
+    try:
+        from verlihub.hublist import HubListRegistrationClient, build_hub_info
+        hublist_servers = []
+        use_regserver = False
+        if cfg:
+            hublist_servers = cfg.hub.hublist_servers or []
+            # Check C++ config or treat non-empty server list as enabled
+            use_regserver = bool(hublist_servers)
+        if ctx:
+            try:
+                use_regserver = ctx.get_config("config", "use_regserver", "0") == "1"
+            except Exception:
+                pass
+        if use_regserver and hublist_servers:
+            interval = getattr(getattr(cfg, 'hublist', None), 'registration_interval', 600) if cfg else 600
+            _hublist_client = HubListRegistrationClient(
+                servers=hublist_servers,
+                interval=interval,
+            )
+            await _hublist_client.start(lambda: build_hub_info(ctx))
+            logger.info("Hublist registration client started for %d servers", len(hublist_servers))
+    except Exception as hl_err:
+        logger.warning("Hublist registration client failed to start: %s", hl_err)
+
     yield
     
     # Shutdown
     logger.info("Shutting down Thin Verlihub...")
+
+    # Stop bot chat handler
+    if _bot_chat_handler is not None:
+        try:
+            ctx_shutdown = get_hub_context()
+            if ctx_shutdown is not None:
+                _bot_chat_handler.unregister(ctx_shutdown.events)
+            _bot_chat_handler.shutdown()
+        except Exception:
+            pass
+
+    # Stop in-process MCP session manager
+    if _mcp_stop_event is not None:
+        _mcp_stop_event.set()
+    if _mcp_task is not None:
+        try:
+            await asyncio.wait_for(_mcp_task, timeout=5.0)
+        except (asyncio.TimeoutError, Exception):
+            _mcp_task.cancel()
+            try:
+                await _mcp_task
+            except Exception:
+                pass
+
+    # Stop hublist registration client
+    if _hublist_client is not None:
+        try:
+            await _hublist_client.stop()
+        except Exception:
+            pass
     
     # Stop stats broadcast
     try:
@@ -208,7 +327,20 @@ def create_app() -> FastAPI:
     
     # Include API router
     app.include_router(api_router)
-    
+
+    # Mount in-process MCP endpoint (ASGI sub-app, not a FastAPI router)
+    try:
+        mcp_cfg_check = cfg.mcp if cfg else None
+        if mcp_cfg_check and mcp_cfg_check.enabled:
+            from verlihub.api.routes.mcp import create_mcp_mount
+            mcp_app, _ = create_mcp_mount()
+            if mcp_app is not None:
+                from starlette.routing import Mount
+                app.routes.append(Mount("/api/v1/mcp", app=mcp_app))
+                logger.info("MCP endpoint mounted at /api/v1/mcp")
+    except Exception as mcp_mount_err:
+        logger.warning("MCP mount skipped: %s", mcp_mount_err)
+
     # Include dashboard router
     from verlihub.dashboard import dashboard_router
     from verlihub.dashboard.websocket import ws_router

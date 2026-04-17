@@ -66,6 +66,10 @@ def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict
     hub_topic = ctx.hub_topic if ctx else (cfg.hub.topic if cfg else "")
     hub_logo = cfg.hub.logo if cfg else ""
 
+    # LLM feature flag
+    llm_enabled = cfg and hasattr(cfg, "llm") and cfg.llm and cfg.llm.enabled
+    llm_min_class = cfg.llm.min_class if llm_enabled else 99
+
     return {
         "request": request,
         "user": user,
@@ -76,6 +80,7 @@ def get_base_context(request: Request, user: Optional[TokenData] = None) -> dict
         "hub_logo": hub_logo or VERLIHUB_DEFAULT_LOGO,
         "current_year": datetime.now(timezone.utc).year,
         "version": "1.7.0.0",
+        "llm_enabled": bool(llm_enabled and user and user.user_class >= llm_min_class),
     }
 
 
@@ -92,12 +97,22 @@ async def dashboard_home(
     context = get_base_context(request, user)
     
     # Get hub stats if available
+    motd = ""
+    try:
+        cfg = get_config_optional()
+        _config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+        _motd_file = Path(_config_dir) / "motd"
+        if _motd_file.exists():
+            motd = _motd_file.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        pass
+
     context.update({
         "user_count": ctx.user_count if ctx else 0,
         "share_size": _format_bytes(ctx.total_share if ctx else 0),
         "uptime": _format_uptime(ctx.uptime if ctx else 0),
         "hub_port": ctx.port if ctx else 411,
-        "hub_motd": (ctx.get_config() or {}).get("hub_motd", "") if ctx else "",
+        "hub_motd": motd,
     })
     
     return templates.TemplateResponse(request, "dashboard.html", context)
@@ -211,6 +226,7 @@ async def register_page(
     cfg = get_config_optional()
     registration_enabled = cfg.api.registration_enabled if cfg else True
     require_invite = cfg.api.registration_require_invite if cfg else False
+    require_email = cfg.api.registration_require_email if cfg else True
     
     context = get_base_context(request)
     context["error"] = error
@@ -218,6 +234,7 @@ async def register_page(
     context["invite_code"] = invite or ""
     context["registration_enabled"] = registration_enabled
     context["require_invite"] = require_invite
+    context["require_email"] = require_email
     return templates.TemplateResponse(request, "register.html", context)
 
 
@@ -225,9 +242,13 @@ async def register_page(
 async def register_submit(request: Request):
     """Handle registration form submission."""
     import re
+    from urllib.parse import quote_plus
     cfg = get_config_optional()
     registration_enabled = cfg.api.registration_enabled if cfg else True
     require_invite = cfg.api.registration_require_invite if cfg else False
+    require_email = cfg.api.registration_require_email if cfg else True
+    check_deliverability = cfg.api.registration_check_email_deliverability if cfg else False
+    block_disposable = cfg.api.registration_block_disposable_emails if cfg else True
     
     if not registration_enabled:
         return RedirectResponse(
@@ -239,6 +260,7 @@ async def register_submit(request: Request):
     nick = (form.get("nick", "") or "").strip()
     password = form.get("password", "") or ""
     confirm_password = form.get("confirm_password", "") or ""
+    email = (form.get("email", "") or "").strip().lower()
     invite_code = (form.get("invite_code", "") or "").strip()
     
     # Validate
@@ -268,6 +290,22 @@ async def register_submit(request: Request):
             status_code=status.HTTP_303_SEE_OTHER,
         )
     
+    # Validate email
+    if require_email and not email:
+        return RedirectResponse(
+            url=f"/dashboard/register?error=Email+address+is+required&invite={invite_code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if email:
+        from verlihub.email_validation import validate_email
+        ok, err = await validate_email(email, check_deliverability=check_deliverability,
+                                        block_disposable=block_disposable)
+        if not ok:
+            return RedirectResponse(
+                url=f"/dashboard/register?error={quote_plus(err)}&invite={invite_code}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    
     # Call the API registration endpoint
     from verlihub.api.auth import create_access_token, hash_password
     from verlihub.models import InviteCode as InviteCodeModel
@@ -285,6 +323,20 @@ async def register_submit(request: Request):
                     url=f"/dashboard/register?error=Nick+already+registered&invite={invite_code}",
                     status_code=status.HTTP_303_SEE_OTHER,
                 )
+            
+            # Check if nick is currently online (live user)
+            try:
+                from verlihub.api.deps import get_hub_context
+                ctx = get_hub_context()
+                if ctx:
+                    for u in ctx.get_user_list():
+                        if u.get("nick") == nick:
+                            return RedirectResponse(
+                                url=f"/dashboard/register?error=This+nickname+is+currently+in+use+by+a+connected+user&invite={invite_code}",
+                                status_code=status.HTTP_303_SEE_OTHER,
+                            )
+            except Exception:
+                pass
             
             # Handle invite code
             from verlihub.models import UserClass
@@ -318,6 +370,7 @@ async def register_submit(request: Request):
             new_user = RegUser(
                 nick=nick,
                 login_pwd=hash_password(password),
+                email=email,
                 user_class=user_class,
                 authorised=True,
                 reg_op="self-registration",
@@ -376,6 +429,47 @@ async def invites_page(
     context["is_admin"] = user.user_class >= 5
     
     return templates.TemplateResponse(request, "invites.html", context)
+
+
+@dashboard_router.get("/hublist", response_class=HTMLResponse)
+async def hublist_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Hub list management page (master-only)."""
+    if user is None:
+        return RedirectResponse(
+            url="/dashboard/login?next_url=/dashboard/hublist",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if user.user_class < 10:  # Master required
+        return RedirectResponse(
+            url="/dashboard/",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    context = get_base_context(request, user)
+
+    hubs: list = []
+    blocks: list = []
+    try:
+        from verlihub.models.database import get_async_session
+        from verlihub.models import HubListEntry, HubListBlock
+        async with get_async_session() as session:
+            result = await session.execute(select(HubListEntry))
+            hubs = result.scalars().all()
+            result2 = await session.execute(select(HubListBlock))
+            blocks = result2.scalars().all()
+    except Exception:
+        pass
+
+    context.update({
+        "hubs": hubs,
+        "blocks": blocks,
+    })
+
+    return templates.TemplateResponse(request, "hublist.html", context)
 
 
 @dashboard_router.get("/users", response_class=HTMLResponse)
@@ -497,7 +591,55 @@ async def config_page(
     config = {}
     if ctx:
         try:
-            config = ctx.get_config() or {}
+            _g = lambda key, default="": ctx.get_config("config", key, default)
+            _gi = lambda key, default=0: int(_g(key, str(default)) or default)
+            config = {
+                "hub_name": _g("hub_name"),
+                "hub_desc": _g("hub_desc"),
+                "hub_topic": _g("hub_topic"),
+                "hub_owner": _g("hub_owner"),
+                "hub_category": _g("hub_category"),
+                "hub_encoding": _g("hub_encoding", "UTF-8"),
+                "port": _gi("listen_port", 411),
+                "listen_ip": _g("listen_ip", "0.0.0.0"),
+                "hub_host": _g("hub_host"),
+                "use_regserver": _g("use_regserver") == "1",
+                "regserver_host": _g("regserver_host"),
+                "enable_tls": _g("tls_enabled") == "1",
+                "allow_unregistered": _g("allow_unregistered") == "1",
+                "require_password": _g("require_password") == "1",
+                "login_timeout": _gi("login_timeout", 60),
+                "max_pass_attempts": _gi("max_pass_attempts", 3),
+                "flood_protection": _gi("flood_protection", 2),
+                "chat_filter": _g("chat_filter") == "1",
+                "anti_clone": _g("anti_clone") == "1",
+                "registration_require_invite": _g("registration_require_invite") == "1",
+                "max_users": _gi("max_users", 1000),
+                "min_share": _gi("min_share", 0),
+                "min_slots": _gi("min_slots", 0),
+                "max_hubs_user": _gi("max_hubs_user", 0),
+                "max_hubs_op": _gi("max_hubs_op", 0),
+                "max_conn_per_ip": _gi("max_conn_per_ip", 5),
+                "hub_motd": "",  # loaded from file below
+                "hub_security": _g("hub_security", "Hub-Security"),
+                "opchat_name": _g("opchat_name", "OpChat"),
+            }
+            # MOTD is stored in a file, not a C++ config key
+            try:
+                from verlihub.config import get_config_optional as _gcc
+                _cfg = _gcc()
+                _config_dir = _cfg._config_dir if _cfg else "/etc/verlihub"
+                _motd_file = Path(_config_dir) / "motd"
+                if _motd_file.exists():
+                    config["hub_motd"] = _motd_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+                # Hublist servers from YAML config (multi-server list)
+                if _cfg:
+                    config["hublist_servers"] = "\n".join(_cfg.hub.hublist_servers or [])
+                    config["hublist_server_enabled"] = _cfg.hublist.server_enabled
+            except Exception:
+                pass
         except Exception:
             pass
     
@@ -520,7 +662,9 @@ async def logs_page(
         )
     
     context = get_base_context(request, user)
-    context["logs"] = []  # TODO: Implement log retrieval
+    # Serve historical logs from the ring buffer
+    from verlihub.log_buffer import get_log_buffer
+    context["logs"] = get_log_buffer().get_recent(500)
     context["can_edit"] = user.user_class >= 5  # Admin+ can manage
     
     return templates.TemplateResponse(request, "logs.html", context)
@@ -548,6 +692,43 @@ async def chat_page(
     context["user_count"] = ctx.user_count if ctx else 0
     
     return templates.TemplateResponse(request, "chat.html", context)
+
+
+@dashboard_router.get("/ai-chat", response_class=HTMLResponse)
+async def ai_chat_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+    access_token: Optional[str] = Cookie(default=None),
+):
+    """AI chat assistant page — LLM-powered hub interaction."""
+    if user is None:
+        return RedirectResponse(
+            url="/dashboard/login?next_url=/dashboard/ai-chat",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    cfg = get_config_optional()
+    llm_enabled = cfg and cfg.llm and cfg.llm.enabled
+    min_class = cfg.llm.min_class if (cfg and cfg.llm) else 3
+    admin_class = cfg.llm.admin_class if (cfg and cfg.llm) else 5
+
+    # Permission gate
+    if llm_enabled and user.user_class < min_class:
+        return RedirectResponse(
+            url="/dashboard/",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    context = get_base_context(request, user)
+    token = access_token[7:] if access_token and access_token.startswith("Bearer ") else access_token
+    context["auth_token"] = token or ""
+    context["llm_enabled"] = bool(llm_enabled)
+    context["llm_model"] = cfg.llm.model if (cfg and cfg.llm) else ""
+    context["llm_endpoints"] = cfg.llm.list_endpoint_names() if (cfg and cfg.llm) else []
+    context["access_level"] = "admin" if user.user_class >= admin_class else "read-only"
+    context["hub_timezone"] = cfg.hub.timezone if (cfg and cfg.hub) else "UTC"
+
+    return templates.TemplateResponse(request, "ai_chat.html", context)
 
 
 @dashboard_router.get("/plugins", response_class=HTMLResponse)
@@ -609,6 +790,83 @@ async def plugins_page(
     context["can_edit"] = user.user_class >= 5  # Admin+ can manage plugins
     
     return templates.TemplateResponse(request, "plugins.html", context)
+
+
+# =============================================================================
+# Phase 4: Tool Dashboard Pages
+# =============================================================================
+
+
+@dashboard_router.get("/triggers", response_class=HTMLResponse)
+async def triggers_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Trigger management dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/triggers", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "triggers.html", context)
+
+
+@dashboard_router.get("/redirects", response_class=HTMLResponse)
+async def redirects_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Redirect rules dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/redirects", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "redirects.html", context)
+
+
+@dashboard_router.get("/clients", response_class=HTMLResponse)
+async def clients_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Client detection rules dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/clients", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "clients.html", context)
+
+
+@dashboard_router.get("/penalties", response_class=HTMLResponse)
+async def penalties_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Penalty management dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/penalties", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "penalties.html", context)
+
+
+@dashboard_router.get("/flood-config", response_class=HTMLResponse)
+async def flood_config_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Flood protection configuration dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/flood-config", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "flood_config.html", context)
+
+
+@dashboard_router.get("/protocol-stats", response_class=HTMLResponse)
+async def protocol_stats_page(
+    request: Request,
+    user: Optional[TokenData] = Depends(get_user_from_cookie),
+):
+    """Protocol statistics dashboard page."""
+    if user is None:
+        return RedirectResponse(url="/dashboard/login?next_url=/dashboard/protocol-stats", status_code=status.HTTP_303_SEE_OTHER)
+    context = get_base_context(request, user)
+    return templates.TemplateResponse(request, "protocol_stats.html", context)
 
 
 # =============================================================================

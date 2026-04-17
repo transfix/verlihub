@@ -13,6 +13,7 @@
 #   py-mysql      Run verlihub-py tests against MySQL
 #   py-postgres   Run verlihub-py tests against PostgreSQL
 #   py-all-db     Run verlihub-py tests against all databases
+#   llm           Run LLM integration tests (Ollama + qwen2.5:0.5b)
 #   original      Run original verlihub tests (MySQL only)
 #   dual          Run both original and verlihub-py tests
 #   sql-semantics Compare SQL semantics across databases
@@ -37,6 +38,9 @@ NC='\033[0m' # No Color
 # Docker compose files
 COMPOSE_TEST="docker/docker-compose.test.yml"
 COMPOSE_DUAL="docker/docker-compose.dual-test.yml"
+COMPOSE_LLM="docker/docker-compose.llm-test.yml"
+COMPOSE_BOT_CHAT="docker/docker-compose.bot-chat-test.yml"
+COMPOSE_VLLM_REMOTE="docker/docker-compose.vllm-remote-test.yml"
 
 show_help() {
     echo -e "${BLUE}============================================${NC}"
@@ -51,6 +55,9 @@ show_help() {
     echo "  py-mysql      Run verlihub-py tests against MySQL"
     echo "  py-postgres   Run verlihub-py tests against PostgreSQL"
     echo "  py-all-db     Run verlihub-py tests against all databases"
+    echo "  llm           Run LLM integration tests (Ollama + qwen2.5:0.5b, CPU)"
+    echo "  bot-chat      Run NMDC bot chat LLM tests (PM + main chat via NMDC)"
+    echo "  vllm-remote   Run LLM tests against remote vLLM (Qwen3.5-35B, no GPU)"
     echo "  original      Run original verlihub tests (MySQL only)"
     echo "  dual          Run both original and verlihub-py tests"
     echo "  sql-semantics Compare SQL semantics across databases"
@@ -141,7 +148,9 @@ build_images() {
     log_info "Building Docker images..."
     cd "$PROJECT_DIR"
     
-    docker compose -f "$COMPOSE_TEST" build --quiet
+    # Build images sequentially to avoid containerd lock contention
+    docker compose -f "$COMPOSE_TEST" build --quiet mysql-tests
+    docker compose -f "$COMPOSE_TEST" build --quiet postgres-tests
 }
 
 cleanup_containers() {
@@ -150,6 +159,8 @@ cleanup_containers() {
     
     docker compose -f "$COMPOSE_TEST" down -v --remove-orphans 2>/dev/null || true
     docker compose -f "$COMPOSE_DUAL" down -v --remove-orphans 2>/dev/null || true
+    docker compose -f "$COMPOSE_LLM" down -v --remove-orphans 2>/dev/null || true
+    docker compose -f "$COMPOSE_VLLM_REMOTE" down -v --remove-orphans 2>/dev/null || true
     
     # Remove any dangling test images
     docker image prune -f --filter "label=verlihub-test" 2>/dev/null || true
@@ -381,6 +392,106 @@ run_sql_semantics_tests() {
     return $exit_code
 }
 
+run_llm_tests() {
+    log_info "Running LLM integration tests (Ollama + qwen2.5:0.5b)..."
+    log_info "This pulls ~400 MB model on first run — subsequent runs use cache"
+    cd "$PROJECT_DIR"
+
+    # Build images sequentially to avoid containerd lock contention
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_LLM" build --quiet llm-hub
+        docker compose -f "$COMPOSE_LLM" build --quiet llm-tests
+    fi
+
+    # Run tests (ollama-pull runs automatically via depends_on)
+    local exit_code=0
+    docker compose -f "$COMPOSE_LLM" up \
+        --abort-on-container-exit llm-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_LLM" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "LLM integration tests completed"
+    else
+        log_error "LLM integration tests failed"
+    fi
+
+    return $exit_code
+}
+
+run_bot_chat_tests() {
+    log_info "Running NMDC bot chat LLM integration tests..."
+    log_info "This tests PM + main chat → Hub-Security bot → LLM pipeline"
+    cd "$PROJECT_DIR"
+
+    # Build images sequentially to avoid containerd lock contention
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet bot-hub
+        docker compose -f "$COMPOSE_BOT_CHAT" build --quiet bot-tests
+    fi
+
+    # Run tests
+    local exit_code=0
+    docker compose -f "$COMPOSE_BOT_CHAT" up \
+        --abort-on-container-exit bot-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_BOT_CHAT" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "Bot chat integration tests completed"
+    else
+        log_error "Bot chat integration tests failed"
+    fi
+
+    return $exit_code
+}
+
+run_vllm_remote_tests() {
+    log_info "Running remote vLLM integration tests (Qwen3.5-35B-A3B)..."
+    log_info "Using remote endpoint — no local GPU or model download needed"
+    cd "$PROJECT_DIR"
+
+    # Quick reachability check
+    if curl -sf --max-time 10 https://vllm-qwen35-35b.tinyhost.xyz/v1/models > /dev/null 2>&1; then
+        log_success "Remote vLLM endpoint is reachable"
+    else
+        log_warning "Remote vLLM endpoint may be unreachable — tests may fail"
+    fi
+
+    # Build images sequentially to avoid containerd lock contention
+    if [ "$NO_BUILD" != "1" ]; then
+        log_info "Building Docker images..."
+        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet vllm-hub
+        docker compose -f "$COMPOSE_VLLM_REMOTE" build --quiet vllm-tests
+    fi
+
+    # Run tests
+    local exit_code=0
+    docker compose -f "$COMPOSE_VLLM_REMOTE" up \
+        --abort-on-container-exit vllm-tests \
+        || exit_code=$?
+
+    if [ "$KEEP_RUNNING" != "1" ]; then
+        docker compose -f "$COMPOSE_VLLM_REMOTE" down --remove-orphans
+    fi
+
+    if [ $exit_code -eq 0 ]; then
+        log_success "Remote vLLM integration tests completed"
+    else
+        log_error "Remote vLLM integration tests failed"
+    fi
+
+    return $exit_code
+}
+
 run_all_tests() {
     log_info "Running all test suites..."
     
@@ -487,6 +598,15 @@ case $COMMAND in
         ;;
     py-all-db)
         run_py_all_db_tests
+        ;;
+    llm)
+        run_llm_tests
+        ;;
+    bot-chat)
+        run_bot_chat_tests
+        ;;
+    vllm-remote)
+        run_vllm_remote_tests
         ;;
     original)
         run_original_tests

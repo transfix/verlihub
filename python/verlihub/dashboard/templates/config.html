@@ -123,8 +123,18 @@
             <div class="field">
                 <label class="label">Default Encoding</label>
                 <div class="control">
-                    <input class="input" type="text" id="config-hub_encoding" 
-                           value="{{ config.hub_encoding or 'UTF-8' }}" data-key="hub_encoding">
+                    <div class="select is-fullwidth">
+                        <select id="config-hub_encoding" data-key="hub_encoding">
+                            <option value="UTF-8" {% if (config.hub_encoding or 'UTF-8') == 'UTF-8' %}selected{% endif %}>UTF-8</option>
+                            <option value="CP1252" {% if config.hub_encoding == 'CP1252' %}selected{% endif %}>CP1252 (Western European)</option>
+                            <option value="CP1251" {% if config.hub_encoding == 'CP1251' %}selected{% endif %}>CP1251 (Cyrillic)</option>
+                            <option value="CP1250" {% if config.hub_encoding == 'CP1250' %}selected{% endif %}>CP1250 (Central European)</option>
+                            <option value="CP1254" {% if config.hub_encoding == 'CP1254' %}selected{% endif %}>CP1254 (Turkish)</option>
+                            <option value="CP1256" {% if config.hub_encoding == 'CP1256' %}selected{% endif %}>CP1256 (Arabic)</option>
+                            <option value="ISO-8859-1" {% if config.hub_encoding == 'ISO-8859-1' %}selected{% endif %}>ISO-8859-1 (Latin-1)</option>
+                            <option value="GB18030" {% if config.hub_encoding == 'GB18030' %}selected{% endif %}>GB18030 (Chinese)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -169,16 +179,27 @@
                 <label class="label">
                     <input type="checkbox" id="config-use_regserver" data-key="use_regserver"
                            {% if config.use_regserver %}checked{% endif %}>
-                    Register on Hub List
+                    Register on Hub Lists
                 </label>
+                <p class="help">Periodically register this hub on external hublist servers</p>
             </div>
             
             <div class="field">
-                <label class="label">Registration Server</label>
+                <label class="label">Hublist Servers (one per line)</label>
                 <div class="control">
-                    <input class="input" type="text" id="config-regserver_host" 
-                           value="{{ config.regserver_host or '' }}" data-key="regserver_host">
+                    <textarea class="textarea" id="config-hublist_servers" rows="3"
+                              data-key="hublist_servers">{{ config.hublist_servers or '' }}</textarea>
                 </div>
+                <p class="help">e.g. hublist.te-home.net, hublist.pwiam.com</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-hublist_server_enabled" data-key="hublist_server_enabled"
+                           {% if config.hublist_server_enabled %}checked{% endif %}>
+                    Run Built-in Hublist Server
+                </label>
+                <p class="help">Allow other hubs to register on this instance (served at /api/v1/hublist)</p>
             </div>
             
             <div class="field">
@@ -239,7 +260,7 @@
                         <select id="config-flood_protection" data-key="flood_protection">
                             <option value="0" {% if config.flood_protection == 0 %}selected{% endif %}>Disabled</option>
                             <option value="1" {% if config.flood_protection == 1 %}selected{% endif %}>Low</option>
-                            <option value="2" {% if config.flood_protection == 2 or not config.flood_protection %}selected{% endif %}>Medium</option>
+                            <option value="2" {% if config.flood_protection == 2 %}selected{% endif %}>Medium</option>
                             <option value="3" {% if config.flood_protection == 3 %}selected{% endif %}>High</option>
                         </select>
                     </div>
@@ -260,6 +281,15 @@
                            {% if config.anti_clone %}checked{% endif %}>
                     Anti-Clone Protection
                 </label>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-registration_require_invite" data-key="registration_require_invite"
+                           {% if config.registration_require_invite %}checked{% endif %}>
+                    Require Invite Code for Registration
+                </label>
+                <p class="help">When enabled, new users must provide a valid invite code to register via the API.</p>
             </div>
         </div>
     </div>
@@ -470,7 +500,10 @@
         document.querySelectorAll('[data-key]').forEach(el => {
             const key = el.dataset.key;
             
-            if (el.type === 'checkbox') {
+            if (key === 'hublist_servers') {
+                // Split textarea lines into an array of server hostnames
+                config[key] = el.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+            } else if (el.type === 'checkbox') {
                 config[key] = el.checked;
             } else if (el.type === 'number') {
                 config[key] = parseInt(el.value) || 0;

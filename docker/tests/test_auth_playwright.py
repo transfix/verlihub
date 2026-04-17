@@ -123,9 +123,9 @@ class TestLoginPage:
         page.wait_for_url(re.compile(r"/dashboard/$"), timeout=10000)
 
         # Verify authenticated page content: navbar should show the nick
-        navbar_link = page.locator(".navbar-link")
-        if navbar_link.count() > 0:
-            expect(navbar_link.first).to_contain_text(nick)
+        profile_link = page.locator('#navbarMain .navbar-end a[href="/dashboard/profile"]')
+        if profile_link.count() > 0:
+            expect(profile_link.first).to_contain_text(nick)
 
 
 # ---------------------------------------------------------------------------
@@ -325,14 +325,12 @@ class TestDashboardAccessAllClasses:
             )
 
     def test_user_dropdown_shows_nick(self, auth_page, base_url: str):
-        """User dropdown in navbar should show the user's nick."""
+        """Profile link in navbar should show the user's nick."""
         pg, cls, nick = auth_page
         pg.goto(f"{base_url}/dashboard/")
-        dropdown = pg.locator(".navbar-dropdown")
-        # The navbar link before dropdown should contain nick
-        navbar_link = pg.locator(".navbar-link")
-        if navbar_link.count() > 0:
-            expect(navbar_link.first).to_contain_text(nick)
+        profile_link = pg.locator('#navbarMain .navbar-end a[href="/dashboard/profile"]')
+        if profile_link.count() > 0:
+            expect(profile_link.first).to_contain_text(nick)
 
 
 # ---------------------------------------------------------------------------

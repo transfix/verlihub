@@ -172,6 +172,9 @@ class ApiConfig:
     registration_enabled: bool = True
     registration_require_invite: bool = False
     registration_default_class: int = 1  # REGISTERED
+    registration_require_email: bool = True
+    registration_check_email_deliverability: bool = False
+    registration_block_disposable_emails: bool = True
     
     def to_env(self) -> dict[str, str]:
         """Export as environment variables."""
@@ -184,6 +187,9 @@ class ApiConfig:
             "VH_REGISTRATION_ENABLED": "1" if self.registration_enabled else "0",
             "VH_REGISTRATION_REQUIRE_INVITE": "1" if self.registration_require_invite else "0",
             "VH_REGISTRATION_DEFAULT_CLASS": str(self.registration_default_class),
+            "VH_REGISTRATION_REQUIRE_EMAIL": "1" if self.registration_require_email else "0",
+            "VH_REGISTRATION_CHECK_EMAIL_DELIVERABILITY": "1" if self.registration_check_email_deliverability else "0",
+            "VH_REGISTRATION_BLOCK_DISPOSABLE_EMAILS": "1" if self.registration_block_disposable_emails else "0",
         }
         if self.secret:
             env["VH_JWT_SECRET"] = self.secret
@@ -202,13 +208,36 @@ class HubConfig:
     topic: str = ""
     category: str = ""
     encoding: str = "CP1252"
+    motd: str = ""  # Inline MOTD text; written to <config_dir>/motd on startup
     motd_file: str = ""
     max_users: int = 1000
     logo: str = ""  # URL to hub logo image; empty uses default Verlihub logo
+    send_user_info: bool = True  # Send user info (nick, IP, country, TLS) on connect
+    user_info_as_pm: bool = False  # Deliver user info as PM instead of main chat
+    timezone: str = "UTC"  # IANA timezone (e.g. "America/Chicago", "Europe/London")
     hublist_servers: list[str] = field(default_factory=lambda: [
         "hublist.te-home.net",
         "hublist.pwiam.com",
     ])
+
+
+@dataclass
+class HubListConfig:
+    """
+    Hublist server configuration.
+
+    When ``server_enabled`` is True this Verlihub-py instance acts as a
+    hublist directory that other hubs can register on.
+
+    ``registration_interval`` controls how often (in seconds) we re-register
+    this hub on external hublist servers listed in ``HubConfig.hublist_servers``.
+
+    ``stale_timeout`` is how long (in seconds) a hub entry can go without a
+    registration ping before it is automatically pruned from the directory.
+    """
+    server_enabled: bool = False  # serve a hublist directory on /api/v1/hublist
+    registration_interval: int = 600  # 10 minutes
+    stale_timeout: int = 1800  # 30 minutes
 
 
 @dataclass
@@ -220,10 +249,95 @@ class BotConfig:
 
 
 @dataclass
+class BotBehaviorConfig:
+    """Configures how the hub security bot interacts with users.
+
+    All fields are optional — sensible defaults are applied.
+    """
+    # Which LLM endpoint the bot should use (name from llm.endpoints).
+    # Empty string → use the default (first) endpoint.
+    endpoint: str = ""
+
+    # Personality / persona injected into every system prompt.
+    personality: str = ""
+
+    # How eagerly the bot responds to non-direct mentions in main chat.
+    # "direct"  — only respond when addressed by name  (e.g. "Hub-Security: hi")
+    # "mention" — also respond when the bot name appears anywhere in the message
+    # "keyword" — respond to bot name OR any keyword in ``triggers``
+    chat_mode: str = "direct"
+
+    # Extra keywords (besides the bot nick) that trigger a main-chat response.
+    # Only used when ``chat_mode`` is "keyword".
+    triggers: list[str] = field(default_factory=list)
+
+    # Proactive behaviours — the bot occasionally initiates conversation.
+    # Base interval in seconds between proactive messages (0 = disabled).
+    # The actual delay is randomised ±30 % around this value so the bot
+    # doesn't feel robotic.
+    proactive_interval: int = 0
+
+    # Proactive messages: list of prompts the bot can choose from.
+    proactive_prompts: list[str] = field(default_factory=list)
+
+    # Periodic "thinking…" feedback interval in seconds for PM sessions
+    # while the LLM is processing.  0 = no periodic feedback.
+    thinking_interval: int = 15
+
+    # Max response length (characters) for main-chat replies.
+    # Keeps the bot from flooding the chat room.
+    max_chat_length: int = 400
+
+    # ── Dynamic mood ────────────────────────────────────────────────
+    # When enabled the bot's personality shifts with hub activity:
+    # fewer users / less chat → lonely/anxious; packed hub → ecstatic.
+    mood_enabled: bool = False
+
+    # Sliding window (seconds) for measuring interaction rate.
+    mood_window: int = 3600
+
+    # Interaction rate thresholds (messages per hour) that determine
+    # whether activity is considered low or high.
+    mood_low_interaction: float = 2.0
+    mood_high_interaction: float = 10.0
+
+    # User-count ratio thresholds.  The engine compares the current
+    # user count to the 24-hour rolling average.  Ratios below
+    # ``mood_low_user_ratio`` count as "few users"; above
+    # ``mood_high_user_ratio`` as "many users".
+    mood_low_user_ratio: float = 0.5
+    mood_high_user_ratio: float = 1.5
+
+    # How far back (seconds) to keep user-count samples for the
+    # rolling average.  Default 86 400 = 24 hours.
+    mood_user_history: int = 86400
+
+    # ── Web access ──────────────────────────────────────────────────
+    # Give the bot web_search / fetch_webpage / read_rss tools.
+    web_enabled: bool = False
+
+    # RSS / Atom feed URLs the bot can proactively check.
+    rss_feeds: list[str] = field(default_factory=list)
+
+    # ── Persistent memory ───────────────────────────────────────────
+    # Let the bot save and recall notes across sessions.  Notes are
+    # stored in the shared application database (MySQL / PostgreSQL /
+    # SQLite — whichever the hub is configured to use).
+    memory_enabled: bool = False
+
+    # ── Session management ──────────────────────────────────────────
+    # How long (seconds) an NMDC PM session stays alive before a new
+    # one is started.  Applies to both the NMDC client and the
+    # dashboard.  Default 7200 = 2 hours.
+    session_timeout: int = 7200
+
+
+@dataclass
 class BotsConfig:
     """Configuration for hub bots."""
     security: BotConfig = field(default_factory=lambda: BotConfig(nick="Hub-Security", description="Hub security system"))
     op_chat: BotConfig = field(default_factory=lambda: BotConfig(nick="OpChat", description="Operator chat"))
+    behavior: BotBehaviorConfig = field(default_factory=BotBehaviorConfig)
 
 
 @dataclass
@@ -319,6 +433,97 @@ class UsersConfig:
 
 
 @dataclass
+class LlmEndpoint:
+    """
+    A single OpenAI-compatible LLM endpoint.
+
+    When multiple endpoints are defined the user can pick one from the
+    dashboard AI-chat dropdown.  The first endpoint in the list is the
+    default.
+    """
+    name: str = ""          # Human-readable label shown in the UI
+    base_url: str = ""      # OpenAI-compatible base URL
+    model: str = ""         # Model identifier sent to the API
+    api_key: str = "none"   # API key (many local servers ignore this)
+
+
+@dataclass
+class LlmConfig:
+    """
+    LLM (Large Language Model) integration configuration.
+    
+    Enables the AI chat assistant in the dashboard. Connects to any
+    OpenAI-compatible API (Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, etc.).
+    
+    The LLM can query hub state and perform admin operations via tool calling.
+    Access is gated by user class: ``min_class`` controls who can use the
+    chat, ``admin_class`` controls who gets admin-level tools (kick, ban, etc.).
+
+    Multiple endpoints can be configured under ``endpoints:``.  When the list
+    is non-empty each entry's ``base_url`` / ``model`` / ``api_key`` override
+    the top-level values, and the user picks one from the dashboard.  If
+    ``endpoints`` is empty the top-level ``base_url`` / ``model`` / ``api_key``
+    are used as a single unnamed endpoint.
+    """
+    enabled: bool = False
+    base_url: str = "http://localhost:11434/v1"  # Ollama default
+    model: str = "llama3.1"
+    api_key: str = "ollama"
+    max_tool_rounds: int = 5
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    min_class: int = 3   # Minimum user class to access AI chat (3=Operator)
+    admin_class: int = 5  # Minimum class for admin tools (5=Admin)
+    endpoints: list[LlmEndpoint] = field(default_factory=list)
+
+    # -- helpers -------------------------------------------------------------
+
+    def get_endpoint(self, name: str | None = None) -> LlmEndpoint:
+        """Return the endpoint matching *name*, or the default.
+
+        Falls back to the top-level ``base_url`` / ``model`` / ``api_key``
+        when no endpoints are configured or when *name* doesn't match.
+        """
+        if self.endpoints:
+            if name:
+                for ep in self.endpoints:
+                    if ep.name == name:
+                        return ep
+            return self.endpoints[0]
+        return LlmEndpoint(
+            name=self.model,
+            base_url=self.base_url,
+            model=self.model,
+            api_key=self.api_key,
+        )
+
+    def list_endpoint_names(self) -> list[str]:
+        """Return the ordered list of endpoint display names."""
+        if self.endpoints:
+            return [ep.name for ep in self.endpoints]
+        return [self.model]
+
+
+@dataclass
+class McpConfig:
+    """
+    MCP (Model Context Protocol) endpoint configuration.
+
+    When ``enabled``, the hub API mounts an MCP Streamable HTTP endpoint at
+    ``/api/v1/mcp``.  The endpoint is protected by the same JWT auth used by
+    the rest of the API — ``min_class`` controls who can connect,
+    ``admin_class`` who gets write tools (kick, ban, broadcast, etc.).
+
+    The standalone ``verlihub-mcp serve`` CLI is **not** affected by this
+    config.  This section only governs the in-process MCP route inside the
+    FastAPI application.
+    """
+    enabled: bool = False
+    min_class: int = 3    # Minimum user class to access MCP (3=Operator)
+    admin_class: int = 5  # Minimum class for admin/write tools (5=Admin)
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
     level: str = "INFO"
@@ -336,11 +541,14 @@ class VerlihubConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     hub: HubConfig = field(default_factory=HubConfig)
+    hublist: HubListConfig = field(default_factory=HubListConfig)
     bots: BotsConfig = field(default_factory=BotsConfig)
     users: UsersConfig = field(default_factory=UsersConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     lua: LuaConfig = field(default_factory=LuaConfig)
     python: PythonConfig = field(default_factory=PythonConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
+    mcp: McpConfig = field(default_factory=McpConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     # Runtime mode
@@ -415,6 +623,9 @@ class VerlihubConfig:
                 registration_enabled=api.get("registration_enabled", config.api.registration_enabled),
                 registration_require_invite=api.get("registration_require_invite", config.api.registration_require_invite),
                 registration_default_class=api.get("registration_default_class", config.api.registration_default_class),
+                registration_require_email=api.get("registration_require_email", config.api.registration_require_email),
+                registration_check_email_deliverability=api.get("registration_check_email_deliverability", config.api.registration_check_email_deliverability),
+                registration_block_disposable_emails=api.get("registration_block_disposable_emails", config.api.registration_block_disposable_emails),
             )
         
         # Hub
@@ -430,10 +641,20 @@ class VerlihubConfig:
                 topic=hub.get("topic", config.hub.topic),
                 category=hub.get("category", config.hub.category),
                 encoding=hub.get("encoding", config.hub.encoding),
+                motd=hub.get("motd", config.hub.motd),
                 motd_file=hub.get("motd_file", config.hub.motd_file),
                 max_users=hub.get("max_users", config.hub.max_users),
                 logo=hub.get("logo", config.hub.logo),
                 hublist_servers=hub.get("hublist_servers", config.hub.hublist_servers),
+            )
+        
+        # Hublist server
+        if "hublist" in data:
+            hl = data["hublist"]
+            config.hublist = HubListConfig(
+                server_enabled=hl.get("server_enabled", config.hublist.server_enabled),
+                registration_interval=hl.get("registration_interval", config.hublist.registration_interval),
+                stale_timeout=hl.get("stale_timeout", config.hublist.stale_timeout),
             )
         
         # Bots
@@ -450,6 +671,28 @@ class VerlihubConfig:
                 config.bots.op_chat = BotConfig(
                     nick=op.get("nick", config.bots.op_chat.nick),
                     description=op.get("description", config.bots.op_chat.description),
+                )
+            if "behavior" in bots:
+                beh = bots["behavior"]
+                config.bots.behavior = BotBehaviorConfig(
+                    endpoint=beh.get("endpoint", config.bots.behavior.endpoint),
+                    personality=beh.get("personality", config.bots.behavior.personality),
+                    chat_mode=beh.get("chat_mode", config.bots.behavior.chat_mode),
+                    triggers=beh.get("triggers", config.bots.behavior.triggers),
+                    proactive_interval=int(beh.get("proactive_interval", config.bots.behavior.proactive_interval)),
+                    proactive_prompts=beh.get("proactive_prompts", config.bots.behavior.proactive_prompts),
+                    thinking_interval=int(beh.get("thinking_interval", config.bots.behavior.thinking_interval)),
+                    max_chat_length=int(beh.get("max_chat_length", config.bots.behavior.max_chat_length)),
+                    mood_enabled=beh.get("mood_enabled", config.bots.behavior.mood_enabled),
+                    mood_window=int(beh.get("mood_window", config.bots.behavior.mood_window)),
+                    mood_low_interaction=float(beh.get("mood_low_interaction", config.bots.behavior.mood_low_interaction)),
+                    mood_high_interaction=float(beh.get("mood_high_interaction", config.bots.behavior.mood_high_interaction)),
+                    mood_low_user_ratio=float(beh.get("mood_low_user_ratio", config.bots.behavior.mood_low_user_ratio)),
+                    mood_high_user_ratio=float(beh.get("mood_high_user_ratio", config.bots.behavior.mood_high_user_ratio)),
+                    mood_user_history=int(beh.get("mood_user_history", config.bots.behavior.mood_user_history)),
+                    web_enabled=beh.get("web_enabled", config.bots.behavior.web_enabled),
+                    rss_feeds=beh.get("rss_feeds", config.bots.behavior.rss_feeds),
+                    memory_enabled=beh.get("memory_enabled", config.bots.behavior.memory_enabled),
                 )
         
         # Plugins
@@ -527,6 +770,40 @@ class VerlihubConfig:
                 registered=_parse_user_list(users.get("registered", [])),
             )
         
+        # LLM integration
+        if "llm" in data:
+            llm_data = data["llm"]
+            # Parse endpoint list
+            endpoints: list[LlmEndpoint] = []
+            for ep in llm_data.get("endpoints", []):
+                endpoints.append(LlmEndpoint(
+                    name=ep.get("name", ""),
+                    base_url=ep.get("base_url", ""),
+                    model=ep.get("model", ""),
+                    api_key=ep.get("api_key", "none"),
+                ))
+            config.llm = LlmConfig(
+                enabled=llm_data.get("enabled", config.llm.enabled),
+                base_url=llm_data.get("base_url", config.llm.base_url),
+                model=llm_data.get("model", config.llm.model),
+                api_key=llm_data.get("api_key", config.llm.api_key),
+                max_tool_rounds=llm_data.get("max_tool_rounds", config.llm.max_tool_rounds),
+                temperature=llm_data.get("temperature", config.llm.temperature),
+                max_tokens=llm_data.get("max_tokens", config.llm.max_tokens),
+                min_class=llm_data.get("min_class", config.llm.min_class),
+                admin_class=llm_data.get("admin_class", config.llm.admin_class),
+                endpoints=endpoints,
+            )
+        
+        # MCP
+        if "mcp" in data:
+            mcp = data["mcp"]
+            config.mcp = McpConfig(
+                enabled=mcp.get("enabled", config.mcp.enabled),
+                min_class=mcp.get("min_class", config.mcp.min_class),
+                admin_class=mcp.get("admin_class", config.mcp.admin_class),
+            )
+
         # Logging
         if "logging" in data:
             log = data["logging"]
@@ -604,6 +881,20 @@ class VerlihubConfig:
         # Runtime
         config.mode = os.getenv("VH_MODE", config.mode)
         config.environment = os.getenv("VH_ENV", config.environment)
+        
+        # LLM from environment
+        if os.getenv("VH_LLM_ENABLED"):
+            config.llm = LlmConfig(
+                enabled=os.getenv("VH_LLM_ENABLED", "").lower() in ("1", "true", "yes"),
+                base_url=os.getenv("VH_LLM_BASE_URL", config.llm.base_url),
+                model=os.getenv("VH_LLM_MODEL", config.llm.model),
+                api_key=os.getenv("VH_LLM_API_KEY", config.llm.api_key),
+                max_tool_rounds=int(os.getenv("VH_LLM_MAX_TOOL_ROUNDS", str(config.llm.max_tool_rounds))),
+                temperature=float(os.getenv("VH_LLM_TEMPERATURE", str(config.llm.temperature))),
+                max_tokens=int(os.getenv("VH_LLM_MAX_TOKENS", str(config.llm.max_tokens))),
+                min_class=int(os.getenv("VH_LLM_MIN_CLASS", str(config.llm.min_class))),
+                admin_class=int(os.getenv("VH_LLM_ADMIN_CLASS", str(config.llm.admin_class))),
+            )
         
         return config
     
@@ -874,8 +1165,19 @@ _HUB_SETTINGS_MAP: dict[str, tuple[str, str]] = {
     "hub.category": ("config", "hub_category"),
     "hub.encoding": ("config", "hub_encoding"),
     "hub.max_users": ("config", "max_users"),
+    "hub.motd": ("config", "hub_motd"),
     "bots.security.nick": ("config", "hub_security"),
     "bots.op_chat.nick": ("config", "opchat_name"),
+    "bots.behavior.endpoint": ("config", "bot_endpoint"),
+    "bots.behavior.personality": ("config", "bot_personality"),
+    "bots.behavior.chat_mode": ("config", "bot_chat_mode"),
+    "bots.behavior.thinking_interval": ("config", "bot_thinking_interval"),
+    "bots.behavior.max_chat_length": ("config", "bot_max_chat_length"),
+    "bots.behavior.mood_enabled": ("config", "bot_mood_enabled"),
+    "bots.behavior.web_enabled": ("config", "bot_web_enabled"),
+    "bots.behavior.memory_enabled": ("config", "bot_memory_enabled"),
+    "hub.send_user_info": ("config", "send_user_info"),
+    "hub.user_info_as_pm": ("config", "user_info_as_pm"),
 }
 
 # User class mapping
@@ -899,7 +1201,11 @@ def _get_nested(obj: Any, dotted_path: str) -> Any:
     return current
 
 
-async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> None:
+async def apply_config_to_db(
+    config: VerlihubConfig,
+    force: bool = False,
+    session: "AsyncSession | None" = None,
+) -> None:
     """
     Synchronize YAML configuration with the database.
     
@@ -917,6 +1223,8 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
     Args:
         config: The loaded VerlihubConfig
         force: If True, overwrite database values with YAML values
+        session: Optional externally-managed AsyncSession.  When provided the
+            caller is responsible for committing; no commit is issued here.
     """
     try:
         from sqlalchemy import select, text
@@ -932,119 +1240,141 @@ async def apply_config_to_db(config: VerlihubConfig, force: bool = False) -> Non
         logger.debug("Database not initialized, skipping config-to-DB sync")
         return
     
-    async with get_async_session() as session:
-        # --- Hub settings synchronization ---
-        applied = 0
-        skipped = 0
-        
-        for config_path, (file_key, var_key) in _HUB_SETTINGS_MAP.items():
-            value = _get_nested(config, config_path)
-            if value is None:
-                continue
-            
-            str_value = str(value)
-            
-            # Check if DB already has this setting
-            result = await session.execute(
-                select(SetupList).where(
-                    SetupList.file == file_key,
-                    SetupList.var == var_key,
-                )
+    owns_session = session is None
+
+    async def _run(session: "AsyncSession") -> None:
+        await _apply_config_to_db_inner(config, force, session)
+        if owns_session:
+            await session.commit()
+
+    if owns_session:
+        async with get_async_session() as session:
+            await _run(session)
+    else:
+        await _run(session)
+
+
+async def _apply_config_to_db_inner(
+    config: VerlihubConfig,
+    force: bool,
+    session: "AsyncSession",
+) -> None:
+    """Core logic for apply_config_to_db, operating on a provided session."""
+    from sqlalchemy import select
+    from verlihub.models import SetupList, RegUser, UserClass
+
+    # --- Hub settings synchronization ---
+    applied = 0
+    skipped = 0
+
+    for config_path, (file_key, var_key) in _HUB_SETTINGS_MAP.items():
+        value = _get_nested(config, config_path)
+        if value is None:
+            continue
+
+        str_value = str(value)
+
+        # Check if DB already has this setting
+        result = await session.execute(
+            select(SetupList).where(
+                SetupList.file == file_key,
+                SetupList.var == var_key,
             )
-            existing = result.scalars().first()
-            
-            if existing is not None:
-                if force:
-                    existing.val = str_value
-                    session.add(existing)
-                    applied += 1
-                    logger.debug("Forced %s.%s = %s", file_key, var_key, str_value)
-                else:
-                    skipped += 1
-                    logger.debug(
-                        "Kept DB value for %s.%s = %s (YAML had %s)",
-                        file_key, var_key, existing.val, str_value,
-                    )
-            else:
-                entry = SetupList(file=file_key, var=var_key, val=str_value)
-                session.add(entry)
+        )
+        existing = result.scalars().first()
+
+        if existing is not None:
+            if force:
+                existing.val = str_value
+                session.add(existing)
                 applied += 1
-                logger.debug("Set %s.%s = %s (new)", file_key, var_key, str_value)
-        
-        if applied or skipped:
-            logger.info(
-                "Hub settings: %d applied, %d kept from DB%s",
-                applied, skipped, " (--force)" if force else "",
-            )
-        
-        # --- User registration ---
-        users_created = 0
-        users_updated = 0
-        users_skipped = 0
-        
-        for class_name, user_class in _USER_CLASS_MAP.items():
-            user_list = getattr(config.users, class_name, [])
-            for user_entry in user_list:
-                if not user_entry.nick:
-                    continue
-                
-                # Check if user exists
-                result = await session.execute(
-                    select(RegUser).where(RegUser.nick == user_entry.nick)
+                logger.debug("Forced %s.%s = %s", file_key, var_key, str_value)
+            else:
+                skipped += 1
+                logger.debug(
+                    "Kept DB value for %s.%s = %s (YAML had %s)",
+                    file_key, var_key, existing.val, str_value,
                 )
-                existing_user = result.scalars().first()
-                
-                if existing_user is not None:
-                    if force:
-                        # Update password and class
-                        if user_entry.password:
-                            try:
-                                import bcrypt
-                                hashed = bcrypt.hashpw(
-                                    user_entry.password.encode("utf-8"),
-                                    bcrypt.gensalt(),
-                                ).decode("utf-8")
-                                existing_user.login_pwd = hashed
-                            except ImportError:
-                                existing_user.login_pwd = user_entry.password
-                        existing_user.user_class = user_class
-                        if user_entry.note:
-                            existing_user.note_op = user_entry.note
-                        session.add(existing_user)
-                        users_updated += 1
-                        logger.debug("Updated user %s (class %d)", user_entry.nick, user_class)
-                    else:
-                        users_skipped += 1
-                        logger.debug("User %s already exists, skipping", user_entry.nick)
-                else:
-                    # Create new user
-                    password = user_entry.password
-                    if password:
+        else:
+            entry = SetupList(file=file_key, var=var_key, val=str_value)
+            session.add(entry)
+            applied += 1
+            logger.debug("Set %s.%s = %s (new)", file_key, var_key, str_value)
+
+    if applied or skipped:
+        logger.info(
+            "Hub settings: %d applied, %d kept from DB%s",
+            applied, skipped, " (--force)" if force else "",
+        )
+
+    # --- User registration ---
+    users_created = 0
+    users_updated = 0
+    users_skipped = 0
+
+    for class_name, user_class in _USER_CLASS_MAP.items():
+        user_list = getattr(config.users, class_name, [])
+        for user_entry in user_list:
+            if not user_entry.nick:
+                continue
+
+            # Check if user exists
+            result = await session.execute(
+                select(RegUser).where(RegUser.nick == user_entry.nick)
+            )
+            existing_user = result.scalars().first()
+
+            if existing_user is not None:
+                if force:
+                    # Update password and class
+                    if user_entry.password:
                         try:
                             import bcrypt
-                            password = bcrypt.hashpw(
-                                password.encode("utf-8"),
+                            hashed = bcrypt.hashpw(
+                                user_entry.password.encode("utf-8"),
                                 bcrypt.gensalt(),
                             ).decode("utf-8")
+                            existing_user.login_pwd = hashed
                         except ImportError:
-                            pass  # Store plaintext if bcrypt not available
-                    
-                    new_user = RegUser(
-                        nick=user_entry.nick,
-                        login_pwd=password,
-                        user_class=user_class,
-                        reg_op="config",
-                        note_op=user_entry.note or "",
-                    )
-                    session.add(new_user)
-                    users_created += 1
-                    logger.info("Registered user %s (class %d)", user_entry.nick, user_class)
-        
-        if users_created or users_updated or users_skipped:
-            logger.info(
-                "Users: %d created, %d updated, %d skipped%s",
-                users_created, users_updated, users_skipped,
-                " (--force)" if force else "",
-            )
-        
-        await session.commit()
+                            existing_user.login_pwd = user_entry.password
+                    existing_user.user_class = user_class
+                    if user_entry.note:
+                        existing_user.note_op = user_entry.note
+                    session.add(existing_user)
+                    users_updated += 1
+                    logger.debug("Updated user %s (class %d)", user_entry.nick, user_class)
+                else:
+                    users_skipped += 1
+                    logger.debug("User %s already exists, skipping", user_entry.nick)
+            else:
+                # Create new user
+                password = user_entry.password
+                if password:
+                    try:
+                        import bcrypt
+                        password = bcrypt.hashpw(
+                            password.encode("utf-8"),
+                            bcrypt.gensalt(),
+                        ).decode("utf-8")
+                    except ImportError:
+                        pass  # Store plaintext if bcrypt not available
+
+                new_user = RegUser(
+                    nick=user_entry.nick,
+                    login_pwd=password,
+                    user_class=user_class,
+                    reg_op="config",
+                    note_op=user_entry.note or "",
+                )
+                session.add(new_user)
+                users_created += 1
+                logger.info("Registered user %s (class %d)", user_entry.nick, user_class)
+
+    if users_created or users_updated or users_skipped:
+        logger.info(
+            "Users: %d created, %d updated, %d skipped%s",
+            users_created, users_updated, users_skipped,
+            " (--force)" if force else "",
+        )
+
+    await session.flush()

@@ -1,0 +1,63 @@
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Local Hub"
+  description: "Local dev hub with local Ollama LLM + dashboard"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30001
+
+llm:
+  enabled: true
+  # Local Ollama sidecar — run_production.sh starts the container for you
+  base_url: "http://vh-prod-ollama:11434/v1"
+  model: "qwen2.5:0.5b"         # ~400 MB, runs on CPU
+  # model: "qwen2.5:3b"          # ~2 GB,  better quality
+  # model: "qwen2.5:7b"          # ~4.5 GB, best quality (GPU recommended)
+  api_key: "ollama"              # Ollama ignores this but the client requires it
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 8
+  min_class: 3
+  admin_class: 5
+  # Expose Ollama API on the host (optional, 0 = don't expose)
+  # ollama_port: 11434
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+lua:
+  enabled: true
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files: ["ledokol.lua"]
+  autoload: ["ledokol.lua"]
+
+python:
+  enabled: true
+python_mode: single
+
+startup_commands:
+  - "!onplug python"
+  - "!onplug lua"
+  - "!api start 30000"
+
+docker:
+  restart_policy: unless-stopped

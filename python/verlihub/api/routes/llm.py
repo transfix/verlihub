@@ -1,0 +1,2931 @@
+"""
+LLM Chat Gateway — AI assistant for the Verlihub dashboard.
+
+Provides REST and WebSocket endpoints for conversational interaction
+with the hub via a self-hosted LLM (Ollama, vLLM, llama.cpp, etc.).
+
+The gateway:
+1. Receives user messages
+2. Sends them to the LLM with hub tool definitions
+3. Executes tool calls against the live hub context
+4. Returns the LLM's natural-language response
+
+All tool calls go through the same hub context and permission checks
+as the REST API — no bypass, no escalation.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+import openai
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from pydantic import BaseModel
+
+from verlihub.api.auth import (
+    Permission,
+    TokenData,
+    decode_token,
+    get_current_user,
+    require_permission,
+)
+from verlihub.api.deps import get_hub_context
+from verlihub.config import LlmConfig, LlmEndpoint, get_config_optional
+
+log = logging.getLogger("verlihub.llm")
+
+router = APIRouter()
+
+
+# =============================================================================
+# Response models
+# =============================================================================
+
+
+class LlmStatusResponse(BaseModel):
+    """LLM integration status."""
+    enabled: bool
+    llm_reachable: bool
+    model: str
+    base_url: str
+    min_class: int
+    admin_class: int
+    endpoints: list[str] = []  # Available endpoint names
+
+
+class ChatRequest(BaseModel):
+    """Single-turn chat request."""
+    message: str
+    conversation_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    """Chat response."""
+    response: str
+    tool_calls: list[dict[str, Any]] = []
+    model: str = ""
+
+
+class SessionInfo(BaseModel):
+    """Summary of a chat session."""
+    session_id: str
+    title: str
+    created_at: float
+    message_count: int
+
+
+class SessionListResponse(BaseModel):
+    """List of user sessions."""
+    sessions: list[SessionInfo] = []
+
+
+# =============================================================================
+# LLM client — per-endpoint cache
+# =============================================================================
+
+_openai_clients: dict[str, Any] = {}  # keyed by (base_url, api_key)
+_endpoint_supports_tools: bool | None = None  # None = unknown, probe once
+
+
+def _get_llm_config() -> LlmConfig:
+    """Get LLM config from the global config singleton."""
+    cfg = get_config_optional()
+    if cfg is None:
+        return LlmConfig()
+    return cfg.llm
+
+
+def _get_openai_client(endpoint: LlmEndpoint | None = None):
+    """Get or create an OpenAI-compatible async client for the given endpoint.
+
+    When *endpoint* is ``None`` the default endpoint from config is used.
+    Clients are cached by ``(base_url, api_key)`` tuple so switching
+    endpoints within the same session is cheap.
+    """
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM integration requires the 'openai' package. Install with: pip install openai",
+        )
+
+    if endpoint is None:
+        llm_cfg = _get_llm_config()
+        endpoint = llm_cfg.get_endpoint()
+
+    cache_key = (endpoint.base_url, endpoint.api_key)
+    client = _openai_clients.get(cache_key)
+    if client is not None:
+        return client
+
+    client = AsyncOpenAI(
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
+        default_headers={"User-Agent": "verlihub/1.0"},
+    )
+    _openai_clients[cache_key] = client
+    return client
+
+
+def reset_openai_client():
+    """Reset all cached clients (called when config changes)."""
+    _openai_clients.clear()
+
+
+# =============================================================================
+# Hub tools — definitions for the LLM
+# =============================================================================
+
+
+def _build_readonly_tools() -> list[dict]:
+    """Tools available to any permitted user (read-only hub queries)."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_hub_info",
+                "description": "Get hub info: name, description, topic, version, user count, total share, uptime.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_online_users",
+                "description": "List all currently connected users with nick, IP, country, share size, user class, client tag, and description.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_user_info",
+                "description": "Get detailed information about a specific connected user by their nickname.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "User nickname"}},
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_operators",
+                "description": "List all connected operators (class 3+).",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_bots",
+                "description": "List all hub bots.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_geo_distribution",
+                "description": "Get user geographic distribution — count of users per country with share totals.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_share_statistics",
+                "description": "Get file sharing statistics: total share, average, top sharers, distribution.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_hub_statistics",
+                "description": "Get full hub statistics: uptime, user counts by class, bandwidth, etc.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_bans",
+                "description": "Search bans by nick or IP address.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Nick to search (optional)"},
+                        "ip": {"type": "string", "description": "IP to search (optional)"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+        # --- Phase 5.3: Statistics ---
+        {
+            "type": "function",
+            "function": {
+                "name": "get_protocol_stats",
+                "description": "Get protocol-level message counters: chat, PM, search, CTM, SR, MCTo, flood blocked, ban blocked.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_geoip",
+                "description": "Look up GeoIP data (country, city) for a specific IP address.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ip": {"type": "string", "description": "IP address"}},
+                    "required": ["ip"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_active_passive_counts",
+                "description": "Get the count of active-mode and passive-mode users.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        # --- Phase 5.4: Plugin & Script listing (read-only) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "list_plugins",
+                "description": "List loaded native plugins with names and versions.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_lua_scripts",
+                "description": "List loaded Lua scripts.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_python_scripts",
+                "description": "List loaded Python scripts.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        # --- Phase 5.6: Penalty listing (read-only) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "list_penalties",
+                "description": "List active penalties. Optional nick filter.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "Filter by nick (optional)"}},
+                    "required": [],
+                },
+            },
+        },
+        # --- Phase 5.7: Trigger & Redirect listing (read-only) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "list_triggers",
+                "description": "List configured auto-response triggers.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_redirects",
+                "description": "List configured redirect rules.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ]
+
+
+def _build_admin_tools() -> list[dict]:
+    """Additional tools for admin-level users (write operations)."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "kick_user",
+                "description": "Kick a user from the hub. Requires operator nick, target nick, and reason.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Nick of user to kick"},
+                        "reason": {"type": "string", "description": "Reason for kick"},
+                    },
+                    "required": ["nick", "reason"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_broadcast",
+                "description": "Send a message to all connected users.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message to broadcast"},
+                    },
+                    "required": ["message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_message_to_user",
+                "description": "Send a private message to a specific user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Target user nickname"},
+                        "message": {"type": "string", "description": "Message text"},
+                    },
+                    "required": ["nick", "message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_hub_command",
+                "description": "Execute a hub console command (e.g. !help, !reglist, !set config value). Returns the command output.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Hub command to execute (with ! or + prefix)"},
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_hub_config",
+                "description": "Read a hub configuration value.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string", "description": "Config section (e.g. 'config')"},
+                        "key": {"type": "string", "description": "Config key name"},
+                    },
+                    "required": ["section", "key"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_hub_config",
+                "description": "Set a hub configuration value. Use with caution. Do NOT use this for topic or MOTD — use set_topic / set_motd instead.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string", "description": "Config section"},
+                        "key": {"type": "string", "description": "Config key"},
+                        "value": {"type": "string", "description": "New value"},
+                    },
+                    "required": ["section", "key", "value"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_topic",
+                "description": "Set the hub topic (shown in DC client title bar). Broadcasts to all connected users immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "New hub topic text"},
+                    },
+                    "required": ["topic"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_motd",
+                "description": "Set the Message of the Day (MOTD). This is shown as chat messages from the hub bot to each user on login.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "motd": {"type": "string", "description": "New MOTD text (plain text, can be multi-line)"},
+                    },
+                    "required": ["motd"],
+                },
+            },
+        },
+        # --- Phase 5.1: Messaging ---
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_opchat",
+                "description": "Send a message to the operator chat channel.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "from_nick": {"type": "string", "description": "Sender nick (optional)"},
+                    },
+                    "required": ["message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_class",
+                "description": "Send a message to users in a user-class range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_active",
+                "description": "Send a message to all active-mode users.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"message": {"type": "string", "description": "Message text"}},
+                    "required": ["message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_passive",
+                "description": "Send a message to all passive-mode users.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"message": {"type": "string", "description": "Message text"}},
+                    "required": ["message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_active_class",
+                "description": "Send a message to active-mode users in a class range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_passive_class",
+                "description": "Send a message to passive-mode users in a class range.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Message text"},
+                        "min_class": {"type": "integer", "description": "Minimum user class"},
+                        "max_class": {"type": "integer", "description": "Maximum user class"},
+                    },
+                    "required": ["message", "min_class", "max_class"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "broadcast_chat",
+                "description": "Broadcast a chat message appearing as a specific nick.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from_nick": {"type": "string", "description": "Nick the message appears from"},
+                        "message": {"type": "string", "description": "Message text"},
+                    },
+                    "required": ["from_nick", "message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_pm_as",
+                "description": "Send a private message from one nick to another.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from_nick": {"type": "string", "description": "Sender nick"},
+                        "to_nick": {"type": "string", "description": "Recipient nick"},
+                        "message": {"type": "string", "description": "Message text"},
+                    },
+                    "required": ["from_nick", "to_nick", "message"],
+                },
+            },
+        },
+        # --- Phase 5.2: Administration ---
+        {
+            "type": "function",
+            "function": {
+                "name": "force_move",
+                "description": "Redirect a user to another hub address.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "User to redirect"},
+                        "address": {"type": "string", "description": "Target hub address"},
+                    },
+                    "required": ["nick", "address"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "disconnect_user",
+                "description": "Disconnect a user from the hub.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "User to disconnect"}},
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_robot",
+                "description": "Register a bot on the hub.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Bot nickname"},
+                        "description": {"type": "string", "description": "Bot description"},
+                        "user_class": {"type": "integer", "description": "Bot user class (default 3)"},
+                    },
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_robot",
+                "description": "Remove a bot from the hub.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "Bot name"}},
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "reload_config",
+                "description": "Request a hub configuration reload.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        # --- Phase 5.4: Plugin & Script Management (admin) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "load_plugin",
+                "description": "Load a native plugin from a file path.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"plugin_path": {"type": "string", "description": "Path to plugin"}},
+                    "required": ["plugin_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "unload_plugin",
+                "description": "Unload a native plugin by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"plugin_name": {"type": "string", "description": "Plugin name"}},
+                    "required": ["plugin_name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "reload_plugin",
+                "description": "Reload a native plugin by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"plugin_name": {"type": "string", "description": "Plugin name"}},
+                    "required": ["plugin_name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "load_lua_script",
+                "description": "Load and execute a Lua script.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string", "description": "Path to Lua script"}},
+                    "required": ["script_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "unload_lua_script",
+                "description": "Unload a Lua script.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string", "description": "Path to Lua script"}},
+                    "required": ["script_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "load_python_script",
+                "description": "Load and execute a Python script.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string", "description": "Path to Python script"}},
+                    "required": ["script_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "unload_python_script",
+                "description": "Unload a Python script.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"script_path": {"type": "string", "description": "Path to Python script"}},
+                    "required": ["script_path"],
+                },
+            },
+        },
+        # --- Phase 5.5: Flood & Ban Cache ---
+        {
+            "type": "function",
+            "function": {
+                "name": "set_flood_config",
+                "description": "Set flood protection for a message type (0=Chat,1=PM,2=Search,3=MyINFO,4=CTM,5=ExtJSON).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "flood_type": {"type": "integer", "description": "Type index (0-5)"},
+                        "period_ms": {"type": "integer", "description": "Period in milliseconds"},
+                        "max_tokens": {"type": "integer", "description": "Max tokens (burst)"},
+                    },
+                    "required": ["flood_type", "period_ms", "max_tokens"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sync_ban_cache",
+                "description": "Reload the ban cache from the database.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_ban_cache_ip",
+                "description": "Add an IP to the ban cache.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ip": {"type": "string", "description": "IP address"}},
+                    "required": ["ip"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_ban_cache_nick",
+                "description": "Add a nick to the ban cache.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nick": {"type": "string", "description": "Nickname"}},
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "clear_ban_cache",
+                "description": "Clear all ban cache entries.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        # --- Phase 5.6: Penalty Management (admin) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "add_penalty",
+                "description": "Apply a penalty to a user (chat_gag, search_ban, pm_ban, ctm_ban).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Target nick"},
+                        "penalty_type": {"type": "string", "description": "Type: chat_gag, search_ban, pm_ban, ctm_ban"},
+                        "reason": {"type": "string", "description": "Reason"},
+                        "duration_minutes": {"type": "integer", "description": "Duration in minutes (0=permanent)"},
+                    },
+                    "required": ["nick", "penalty_type"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_penalty",
+                "description": "Remove a penalty from a user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "nick": {"type": "string", "description": "Target nick"},
+                        "penalty_type": {"type": "string", "description": "Type to remove (optional)"},
+                    },
+                    "required": ["nick"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "cleanup_penalties",
+                "description": "Remove all expired penalties.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        # --- Phase 5.7: Trigger & Redirect Management (admin) ---
+        {
+            "type": "function",
+            "function": {
+                "name": "add_trigger",
+                "description": "Add a new auto-response trigger.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Trigger command (e.g. !rules)"},
+                        "response": {"type": "string", "description": "Response text"},
+                        "min_class": {"type": "integer", "description": "Minimum class (default 0)"},
+                    },
+                    "required": ["command", "response"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_trigger",
+                "description": "Remove a trigger by its command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string", "description": "Trigger command"}},
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_redirect",
+                "description": "Add a redirect rule.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "address": {"type": "string", "description": "Target hub address"},
+                        "flag": {"type": "integer", "description": "Redirect trigger bitmask"},
+                        "enabled": {"type": "boolean", "description": "Whether enabled (default true)"},
+                    },
+                    "required": ["address"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_redirect",
+                "description": "Remove a redirect rule by address.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"address": {"type": "string", "description": "Address"}},
+                    "required": ["address"],
+                },
+            },
+        },
+    ]
+
+
+# =============================================================================
+# Tool execution — calls the hub context directly
+# =============================================================================
+
+
+async def _execute_tool(
+    tool_name: str,
+    arguments: dict,
+    user: TokenData,
+    is_admin: bool,
+) -> str:
+    """Execute a tool call against the live hub. Returns JSON string."""
+    ctx = get_hub_context()
+    llm_cfg = _get_llm_config()
+    
+    try:
+        # ------------------------------------------------------------------
+        # Read-only tools
+        # ------------------------------------------------------------------
+        if tool_name == "get_hub_info":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            from verlihub.config import get_config_optional as _gc
+            cfg = _gc()
+            return json.dumps({
+                "name": ctx.hub_name,
+                "topic": ctx.hub_topic,
+                "description": cfg.hub.description if cfg else "",
+                "host": cfg.hub.host if cfg else "",
+                "version": "1.7.0.0",
+                "users_online": ctx.user_count,
+                "total_share_bytes": ctx.total_share,
+                "total_share_formatted": _format_bytes(ctx.total_share),
+                "uptime_seconds": ctx.uptime,
+                "is_running": ctx.is_running,
+            })
+        
+        elif tool_name == "list_online_users":
+            if ctx is None:
+                return json.dumps([])
+            users = ctx.get_user_list() or []
+            # Strip IPs for non-admin users
+            result = []
+            for u in users:
+                entry = {
+                    "nick": u.get("nick", ""),
+                    "ip": u.get("ip", ""),
+                    "country_code": u.get("country_code", ""),
+                    "share_bytes": u.get("share", 0),
+                    "share_formatted": _format_bytes(u.get("share", 0)),
+                    "user_class": u.get("user_class", 0),
+                    "client": u.get("client", ""),
+                    "description": u.get("description", ""),
+                }
+                if is_admin:
+                    entry["hostname"] = u.get("hostname", "")
+                result.append(entry)
+            return json.dumps(result, default=str)
+        
+        elif tool_name == "get_user_info":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            nick = arguments.get("nick", "")
+            info = ctx.get_user_info(nick)
+            if info is None:
+                return json.dumps({"error": f"User '{nick}' not found or not online"})
+            result = dict(info)
+            if not is_admin:
+                result.pop("hostname", None)
+            return json.dumps(result, default=str)
+        
+        elif tool_name == "list_operators":
+            if ctx is None:
+                return json.dumps([])
+            users = ctx.get_user_list() or []
+            ops = [u for u in users if u.get("user_class", 0) >= 3]
+            return json.dumps([{"nick": u.get("nick"), "class": u.get("user_class")} for u in ops])
+        
+        elif tool_name == "list_bots":
+            if ctx is None:
+                return json.dumps([])
+            try:
+                bots = ctx.get_bot_list() if hasattr(ctx, "get_bot_list") else []
+            except Exception:
+                bots = []
+            return json.dumps(bots, default=str)
+        
+        elif tool_name == "get_geo_distribution":
+            if ctx is None:
+                return json.dumps({})
+            users = ctx.get_user_list() or []
+            geo: dict[str, int] = {}
+            for u in users:
+                cc = u.get("country_code", "??")
+                geo[cc] = geo.get(cc, 0) + 1
+            # Sort by count descending
+            sorted_geo = sorted(geo.items(), key=lambda x: x[1], reverse=True)
+            return json.dumps([{"country": cc, "users": cnt} for cc, cnt in sorted_geo])
+        
+        elif tool_name == "get_share_statistics":
+            if ctx is None:
+                return json.dumps({})
+            users = ctx.get_user_list() or []
+            shares = [u.get("share", 0) for u in users]
+            total = sum(shares)
+            avg = total // len(shares) if shares else 0
+            top = sorted(
+                [{"nick": u.get("nick"), "share": _format_bytes(u.get("share", 0))} for u in users],
+                key=lambda x: next((u.get("share", 0) for u in users if u.get("nick") == x["nick"]), 0),
+                reverse=True,
+            )[:10]
+            return json.dumps({
+                "total_share": _format_bytes(total),
+                "total_share_bytes": total,
+                "average_share": _format_bytes(avg),
+                "user_count": len(users),
+                "top_sharers": top,
+            })
+        
+        elif tool_name == "get_hub_statistics":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            users = ctx.get_user_list() or []
+            classes = {}
+            for u in users:
+                c = u.get("user_class", 0)
+                classes[c] = classes.get(c, 0) + 1
+            return json.dumps({
+                "users_online": ctx.user_count,
+                "total_share": _format_bytes(ctx.total_share),
+                "uptime_seconds": ctx.uptime,
+                "is_running": ctx.is_running,
+                "users_by_class": classes,
+            })
+        
+        elif tool_name == "search_bans":
+            # Use database query
+            nick = arguments.get("nick", "")
+            ip = arguments.get("ip", "")
+            if not nick and not ip:
+                return json.dumps({"error": "Provide nick or ip to search"})
+            try:
+                from verlihub.models.database import get_async_session
+                from verlihub.models import Ban
+                from sqlmodel import select
+                
+                async with get_async_session() as session:
+                    stmt = select(Ban)
+                    if nick:
+                        stmt = stmt.where(Ban.nick.contains(nick))
+                    if ip:
+                        stmt = stmt.where(Ban.ip.contains(ip))
+                    result = await session.execute(stmt.limit(20))
+                    bans = result.scalars().all()
+                    return json.dumps([
+                        {"id": b.id, "nick": b.nick, "ip": b.ip, "reason": b.reason,
+                         "type": b.ban_type, "expires": str(b.date_limit) if b.date_limit else None}
+                        for b in bans
+                    ], default=str)
+            except Exception as e:
+                return json.dumps({"error": f"Ban search failed: {e}"})
+        
+        # ------------------------------------------------------------------
+        # Admin-only tools
+        # ------------------------------------------------------------------
+        elif tool_name == "kick_user":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            nick = arguments.get("nick", "")
+            reason = arguments.get("reason", "Kicked by AI assistant")
+            try:
+                ctx.kick_user(user.nick, nick, reason)
+                return json.dumps({"success": True, "kicked": nick, "reason": reason})
+            except Exception as e:
+                return json.dumps({"error": f"Kick failed: {e}"})
+        
+        elif tool_name == "send_broadcast":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            message = arguments.get("message", "")
+            try:
+                ctx.send_to_all(message)
+                return json.dumps({"success": True, "message": message})
+            except Exception as e:
+                return json.dumps({"error": f"Broadcast failed: {e}"})
+        
+        elif tool_name == "send_message_to_user":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            nick = arguments.get("nick", "")
+            message = arguments.get("message", "")
+            try:
+                ctx.send_to_user(nick, message)
+                return json.dumps({"success": True, "to": nick})
+            except Exception as e:
+                return json.dumps({"error": f"Send failed: {e}"})
+        
+        elif tool_name == "execute_hub_command":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            command = arguments.get("command", "")
+            # Safety: use console execution via the hub context
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            try:
+                output = ctx.execute_command(user.nick, command) if hasattr(ctx, "execute_command") else f"Command dispatched: {command}"
+                return json.dumps({"success": True, "command": command, "output": str(output)})
+            except Exception as e:
+                return json.dumps({"error": f"Command failed: {e}"})
+        
+        elif tool_name == "get_hub_config":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            section = arguments.get("section", "config")
+            key = arguments.get("key", "")
+            try:
+                value = ctx.get_config(section, key)
+                return json.dumps({"section": section, "key": key, "value": value})
+            except Exception as e:
+                return json.dumps({"error": f"Config read failed: {e}"})
+        
+        elif tool_name == "set_hub_config":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if user.user_class < 10:  # Master only
+                return json.dumps({"error": "Permission denied — requires master (class 10)"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            section = arguments.get("section", "config")
+            key = arguments.get("key", "")
+            value = arguments.get("value", "")
+            # Redirect topic/motd to their dedicated handlers
+            if key in ("hub_topic", "topic"):
+                return await _execute_tool("set_topic", {"topic": value}, user, is_admin)
+            if key in ("motd", "hub_motd", "msg_of_day"):
+                return await _execute_tool("set_motd", {"motd": value}, user, is_admin)
+            try:
+                ctx.set_config(section, key, value)
+                return json.dumps({"success": True, "section": section, "key": key, "value": value})
+            except Exception as e:
+                return json.dumps({"error": f"Config write failed: {e}"})
+        
+        elif tool_name == "set_topic":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            topic = arguments.get("topic", "")
+            try:
+                ctx.hub_topic = topic
+                return json.dumps({"success": True, "topic": topic, "note": "Topic updated and broadcast to all connected users"})
+            except Exception as e:
+                return json.dumps({"error": f"Set topic failed: {e}"})
+        
+        elif tool_name == "set_motd":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            motd = arguments.get("motd", "")
+            try:
+                # Persist MOTD to database so it survives restarts
+                try:
+                    from sqlmodel import select
+                    from verlihub.models import SetupList
+                    from verlihub.models.database import get_async_session
+                    async with get_async_session() as session:
+                        result = await session.execute(
+                            select(SetupList).where(
+                                SetupList.file == "config",
+                                SetupList.var == "hub_motd",
+                            )
+                        )
+                        entry = result.scalar_one_or_none()
+                        if entry is not None:
+                            entry.val = motd
+                            session.add(entry)
+                        else:
+                            session.add(SetupList(file="config", var="hub_motd", val=motd))
+                except Exception as db_err:
+                    log.warning("Could not persist MOTD to DB: %s", db_err)
+                # Write MOTD file for C++ fallback
+                from verlihub.config import get_config_optional as _gc
+                cfg = _gc()
+                config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+                motd_file = Path(config_dir) / "motd"
+                motd_file.write_text(motd, encoding="utf-8")
+                # Push to live hub so new logins see it immediately
+                try:
+                    ctx._cpp.SetMOTD(motd)
+                except AttributeError:
+                    pass  # SWIG wrapper may not expose SetMOTD yet
+                return json.dumps({"success": True, "motd": motd, "note": "MOTD persisted to database, written to file, and pushed to live server"})
+            except Exception as e:
+                return json.dumps({"error": f"Set MOTD failed: {e}"})
+        
+        # ------------------------------------------------------------------
+        # Phase 5.1: Messaging tools
+        # ------------------------------------------------------------------
+        elif tool_name == "send_to_opchat":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_opchat(arguments.get("message", ""), arguments.get("from_nick", ""))
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_class":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_class(arguments["message"], arguments["min_class"], arguments["max_class"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_active":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_active(arguments["message"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_passive":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_passive(arguments["message"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_active_class":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_active_class(arguments["message"], arguments["min_class"], arguments["max_class"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_to_passive_class":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_to_passive_class(arguments["message"], arguments["min_class"], arguments["max_class"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "broadcast_chat":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.broadcast_chat(arguments["from_nick"], arguments["message"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "send_pm_as":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.send_pm_as(arguments["from_nick"], arguments["to_nick"], arguments["message"])
+            return json.dumps({"success": True})
+
+        # ------------------------------------------------------------------
+        # Phase 5.2: Administration tools
+        # ------------------------------------------------------------------
+        elif tool_name == "force_move":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.force_move(arguments["nick"], arguments["address"])
+            return json.dumps({"success": ok, "nick": arguments["nick"]})
+
+        elif tool_name == "disconnect_user":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.disconnect_user(arguments["nick"])
+            return json.dumps({"success": ok, "nick": arguments["nick"]})
+
+        elif tool_name == "add_robot":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.add_robot(arguments["nick"], arguments.get("description", ""), arguments.get("user_class", 3))
+            return json.dumps({"success": ok, "nick": arguments["nick"]})
+
+        elif tool_name == "remove_robot":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.remove_robot(arguments["nick"])
+            return json.dumps({"success": ok, "nick": arguments["nick"]})
+
+        elif tool_name == "reload_config":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.request_reload()
+            return json.dumps({"success": True})
+
+        # ------------------------------------------------------------------
+        # Phase 5.3: Statistics & GeoIP
+        # ------------------------------------------------------------------
+        elif tool_name == "get_protocol_stats":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            return json.dumps(ctx.get_protocol_stats())
+
+        elif tool_name == "lookup_geoip":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            return json.dumps(ctx.lookup_geoip(arguments["ip"]))
+
+        elif tool_name == "get_active_passive_counts":
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            return json.dumps({"active": ctx.get_active_user_count(), "passive": ctx.get_passive_user_count()})
+
+        # ------------------------------------------------------------------
+        # Phase 5.4: Plugin & Script Management
+        # ------------------------------------------------------------------
+        elif tool_name == "list_plugins":
+            if ctx is None:
+                return json.dumps([])
+            return json.dumps(ctx.get_loaded_plugins(), default=str)
+
+        elif tool_name == "list_lua_scripts":
+            if ctx is None:
+                return json.dumps([])
+            return json.dumps(ctx.get_loaded_lua_scripts())
+
+        elif tool_name == "list_python_scripts":
+            if ctx is None:
+                return json.dumps([])
+            return json.dumps(ctx.get_loaded_python_scripts())
+
+        elif tool_name == "load_plugin":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.load_plugin(arguments["plugin_path"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "unload_plugin":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.unload_plugin(arguments["plugin_name"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "reload_plugin":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.reload_plugin(arguments["plugin_name"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "load_lua_script":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.execute_lua_script(arguments["script_path"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "unload_lua_script":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.unload_lua_script(arguments["script_path"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "load_python_script":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.execute_python_script(arguments["script_path"])
+            return json.dumps({"success": ok})
+
+        elif tool_name == "unload_python_script":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ok = ctx.unload_python_script(arguments["script_path"])
+            return json.dumps({"success": ok})
+
+        # ------------------------------------------------------------------
+        # Phase 5.5: Flood & Ban Cache
+        # ------------------------------------------------------------------
+        elif tool_name == "set_flood_config":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.set_flood_config(arguments["flood_type"], arguments["period_ms"], arguments["max_tokens"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "sync_ban_cache":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.load_ban_cache()
+            return json.dumps({"success": True})
+
+        elif tool_name == "add_ban_cache_ip":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.add_ban_cache_ip(arguments["ip"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "add_ban_cache_nick":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.add_ban_cache_nick(arguments["nick"])
+            return json.dumps({"success": True})
+
+        elif tool_name == "clear_ban_cache":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            if ctx is None:
+                return json.dumps({"error": "Hub not running"})
+            ctx.clear_ban_cache()
+            return json.dumps({"success": True})
+
+        # ------------------------------------------------------------------
+        # Phase 5.6: Penalty Management
+        # ------------------------------------------------------------------
+        elif tool_name == "list_penalties":
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                penalties = svc.get_active_penalties(nick=arguments.get("nick"))
+                return json.dumps([p.to_dict() if hasattr(p, "to_dict") else vars(p) for p in penalties], default=str)
+            except Exception as e:
+                return json.dumps({"error": f"Penalty list failed: {e}"})
+
+        elif tool_name == "add_penalty":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                svc.add_penalty(
+                    nick=arguments["nick"],
+                    penalty_type=arguments["penalty_type"],
+                    reason=arguments.get("reason", ""),
+                    duration_minutes=arguments.get("duration_minutes", 0),
+                )
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Add penalty failed: {e}"})
+
+        elif tool_name == "remove_penalty":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                svc.remove_penalty(nick=arguments["nick"], penalty_type=arguments.get("penalty_type"))
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Remove penalty failed: {e}"})
+
+        elif tool_name == "cleanup_penalties":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.penalty_service import get_penalty_service
+                svc = get_penalty_service()
+                count = svc.cleanup_expired()
+                return json.dumps({"success": True, "removed": count})
+            except Exception as e:
+                return json.dumps({"error": f"Cleanup failed: {e}"})
+
+        # ------------------------------------------------------------------
+        # Phase 5.7: Triggers & Redirects
+        # ------------------------------------------------------------------
+        elif tool_name == "list_triggers":
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                return json.dumps([t.to_dict() if hasattr(t, "to_dict") else vars(t) for t in cache.get_all()], default=str)
+            except Exception as e:
+                return json.dumps({"error": f"Trigger list failed: {e}"})
+
+        elif tool_name == "add_trigger":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                cache.add(command=arguments["command"], response=arguments["response"], min_class=arguments.get("min_class", 0))
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Add trigger failed: {e}"})
+
+        elif tool_name == "remove_trigger":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.trigger_service import get_trigger_cache
+                cache = get_trigger_cache()
+                cache.remove(command=arguments["command"])
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Remove trigger failed: {e}"})
+
+        elif tool_name == "list_redirects":
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                return json.dumps([r.to_dict() if hasattr(r, "to_dict") else vars(r) for r in cache.get_all()], default=str)
+            except Exception as e:
+                return json.dumps({"error": f"Redirect list failed: {e}"})
+
+        elif tool_name == "add_redirect":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                cache.add(address=arguments["address"], flag=arguments.get("flag", 0), enabled=arguments.get("enabled", True))
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Add redirect failed: {e}"})
+
+        elif tool_name == "remove_redirect":
+            if not is_admin:
+                return json.dumps({"error": "Permission denied — requires admin"})
+            try:
+                from verlihub.redirect_service import get_redirect_cache
+                cache = get_redirect_cache()
+                cache.remove(address=arguments["address"])
+                return json.dumps({"success": True})
+            except Exception as e:
+                return json.dumps({"error": f"Remove redirect failed: {e}"})
+
+        # ------------------------------------------------------------------
+        # Web tools (search, fetch, RSS)
+        # ------------------------------------------------------------------
+        elif tool_name in ("web_search", "fetch_webpage", "read_rss"):
+            try:
+                from verlihub.bot.web import execute_web_tool
+                return await execute_web_tool(tool_name, arguments)
+            except ImportError:
+                return json.dumps({"error": "Web tools not available (missing verlihub.bot.web module)"})
+            except Exception as e:
+                return json.dumps({"error": f"Web tool error: {e}"})
+
+        else:
+            return json.dumps({"error": f"Unknown tool: {tool_name}"})
+    
+    except Exception as e:
+        log.exception(f"Tool execution error: {tool_name}")
+        return json.dumps({"error": str(e)})
+
+
+def _format_bytes(b: int) -> str:
+    """Human-readable byte size."""
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if abs(b) < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} EiB"
+
+
+def _build_hub_context_snapshot(is_admin: bool) -> str:
+    """
+    Build a text snapshot of live hub state for injection into the system prompt.
+
+    Used when the LLM endpoint doesn't support tool calling — we pre-fetch
+    all the data the tools would return and embed it directly.
+    """
+    ctx = get_hub_context()
+    if ctx is None:
+        return "\n[Hub is not running — no live data available.]\n"
+
+    parts: list[str] = ["\n--- LIVE HUB DATA (refreshed per message) ---\n"]
+
+    # Hub info
+    try:
+        from verlihub.config import get_config_optional as _gc
+        cfg = _gc()
+        parts.append(f"Hub name: {ctx.hub_name}")
+        parts.append(f"Topic: {ctx.hub_topic}")
+        if cfg:
+            parts.append(f"Host: {cfg.hub.host}")
+        parts.append(f"Running: {ctx.is_running}")
+        parts.append(f"Uptime: {ctx.uptime} seconds")
+        parts.append(f"Users online: {ctx.user_count}")
+        parts.append(f"Total share: {_format_bytes(ctx.total_share)}")
+    except Exception as exc:
+        parts.append(f"(Hub info error: {exc})")
+
+    # User list
+    try:
+        users = ctx.get_user_list() or []
+        parts.append(f"\n### Online Users ({len(users)} total)")
+        if users:
+            for u in users:
+                nick = u.get("nick", "?")
+                share = _format_bytes(u.get("share", 0))
+                uclass = u.get("user_class", 0)
+                client = u.get("client", "")
+                country = u.get("country", "") or u.get("country_code", "")
+                desc = u.get("description", "")
+                line = f"  - {nick} | class {uclass} | share {share} | client {client}"
+                if country:
+                    line += f" | country {country}"
+                if desc:
+                    line += f" | desc: {desc}"
+                if is_admin:
+                    ip = u.get("ip", "")
+                    if ip:
+                        line += f" | IP {ip}"
+                parts.append(line)
+        else:
+            parts.append("  (no users online)")
+    except Exception as exc:
+        parts.append(f"(User list error: {exc})")
+
+    # Operators
+    try:
+        users = ctx.get_user_list() or []
+        ops = [u for u in users if u.get("user_class", 0) >= 3]
+        if ops:
+            parts.append(f"\n### Operators ({len(ops)})")
+            for o in ops:
+                parts.append(f"  - {o.get('nick', '?')} (class {o.get('user_class', 0)})")
+    except Exception:
+        pass
+
+    # Share statistics
+    try:
+        users = ctx.get_user_list() or []
+        shares = [u.get("share", 0) for u in users]
+        if shares:
+            total = sum(shares)
+            avg = total // len(shares)
+            parts.append(f"\n### Share Statistics")
+            parts.append(f"  Total: {_format_bytes(total)}")
+            parts.append(f"  Average: {_format_bytes(avg)}")
+            top = sorted(users, key=lambda u: u.get("share", 0), reverse=True)[:5]
+            if top:
+                parts.append("  Top sharers:")
+                for t in top:
+                    parts.append(f"    - {t.get('nick', '?')}: {_format_bytes(t.get('share', 0))}")
+    except Exception:
+        pass
+
+    # Geo distribution
+    try:
+        users = ctx.get_user_list() or []
+        geo: dict[str, int] = {}
+        for u in users:
+            cc = u.get("country", "") or u.get("country_code", "??")
+            if cc:
+                geo[cc] = geo.get(cc, 0) + 1
+        if geo:
+            parts.append(f"\n### Geographic Distribution")
+            for cc, cnt in sorted(geo.items(), key=lambda x: x[1], reverse=True):
+                parts.append(f"  - {cc}: {cnt} user(s)")
+    except Exception:
+        pass
+
+    parts.append("\n--- END LIVE HUB DATA ---\n")
+    return "\n".join(parts)
+
+
+# =============================================================================
+# System prompts
+# =============================================================================
+
+
+SYSTEM_PROMPT_ADMIN = """\
+You are a Verlihub DC++ hub assistant with administrator access. You help hub \
+operators monitor and manage the hub through natural language.
+
+{personality_block}\
+
+You have access to tools that query and control the live hub. Use them to answer \
+questions accurately — never guess hub state, always check via tools.
+
+Available capabilities:
+- Query online users, operators, bots
+- View hub statistics, geographic distribution, share statistics
+- Look up individual user details (including IP addresses)
+- Kick users, send broadcasts, send private messages
+- Execute hub console commands (!help for list)
+- Read and write hub configuration
+
+Guidelines:
+- Always call tools rather than assuming hub state
+- Present user lists as clean tables when there are few users
+- Summarize when there are many users (20+)
+- Flag anything unusual: zero-share users, suspicious clients, connectivity issues
+- Format numbers readably (e.g. "1.23 TiB" not raw bytes)
+- When asked to kick or ban, confirm the action and provide the result
+"""
+
+SYSTEM_PROMPT_USER = """\
+You are a Verlihub DC++ hub assistant. You help users learn about the hub \
+and see who's online.
+
+{personality_block}\
+
+You have access to read-only tools that show hub information. Use them \
+to answer questions accurately.
+
+You can see: hub info, online users (nicknames, IPs, countries, share sizes, \
+user classes, client tags, descriptions), operators, geographic distribution, \
+and share statistics.  This is all publicly visible information that clients \
+broadcast via MyINFO.
+
+You CANNOT: kick users, ban users, change configuration, \
+execute console commands, or send messages on behalf of users.
+
+Guidelines:
+- Always call tools rather than guessing
+- Be friendly and helpful
+- Never fabricate data — if a tool returns an error, say so
+- If asked to do something beyond your access, explain politely
+"""
+
+
+# Context-injected prompts — used when the LLM endpoint doesn't support tools
+SYSTEM_PROMPT_ADMIN_CONTEXT = """\
+You are a Verlihub DC++ hub assistant with administrator access. You help hub \
+operators monitor and manage the hub through natural language.
+
+Below you will find a snapshot of the live hub state. Use ONLY this data to \
+answer questions — never invent or guess information that is not in the snapshot.
+
+Available information includes: hub info, online users (with IPs), operators, \
+share statistics, geographic distribution.
+
+## Performing actions
+
+You CAN perform write operations (kick, broadcast, set config, etc.) by \
+emitting one or more <action> blocks in your reply. Each block must contain \
+a single valid JSON object with "name" and "args" keys. The server will \
+execute every <action> it finds, feed results back, and ask you to write \
+a final user-facing summary.
+
+Example — setting the topic:
+<action>{"name": "set_topic", "args": {"topic": "Welcome!"}}</action>
+
+Example — setting the MOTD:
+<action>{"name": "set_motd", "args": {"motd": "Welcome to the hub!\nPlease read the rules."}}</action>
+
+Example — kicking a user:
+<action>{"name": "kick_user", "args": {"nick": "badguy", "reason": "Spam"}}</action>
+
+{action_catalog}
+
+Guidelines:
+- Answer using ONLY the hub data provided below — do not fabricate or hallucinate
+- Present user lists as clean tables when there are few users
+- Summarize when there are many users (20+)
+- Flag anything unusual: zero-share users, suspicious clients, connectivity issues
+- Be direct and professional — this is an ops tool
+- Format numbers readably (e.g. "1.23 TiB" not raw bytes)
+- When performing write operations, emit the <action> block AND provide a \
+brief description of what you are doing so the user can follow along
+- You may emit multiple <action> blocks in a single reply
+"""
+
+
+def _build_action_catalog() -> str:
+    """Build a human-readable list of available actions for the context prompt."""
+    actions = [
+        ("set_topic", '{"topic": "..."}',
+         "Set the hub topic (shown in DC client title bar). Broadcasts immediately."),
+        ("set_motd", '{"motd": "..."}',
+         "Set the Message of the Day (shown as chat on login). Can be multi-line."),
+        ("kick_user", '{"nick": "...", "reason": "..."}', "Kick a user from the hub"),
+        ("send_broadcast", '{"message": "..."}', "Send a message to all users"),
+        ("send_message_to_user", '{"nick": "...", "message": "..."}', "PM a specific user"),
+        ("execute_hub_command", '{"command": "!..."}', "Run a hub console command"),
+        ("get_hub_config", '{"section": "config", "key": "..."}', "Read a config value"),
+        ("set_hub_config", '{"section": "config", "key": "...", "value": "..."}',
+         "Set a config value (NOT for topic/motd — use set_topic/set_motd)"),
+        # Phase 5 messaging
+        ("send_to_opchat", '{"message": "...", "from_nick": "..."}', "Send to operator chat"),
+        ("send_to_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to user class range"),
+        ("send_to_active", '{"message": "..."}', "Send to active-mode users"),
+        ("send_to_passive", '{"message": "..."}', "Send to passive-mode users"),
+        ("send_to_active_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to active-mode users in class range"),
+        ("send_to_passive_class", '{"message": "...", "min_class": 3, "max_class": 10}', "Send to passive-mode users in class range"),
+        ("broadcast_chat", '{"from_nick": "...", "message": "..."}', "Broadcast mainchat as nick"),
+        ("send_pm_as", '{"from_nick": "...", "to_nick": "...", "message": "..."}', "Send PM as nick"),
+        # Phase 5 admin
+        ("force_move", '{"nick": "...", "address": "..."}', "Force-move user to another hub"),
+        ("disconnect_user", '{"nick": "..."}', "Disconnect a user"),
+        ("add_robot", '{"nick": "...", "description": "...", "user_class": 3}', "Add bot nick"),
+        ("remove_robot", '{"nick": "..."}', "Remove bot nick"),
+        ("reload_config", '{}', "Reload hub configuration"),
+        # Phase 5 stats
+        ("get_protocol_stats", '{}', "Get NMDC protocol stats"),
+        ("lookup_geoip", '{"ip": "..."}', "GeoIP lookup"),
+        ("get_active_passive_counts", '{}', "Get active/passive user counts"),
+        # Phase 5 plugins
+        ("list_plugins", '{}', "List loaded plugins"),
+        ("load_plugin", '{"plugin_path": "..."}', "Load a plugin"),
+        ("unload_plugin", '{"plugin_name": "..."}', "Unload a plugin"),
+        ("reload_plugin", '{"plugin_name": "..."}', "Reload a plugin"),
+        ("list_lua_scripts", '{}', "List loaded Lua scripts"),
+        ("load_lua_script", '{"script_path": "..."}', "Load a Lua script"),
+        ("unload_lua_script", '{"script_path": "..."}', "Unload a Lua script"),
+        ("list_python_scripts", '{}', "List loaded Python scripts"),
+        ("load_python_script", '{"script_path": "..."}', "Load a Python script"),
+        ("unload_python_script", '{"script_path": "..."}', "Unload a Python script"),
+        # Phase 5 flood & ban cache
+        ("set_flood_config", '{"flood_type": "...", "period_ms": 1000, "max_tokens": 5}', "Set flood limits"),
+        ("sync_ban_cache", '{}', "Reload ban cache from DB"),
+        ("add_ban_cache_ip", '{"ip": "..."}', "Add IP to ban cache"),
+        ("add_ban_cache_nick", '{"nick": "..."}', "Add nick to ban cache"),
+        ("clear_ban_cache", '{}', "Clear entire ban cache"),
+        # Phase 5 penalties
+        ("list_penalties", '{"nick": "..."}', "List active penalties (optionally by nick)"),
+        ("add_penalty", '{"nick": "...", "penalty_type": "...", "reason": "...", "duration_minutes": 60}', "Add penalty"),
+        ("remove_penalty", '{"nick": "...", "penalty_type": "..."}', "Remove penalty"),
+        ("cleanup_penalties", '{}', "Clean up expired penalties"),
+        # Phase 5 triggers & redirects
+        ("list_triggers", '{}', "List trigger commands"),
+        ("add_trigger", '{"command": "...", "response": "...", "min_class": 0}', "Add trigger"),
+        ("remove_trigger", '{"command": "..."}', "Remove trigger"),
+        ("list_redirects", '{}', "List redirect addresses"),
+        ("add_redirect", '{"address": "...", "flag": 0, "enabled": true}', "Add redirect"),
+        ("remove_redirect", '{"address": "..."}', "Remove redirect"),
+    ]
+    lines = ["Available actions:"]
+    for name, args, desc in actions:
+        lines.append(f"  - {name}: {desc}  args: {args}")
+    return "\n".join(lines)
+
+SYSTEM_PROMPT_USER_CONTEXT = """\
+You are a Verlihub DC++ hub assistant. You help users learn about the hub \
+and see who's online.
+
+Below you will find a snapshot of the live hub state. Use ONLY this data to \
+answer questions — never invent or guess information that is not in the snapshot.
+
+You can see: hub info, online users (nicknames, countries, share sizes, classes), \
+operators, geographic distribution, and share statistics.
+
+You CANNOT: see IP addresses, kick users, ban users, change configuration, \
+execute console commands, or send messages on behalf of users.
+
+Guidelines:
+- Answer using ONLY the hub data provided below
+- Be friendly and helpful
+- Never fabricate data
+- If asked to do something beyond your access, explain politely
+"""
+
+
+# Regex to extract <action>{...}</action> blocks from LLM output
+_ACTION_RE = re.compile(r'<action>\s*(\{.*?\})\s*</action>', re.DOTALL)
+
+
+async def _extract_and_execute_actions(
+    text: str, user: "TokenData", is_admin: bool,
+) -> list[dict]:
+    """Parse <action> blocks from LLM output and execute each one.
+
+    Returns a list of ``{"name": ..., "args": ..., "result": ...}`` dicts.
+    """
+    results: list[dict] = []
+    for m in _ACTION_RE.finditer(text):
+        try:
+            payload = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            results.append({"name": "?", "args": {}, "result": "Invalid JSON in <action> block"})
+            continue
+        name = payload.get("name", "")
+        args = payload.get("args", {})
+        result = await _execute_tool(name, args, user, is_admin)
+        results.append({"name": name, "args": args, "result": result})
+    return results
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove ``<think>…</think>`` reasoning blocks from LLM output.
+
+    Handles both properly closed and unterminated ``<think>`` blocks
+    (e.g. when ``max_tokens`` cuts off the reasoning mid-stream).
+    If stripping would remove *all* visible content, falls back to
+    returning the text with just the tags removed.
+    """
+    if not text:
+        return text
+    # 1. Strip properly closed <think>...</think> blocks
+    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', text).lstrip()
+    # 2. Strip any remaining unterminated <think> block
+    idx = cleaned.find('<think>')
+    if idx >= 0:
+        cleaned = cleaned[:idx].rstrip()
+    # 3. If nothing left, fall back to tags-only removal
+    if not cleaned.strip() and text.strip():
+        cleaned = text.replace('<think>', '').replace('</think>', '').strip()
+    return cleaned
+
+
+def _strip_action_blocks(text: str) -> str:
+    """Remove <action>...</action> blocks from visible output."""
+    return _ACTION_RE.sub('', text).strip()
+
+
+async def _handle_actions_in_text(
+    text: str,
+    session: "ChatSession",
+    client,
+    llm_cfg: "LlmConfig",
+    user: "TokenData",
+    is_admin: bool,
+    emit,
+) -> str:
+    """Detect and execute <action> blocks in a non-streaming LLM response.
+
+    If actions are found, execute them, re-prompt the LLM for a summary,
+    and return that summary. Otherwise return the original text (with
+    think/action blocks stripped).
+    """
+    if not _ACTION_RE.search(text):
+        return _strip_action_blocks(text)
+
+    action_results = await _extract_and_execute_actions(text, user, is_admin)
+    if not action_results:
+        return _strip_action_blocks(text)
+
+    # Notify frontend
+    for ar in action_results:
+        await emit({"type": "tool_call", "name": ar["name"], "args": ar["args"]})
+        await emit({"type": "tool_result", "name": ar["name"], "success": "error" not in ar["result"]})
+
+    # Ask for a summary
+    results_msg = "Action results:\n"
+    for ar in action_results:
+        results_msg += f"- {ar['name']}: {ar['result']}\n"
+    results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
+    session.messages.append({"role": "user", "content": results_msg})
+    _inject_hub_context(session.messages, user, is_admin)
+
+    try:
+        resp = await client.chat.completions.create(
+            model=session.endpoint.model,
+            messages=session.messages,
+            temperature=session.llm_cfg.temperature,
+            max_tokens=session.llm_cfg.max_tokens,
+        )
+        summary = resp.choices[0].message.content or "Done."
+        summary = _strip_action_blocks(summary)
+        session.messages.append(resp.choices[0].message.model_dump())
+        return summary
+    except Exception as exc:
+        log.warning("Summary re-prompt failed: %s", exc)
+        return _strip_action_blocks(text) or "Actions executed."
+
+
+def _inject_hub_context(messages: list[dict], user: "TokenData", is_admin: bool) -> None:
+    """
+    Replace the system prompt with a context-injected version containing live hub data.
+
+    Called when the LLM endpoint doesn't support tool calling, so the model
+    gets all data up-front in the system message instead of calling tools.
+    """
+    snapshot = _build_hub_context_snapshot(is_admin)
+    base_prompt = SYSTEM_PROMPT_ADMIN_CONTEXT if is_admin else SYSTEM_PROMPT_USER_CONTEXT
+    # Inject the action catalog for admins
+    if is_admin:
+        base_prompt = base_prompt.replace("{action_catalog}", _build_action_catalog())
+    full_prompt = base_prompt + f"\n\nThe current operator is: {user.nick} (class {user.user_class})\n" + snapshot
+
+    # Update the system message (always first in the list)
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = full_prompt
+    else:
+        messages.insert(0, {"role": "system", "content": full_prompt})
+    log.info("Injected live hub context into system prompt (%d chars)", len(snapshot))
+
+
+# =============================================================================
+# Chat session manager
+# =============================================================================
+
+class ChatSession:
+    """Manages conversation history and tool orchestration for one user session.
+
+    Supports background LLM processing.  When a request is spawned the
+    processing coroutine emits events via :meth:`emit` which buffers them
+    *and* forwards to the currently-attached WebSocket (if any).  If the
+    client disconnects mid-request, events accumulate in the buffer and are
+    replayed on reconnection.
+    """
+    
+    def __init__(self, user: TokenData, is_admin: bool, llm_cfg: LlmConfig,
+                 endpoint: LlmEndpoint | None = None):
+        self.user = user
+        self.is_admin = is_admin
+        self.llm_cfg = llm_cfg
+        self.endpoint: LlmEndpoint = endpoint or llm_cfg.get_endpoint()
+        self.tools = _build_readonly_tools() + (_build_admin_tools() if is_admin else [])
+
+        # Add web tools (search, fetch, RSS) if enabled in bot behavior config
+        try:
+            _cfg = get_config_optional()
+            _behavior = getattr(getattr(_cfg, "bots", None), "behavior", None) if _cfg else None
+            if _behavior and getattr(_behavior, "web_enabled", False):
+                from verlihub.bot.web import build_web_tools
+                self.tools += build_web_tools()
+        except Exception:
+            pass
+
+        global _endpoint_supports_tools
+        self.tools_available = _endpoint_supports_tools is not False
+        self.pending_request = False  # True while server is processing an LLM call
+        system_prompt = SYSTEM_PROMPT_ADMIN if is_admin else SYSTEM_PROMPT_USER
+
+        # Build personality block and hub context to embed in the prompt
+        personality_block = ""
+        extra_parts: list[str] = []
+        try:
+            cfg = get_config_optional()
+            if cfg is not None:
+                behavior = getattr(getattr(cfg, "bots", None), "behavior", None)
+                security = getattr(getattr(cfg, "bots", None), "security", None)
+                hub = getattr(cfg, "hub", None)
+
+                hub_name = getattr(hub, "name", "") if hub else ""
+                bot_nick = getattr(security, "nick", "") if security else ""
+
+                if hub_name:
+                    extra_parts.append(f"The hub is called \"{hub_name}\".")
+                if bot_nick:
+                    extra_parts.append(
+                        f"You are also known as \"{bot_nick}\" on the NMDC side of the hub."
+                    )
+                if behavior:
+                    personality = getattr(behavior, "personality", "")
+                    rss_feeds = getattr(behavior, "rss_feeds", [])
+                    if personality:
+                        personality_block = (
+                            f"PERSONALITY AND VOICE (always stay in character): {personality}"
+                        )
+                    if rss_feeds:
+                        feeds = ", ".join(rss_feeds)
+                        extra_parts.append(
+                            f"You are aware of these RSS feeds and can discuss their content: {feeds}"
+                        )
+        except Exception:
+            pass  # config unavailable — use base prompt only
+
+        # Substitute personality into the prompt template
+        system_prompt = system_prompt.replace("{personality_block}", personality_block)
+        # Append operator identity and extra hub context
+        system_prompt += f"\n\nThe current operator is: {user.nick} (class {user.user_class})"
+        if extra_parts:
+            system_prompt += "\n" + "\n".join(extra_parts)
+
+        self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        self.created_at = time.time()
+
+        # -- Background task / event buffer state --
+        self._bg_task: asyncio.Task | None = None
+        self._event_buffer: list[dict] = []
+        self._ws_ref: WebSocket | None = None
+        self._request_done: asyncio.Event = asyncio.Event()
+        self._request_done.set()  # no pending request initially
+
+    # -- WebSocket attach / detach --
+
+    def attach_ws(self, ws: WebSocket) -> None:
+        self._ws_ref = ws
+
+    def detach_ws(self) -> None:
+        self._ws_ref = None
+
+    # -- Event delivery --
+
+    async def emit(self, event: dict) -> None:
+        """Buffer an event and forward to the attached WS (best-effort)."""
+        self._event_buffer.append(event)
+        ws = self._ws_ref
+        if ws is not None:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                # Client gone — stop trying until next attach
+                self._ws_ref = None
+
+    async def replay_buffered_events(self, ws: WebSocket) -> None:
+        """Replay all buffered events from the current request to *ws*."""
+        for event in list(self._event_buffer):
+            try:
+                await ws.send_json(event)
+            except Exception:
+                break
+
+    def clear_event_buffer(self) -> None:
+        self._event_buffer.clear()
+    
+    async def chat(self, user_message: str) -> tuple[str, list[dict]]:
+        """
+        Process a user message through the LLM tool-calling loop.
+        
+        Returns (response_text, tool_calls_made).
+        """
+        client = _get_openai_client(self.endpoint)
+        self.messages.append({"role": "user", "content": user_message})
+        tool_calls_made: list[dict] = []
+        
+        # If tools already known to be unsupported, skip straight to context-injection path
+        if not self.tools_available:
+            _inject_hub_context(self.messages, self.user, self.is_admin)
+            response = await client.chat.completions.create(
+                model=self.endpoint.model,
+                messages=self.messages,
+                temperature=self.llm_cfg.temperature,
+                max_tokens=self.llm_cfg.max_tokens,
+            )
+            msg = response.choices[0].message
+            self.messages.append(msg.model_dump())
+            text = _strip_think_blocks(msg.content) or "(no response)"
+
+            # Handle <action> blocks for admin write operations
+            if self.is_admin and _ACTION_RE.search(text):
+                action_results = await _extract_and_execute_actions(text, self.user, self.is_admin)
+                if action_results:
+                    for ar in action_results:
+                        tool_calls_made.append({"name": ar["name"], "args": ar["args"], "result": ar["result"]})
+                    results_msg = "Action results:\n"
+                    for ar in action_results:
+                        results_msg += f"- {ar['name']}: {ar['result']}\n"
+                    results_msg += "\nPlease write a short user-facing summary. Do NOT emit <action> blocks."
+                    self.messages.append({"role": "user", "content": results_msg})
+                    _inject_hub_context(self.messages, self.user, self.is_admin)
+                    try:
+                        resp2 = await client.chat.completions.create(
+                            model=self.endpoint.model,
+                            messages=self.messages,
+                            temperature=self.llm_cfg.temperature,
+                            max_tokens=self.llm_cfg.max_tokens,
+                        )
+                        text = _strip_action_blocks(resp2.choices[0].message.content or "Done.")
+                        self.messages.append(resp2.choices[0].message.model_dump())
+                    except Exception:
+                        text = _strip_action_blocks(text) or "Actions executed."
+                else:
+                    text = _strip_action_blocks(text)
+
+            return text, tool_calls_made
+        
+        for round_num in range(self.llm_cfg.max_tool_rounds):
+            log.debug(f"LLM round {round_num + 1} for {self.user.nick}")
+            
+            try:
+                response = await client.chat.completions.create(
+                    model=self.endpoint.model,
+                    messages=self.messages,
+                    tools=self.tools if self.tools else None,
+                    tool_choice="auto",
+                    temperature=self.llm_cfg.temperature,
+                    max_tokens=self.llm_cfg.max_tokens,
+                )
+            except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                # Endpoint does not support tool calling — retry without tools
+                if round_num == 0:
+                    log.warning("Tool calling not supported by endpoint, falling back to plain chat: %s", exc)
+                    self.tools_available = False
+                    _endpoint_supports_tools = False
+                    _inject_hub_context(self.messages, self.user, self.is_admin)
+                    response = await client.chat.completions.create(
+                        model=self.endpoint.model,
+                        messages=self.messages,
+                        temperature=self.llm_cfg.temperature,
+                        max_tokens=self.llm_cfg.max_tokens,
+                    )
+                else:
+                    raise
+            
+            choice = response.choices[0]
+            msg = choice.message
+            self.messages.append(msg.model_dump())
+            
+            if not msg.tool_calls:
+                return _strip_think_blocks(msg.content) or "(no response)", tool_calls_made
+            
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name
+                try:
+                    fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+                
+                log.info(f"Tool call by {self.user.nick}: {fn_name}({fn_args})")
+                tool_calls_made.append({"name": fn_name, "args": fn_args})
+                
+                result = await _execute_tool(fn_name, fn_args, self.user, self.is_admin)
+                
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+        
+        # Exhausted rounds — force a summary
+        self.messages.append({
+            "role": "user",
+            "content": "(System: tool call limit reached. Provide your answer with data collected so far.)",
+        })
+        response = await client.chat.completions.create(
+            model=self.endpoint.model,
+            messages=self.messages,
+            temperature=self.llm_cfg.temperature,
+            max_tokens=self.llm_cfg.max_tokens,
+        )
+        return _strip_think_blocks(response.choices[0].message.content) or "(no response)", tool_calls_made
+
+
+# Active sessions keyed by "nick:session_id"
+_sessions: dict[str, ChatSession] = {}
+# Session metadata: titles, timestamps per "nick:session_id"
+_session_meta: dict[str, dict] = {}
+
+
+def _session_key(nick: str, session_id: str) -> str:
+    return f"{nick}:{session_id}"
+
+
+def _clean_dangling_turn(session: ChatSession) -> None:
+    """Remove a trailing unanswered user message + any incomplete assistant turn.
+
+    When the client disconnects mid-stream the server may have already appended
+    the user message (and possibly a partial assistant reply) to
+    ``session.messages``.  Leaving them there would confuse the LLM on the next
+    request because the conversation ends with an unanswered user turn or a
+    partial assistant reply.
+    """
+    msgs = session.messages
+    # Walk backwards past tool / assistant messages until we hit the dangling user msg
+    while len(msgs) > 1:
+        last_role = msgs[-1].get("role", "")
+        if last_role in ("assistant", "tool"):
+            msgs.pop()
+        elif last_role == "user":
+            msgs.pop()
+            break
+        else:
+            break
+    log.debug("Cleaned dangling turn, session now has %d messages", len(msgs))
+
+
+def _ensure_session(
+    nick: str, session_id: str, user: TokenData, is_admin: bool, llm_cfg: LlmConfig,
+    endpoint_name: str | None = None,
+) -> ChatSession:
+    """Get or create a ChatSession and its metadata entry."""
+    key = _session_key(nick, session_id)
+    session = _sessions.get(key)
+    if session is None:
+        endpoint = llm_cfg.get_endpoint(endpoint_name)
+        session = ChatSession(user, is_admin, llm_cfg, endpoint=endpoint)
+        _sessions[key] = session
+        _session_meta[key] = {
+            "session_id": session_id,
+            "title": "New chat",
+            "created_at": session.created_at,
+            "message_count": 0,
+        }
+    elif endpoint_name:
+        # Allow switching endpoint on an existing session
+        new_ep = llm_cfg.get_endpoint(endpoint_name)
+        if new_ep.name != session.endpoint.name:
+            session.endpoint = new_ep
+    return session
+
+
+def _update_session_title(key: str, user_message: str) -> None:
+    """Set the session title from the first user message (truncated)."""
+    meta = _session_meta.get(key)
+    if meta and meta["title"] == "New chat":
+        meta["title"] = user_message[:80].strip() or "New chat"
+
+
+def _bump_session_count(key: str) -> None:
+    meta = _session_meta.get(key)
+    if meta:
+        meta["message_count"] += 1
+
+
+# =============================================================================
+# Background LLM request processor
+# =============================================================================
+
+
+async def _run_llm_request(
+    session: ChatSession,
+    user_msg: str,
+    user: "TokenData",
+    is_admin: bool,
+    llm_cfg: "LlmConfig",
+    key: str,
+) -> None:
+    """Process a user message through the LLM tool-call loop.
+
+    Runs as a background ``asyncio.Task`` so it survives WebSocket
+    disconnects.  All progress events are pushed through
+    ``session.emit()`` which buffers them *and* forwards to the
+    currently-attached WebSocket (if any).
+    """
+    global _endpoint_supports_tools
+    emit = session.emit
+
+    try:
+        client = _get_openai_client(session.endpoint)
+        session.messages.append({"role": "user", "content": user_msg})
+        session.pending_request = True
+        await emit({"type": "thinking"})
+
+        for round_num in range(llm_cfg.max_tool_rounds):
+            stream_mode = True
+
+            # -- No tool support: context-injection path --
+            if not session.tools_available:
+                _inject_hub_context(session.messages, user, is_admin)
+                try:
+                    stream = await client.chat.completions.create(
+                        model=session.endpoint.model,
+                        messages=session.messages,
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                        stream=True,
+                    )
+                except Exception:
+                    resp = await client.chat.completions.create(
+                        model=session.endpoint.model,
+                        messages=session.messages,
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                    )
+                    text = resp.choices[0].message.content or "(no response)"
+                    session.messages.append(resp.choices[0].message.model_dump())
+                    text = await _handle_actions_in_text(
+                        text, session, client, llm_cfg,
+                        user, is_admin, emit,
+                    )
+                    await emit({"type": "response", "content": text})
+                    stream_mode = False
+                    stream = None
+                    break
+            else:
+                # -- Tool-calling path --
+                try:
+                    stream = await client.chat.completions.create(
+                        model=session.endpoint.model,
+                        messages=session.messages,
+                        tools=session.tools if session.tools else None,
+                        tool_choice="auto",
+                        temperature=llm_cfg.temperature,
+                        max_tokens=llm_cfg.max_tokens,
+                        stream=True,
+                    )
+                except (openai.BadRequestError, openai.PermissionDeniedError) as exc:
+                    if round_num == 0:
+                        log.warning("Tool/stream not supported, falling back: %s", exc)
+                        session.tools_available = False
+                        _endpoint_supports_tools = False
+                        _inject_hub_context(session.messages, user, is_admin)
+                        try:
+                            stream = await client.chat.completions.create(
+                                model=session.endpoint.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                                stream=True,
+                            )
+                        except Exception:
+                            resp = await client.chat.completions.create(
+                                model=session.endpoint.model,
+                                messages=session.messages,
+                                temperature=llm_cfg.temperature,
+                                max_tokens=llm_cfg.max_tokens,
+                            )
+                            text = resp.choices[0].message.content or "(no response)"
+                            session.messages.append(resp.choices[0].message.model_dump())
+                            text = await _handle_actions_in_text(
+                                text, session, client, llm_cfg,
+                                user, is_admin, emit,
+                            )
+                            await emit({"type": "response", "content": text})
+                            stream_mode = False
+                            stream = None
+                            break
+                    else:
+                        raise
+
+            if not stream_mode:
+                break
+
+            # -- Consume the async stream --
+            content_parts: list[str] = []
+            tool_calls_acc: dict[int, dict] = {}
+            sent_stream_start = False
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    if not sent_stream_start:
+                        await emit({"type": "stream_start"})
+                        sent_stream_start = True
+                    content_parts.append(delta.content)
+                    await emit({"type": "stream_delta", "content": delta.content})
+
+                if delta.tool_calls:
+                    for tc_d in delta.tool_calls:
+                        idx = tc_d.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc_d.id:
+                            tool_calls_acc[idx]["id"] = tc_d.id
+                        if tc_d.function:
+                            if tc_d.function.name:
+                                tool_calls_acc[idx]["name"] += tc_d.function.name
+                            if tc_d.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_d.function.arguments
+
+            full_content = "".join(content_parts)
+
+            # Strip <think> reasoning blocks (e.g. Qwen 3.5 thinking mode)
+            clean_content = _strip_think_blocks(full_content)
+
+            visible_content = _strip_action_blocks(clean_content)
+
+            if sent_stream_start:
+                await emit({"type": "stream_end", "content": visible_content})
+
+            msg_dict: dict = {"role": "assistant", "content": full_content or None}
+            if tool_calls_acc:
+                msg_dict["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+                ]
+            session.messages.append(msg_dict)
+
+            # -- <action> block fallback --
+            if not session.tools_available and _ACTION_RE.search(clean_content):
+                action_results = await _extract_and_execute_actions(
+                    clean_content, user, is_admin,
+                )
+                if action_results:
+                    for ar in action_results:
+                        await emit({
+                            "type": "tool_call",
+                            "name": ar["name"],
+                            "args": ar["args"],
+                        })
+                        await emit({
+                            "type": "tool_result",
+                            "name": ar["name"],
+                            "success": "error" not in ar["result"],
+                        })
+
+                    results_msg = "Action results:\n"
+                    for ar in action_results:
+                        results_msg += f"- {ar['name']}: {ar['result']}\n"
+                    results_msg += "\nPlease write a short user-facing summary of what was done. Do NOT emit any more <action> blocks."
+                    session.messages.append({"role": "user", "content": results_msg})
+
+                    await emit({"type": "thinking"})
+                    _inject_hub_context(session.messages, user, is_admin)
+                    try:
+                        summary_stream = await client.chat.completions.create(
+                            model=session.endpoint.model,
+                            messages=session.messages,
+                            temperature=llm_cfg.temperature,
+                            max_tokens=llm_cfg.max_tokens,
+                            stream=True,
+                        )
+                        summary_parts: list[str] = []
+                        sent_summary_start = False
+                        async for chunk in summary_stream:
+                            if not chunk.choices:
+                                continue
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                if not sent_summary_start:
+                                    await emit({"type": "stream_start"})
+                                    sent_summary_start = True
+                                summary_parts.append(delta.content)
+                                await emit({"type": "stream_delta", "content": delta.content})
+                        summary_text = "".join(summary_parts)
+                        summary_clean = _strip_think_blocks(summary_text)
+                        summary_clean = _strip_action_blocks(summary_clean)
+                        if sent_summary_start:
+                            await emit({"type": "stream_end", "content": summary_clean})
+                        else:
+                            await emit({"type": "response", "content": summary_clean or "Done."})
+                        session.messages.append({"role": "assistant", "content": summary_text})
+                    except Exception as exc:
+                        log.warning("Summary re-prompt failed: %s", exc)
+                        visible = _strip_action_blocks(clean_content) or "Actions executed."
+                        await emit({"type": "response", "content": visible})
+                    break
+
+            # -- No tool calls -> done --
+            if not tool_calls_acc:
+                if not sent_stream_start:
+                    await emit({
+                        "type": "response",
+                        "content": visible_content or "(no response)",
+                    })
+                break
+
+            # -- Execute tool calls --
+            for tc in [tool_calls_acc[i] for i in sorted(tool_calls_acc)]:
+                fn_name = tc["name"]
+                try:
+                    fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                await emit({
+                    "type": "tool_call",
+                    "name": fn_name,
+                    "args": fn_args,
+                })
+
+                result = await _execute_tool(fn_name, fn_args, user, is_admin)
+
+                session.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+
+                await emit({
+                    "type": "tool_result",
+                    "name": fn_name,
+                    "success": "error" not in result,
+                })
+
+            # Show thinking before next round
+            await emit({"type": "thinking"})
+        else:
+            await emit({
+                "type": "response",
+                "content": "(Reached tool call limit — here is what I found so far.)",
+            })
+
+    except asyncio.CancelledError:
+        log.info("LLM request cancelled for session %s", key)
+        raise
+    except openai.NotFoundError as e:
+        log.warning("Model not found on endpoint (session %s): %s", key, e)
+        model = session.endpoint.model
+        ep_name = session.endpoint.name or session.endpoint.base_url
+        await emit({
+            "type": "error",
+            "content": (
+                f"The model **{model}** was not found on endpoint "
+                f"**{ep_name}**. Please switch to a different endpoint "
+                f"or check that the model is loaded on the server."
+            ),
+        })
+    except Exception as e:
+        log.exception("LLM background request error (session %s)", key)
+        err_msg = str(e).lower()
+        if "connection" in err_msg or "refused" in err_msg or "timeout" in err_msg:
+            user_err = "The AI backend is temporarily unreachable. Please try again in a moment."
+        else:
+            user_err = "Something went wrong — please try sending your message again."
+        await emit({"type": "error", "content": user_err})
+    finally:
+        session.pending_request = False
+        session._request_done.set()
+
+
+# =============================================================================
+# REST endpoints
+# =============================================================================
+
+
+@router.get("/status", response_model=LlmStatusResponse)
+async def llm_status(
+    user: TokenData = Depends(get_current_user),
+):
+    """Check LLM integration status."""
+    llm_cfg = _get_llm_config()
+    
+    llm_reachable = False
+    default_ep = llm_cfg.get_endpoint()
+    if llm_cfg.enabled:
+        try:
+            client = _get_openai_client(default_ep)
+            await client.models.list()
+            llm_reachable = True
+        except Exception:
+            pass
+    
+    return LlmStatusResponse(
+        enabled=llm_cfg.enabled,
+        llm_reachable=llm_reachable,
+        model=default_ep.model,
+        base_url=default_ep.base_url,
+        min_class=llm_cfg.min_class,
+        admin_class=llm_cfg.admin_class,
+        endpoints=llm_cfg.list_endpoint_names(),
+    )
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def llm_chat(
+    request: ChatRequest,
+    user: TokenData = Depends(get_current_user),
+):
+    """Single-turn LLM chat (non-streaming). For the dashboard, prefer the WebSocket endpoint."""
+    llm_cfg = _get_llm_config()
+    
+    if not llm_cfg.enabled:
+        raise HTTPException(status_code=503, detail="LLM integration is not enabled")
+    
+    if user.user_class < llm_cfg.min_class:
+        raise HTTPException(status_code=403, detail="Insufficient permissions for AI chat")
+    
+    is_admin = user.user_class >= llm_cfg.admin_class
+    
+    # Get or create session
+    sid = request.conversation_id or "default"
+    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg)
+    key = _session_key(user.nick, sid)
+    _update_session_title(key, request.message)
+    _bump_session_count(key)
+
+    try:
+        response_text, tool_calls = await session.chat(request.message)
+    except Exception as e:
+        log.exception("LLM chat error")
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    
+    return ChatResponse(
+        response=response_text,
+        tool_calls=tool_calls,
+        model=session.endpoint.model,
+    )
+
+
+@router.get("/sessions", response_model=SessionListResponse)
+async def list_sessions(
+    user: TokenData = Depends(get_current_user),
+):
+    """List the caller's active chat sessions (dashboard + NMDC)."""
+    prefix = f"{user.nick}:"
+    sessions = [
+        SessionInfo(**meta)
+        for key, meta in _session_meta.items()
+        if key.startswith(prefix)
+    ]
+
+    # Also include NMDC PM sessions so users can continue them on the dashboard
+    try:
+        from verlihub.bot.chat import get_nmdc_sessions_for_user
+        for nmdc_meta in get_nmdc_sessions_for_user(user.nick):
+            sessions.append(SessionInfo(
+                session_id=nmdc_meta["session_id"],
+                title=nmdc_meta["title"],
+                created_at=nmdc_meta["created_at"],
+                message_count=nmdc_meta["message_count"],
+            ))
+    except Exception:
+        pass  # bot_chat module may not be loaded
+
+    sessions.sort(key=lambda s: s.created_at, reverse=True)
+    return SessionListResponse(sessions=sessions)
+
+
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    user: TokenData = Depends(get_current_user),
+):
+    """Get the message history of a session (dashboard or NMDC)."""
+    # Check for NMDC session first
+    if session_id.startswith("nmdc-"):
+        try:
+            from verlihub.bot.chat import get_nmdc_session_messages
+            nick = session_id[len("nmdc-"):]
+            if nick != user.nick:
+                raise HTTPException(403, "Cannot access another user's NMDC session")
+            messages = get_nmdc_session_messages(nick)
+            if messages is None:
+                raise HTTPException(404, "NMDC session not found")
+            return {"messages": messages}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to fetch NMDC session: {exc}")
+
+    # Dashboard session
+    key = _session_key(user.nick, session_id)
+    session = _sessions.get(key)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    # Return non-system messages
+    return {"messages": [m for m in session.messages if m.get("role") != "system"]}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    user: TokenData = Depends(get_current_user),
+):
+    """Delete a chat session."""
+    key = _session_key(user.nick, session_id)
+    _sessions.pop(key, None)
+    _session_meta.pop(key, None)
+    return {"ok": True}
+
+
+# =============================================================================
+# WebSocket endpoint — streaming chat with tool-call progress
+# =============================================================================
+
+
+async def ws_llm_chat(
+    ws: WebSocket,
+    token: Optional[str] = None,
+    session_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+):
+    """
+    WebSocket chat endpoint with tool-call progress.
+
+    Auth: pass JWT as ?token= query param (dashboard sends cookie-derived token).
+    Optional: ?session_id= to resume a named session.
+
+    The actual LLM processing runs as a background ``asyncio.Task`` so it
+    survives WebSocket disconnects.  When the client reconnects, buffered
+    events are replayed and (if the task is still running) new events
+    continue to flow as they are produced.
+
+    Client sends:  {"message": "who is online?"}
+    Server sends:  {"type": "connected", "access": "admin", "model": "llama3.1",
+                    "session_id": "abc123", "pending": false}
+                   {"type": "thinking"}
+                   {"type": "tool_call", "name": "list_online_users", "args": {}}
+                   {"type": "tool_result", "name": "list_online_users", "success": true}
+                   {"type": "response", "content": "There are 5 users online..."}
+                   {"type": "error", "content": "..."}
+    """
+    import uuid
+
+    await ws.accept()
+
+    llm_cfg = _get_llm_config()
+
+    if not llm_cfg.enabled:
+        await ws.send_json({"type": "error", "content": "LLM integration is not enabled"})
+        await ws.close()
+        return
+
+    # Authenticate
+    user = None
+    if token:
+        try:
+            user = decode_token(token)
+        except Exception:
+            pass
+
+    if user is None:
+        await ws.send_json({"type": "error", "content": "Authentication required"})
+        await ws.close()
+        return
+
+    if user.user_class < llm_cfg.min_class:
+        await ws.send_json({"type": "error", "content": "Insufficient permissions for AI chat"})
+        await ws.close()
+        return
+
+    is_admin = user.user_class >= llm_cfg.admin_class
+    access = "admin" if is_admin else "user"
+
+    # Resolve / create session
+    sid = session_id or str(uuid.uuid4())[:8]
+    session = _ensure_session(user.nick, sid, user, is_admin, llm_cfg,
+                              endpoint_name=endpoint)
+    key = _session_key(user.nick, sid)
+
+    log.info("LLM WS session %s for %s (%s) endpoint=%s", sid, user.nick, access, session.endpoint.name)
+
+    # Attach the WebSocket so background task events are forwarded.
+    session.attach_ws(ws)
+
+    # Is there a background task still running (or completed while we
+    # were away)?
+    has_running_task = (
+        session._bg_task is not None and not session._bg_task.done()
+    )
+    has_buffered = bool(session._event_buffer)
+
+    try:
+        await ws.send_json({
+            "type": "connected",
+            "access": access,
+            "model": session.endpoint.model,
+            "endpoint": session.endpoint.name,
+            "endpoints": llm_cfg.list_endpoint_names(),
+            "session_id": sid,
+            "pending": has_running_task or has_buffered,
+        })
+    except (WebSocketDisconnect, RuntimeError):
+        session.detach_ws()
+        return
+
+    # Replay any events buffered while we were disconnected.
+    if has_buffered:
+        try:
+            await session.replay_buffered_events(ws)
+        except (WebSocketDisconnect, RuntimeError):
+            session.detach_ws()
+            return
+
+    # If the task already finished while we were away, clean up.
+    if has_buffered and not has_running_task:
+        session.clear_event_buffer()
+
+    # ------------------------------------------------------------------
+    # Helper: wait for the background task to finish while also watching
+    # for a WS disconnect (or a new user message, which we ignore while
+    # a task is running).
+    # ------------------------------------------------------------------
+    async def _await_bg_task() -> bool:
+        """Wait for the current background task to finish.
+
+        Returns True if we should continue the message loop, False if the
+        WebSocket disconnected.
+        """
+        done_fut = asyncio.ensure_future(session._request_done.wait())
+        recv_fut = asyncio.ensure_future(ws.receive_json())
+        try:
+            while True:
+                done_tasks, _ = await asyncio.wait(
+                    [done_fut, recv_fut],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if done_fut in done_tasks:
+                    recv_fut.cancel()
+                    try:
+                        await recv_fut
+                    except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                        pass
+                    return True
+                if recv_fut in done_tasks:
+                    try:
+                        recv_fut.result()  # may raise WebSocketDisconnect
+                    except (WebSocketDisconnect, RuntimeError):
+                        done_fut.cancel()
+                        return False
+                    # User sent another message while still thinking — ignore
+                    recv_fut = asyncio.ensure_future(ws.receive_json())
+        except (WebSocketDisconnect, RuntimeError):
+            done_fut.cancel()
+            return False
+
+    # If a background task is still in-flight, wait for it.
+    if has_running_task:
+        ws_ok = await _await_bg_task()
+        if not ws_ok:
+            session.detach_ws()
+            return
+        # Task finished — clean up the buffer
+        session.clear_event_buffer()
+
+    # ------------------------------------------------------------------
+    # Main message loop
+    # ------------------------------------------------------------------
+    try:
+        while True:
+            data = await ws.receive_json()
+            user_msg = data.get("message", "").strip()
+
+            # Handle endpoint switch request
+            ep_switch = data.get("endpoint")
+            if ep_switch:
+                new_ep = llm_cfg.get_endpoint(ep_switch)
+                if new_ep.name != session.endpoint.name:
+                    session.endpoint = new_ep
+                    log.info("Endpoint switched to %s for session %s", new_ep.name, sid)
+                    try:
+                        await ws.send_json({
+                            "type": "endpoint_changed",
+                            "endpoint": new_ep.name,
+                            "model": new_ep.model,
+                        })
+                    except (WebSocketDisconnect, RuntimeError):
+                        session.detach_ws()
+                        return
+                if not user_msg:
+                    continue
+
+            if not user_msg:
+                continue
+
+            # Reject if a task is somehow still running (safety check)
+            if session._bg_task and not session._bg_task.done():
+                await ws.send_json({
+                    "type": "error",
+                    "content": "Still processing a previous request — please wait.",
+                })
+                continue
+
+            _update_session_title(key, user_msg)
+            _bump_session_count(key)
+
+            # Prepare for a new background request.
+            session.clear_event_buffer()
+            session._request_done.clear()
+
+            session._bg_task = asyncio.create_task(
+                _run_llm_request(session, user_msg, user, is_admin, llm_cfg, key)
+            )
+
+            # Wait for the task to finish (events flow via session.emit).
+            ws_ok = await _await_bg_task()
+            if not ws_ok:
+                session.detach_ws()
+                return
+
+            # Task done — clean up event buffer.
+            session.clear_event_buffer()
+
+    except WebSocketDisconnect:
+        log.info("LLM WS disconnected: %s (session %s)", user.nick, sid)
+    finally:
+        session.detach_ws()

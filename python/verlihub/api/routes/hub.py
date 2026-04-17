@@ -14,6 +14,7 @@ from verlihub.api.auth import (
     Permission,
     RequireAdmin,
     RequireMaster,
+    RequireOperator,
     TokenData,
     get_current_user_optional,
     require_permission,
@@ -144,7 +145,7 @@ def get_hub_start_time() -> float:
 
 
 @router.get("/info", response_model=HubInfo)
-async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
+def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
     """Get full hub information including uptime and MOTD."""
     try:
         hub_name = ctx.get_config("config", "hub_name", "Verlihub")
@@ -197,7 +198,7 @@ async def get_hub_info(ctx=Depends(get_hub_context)) -> HubInfo:
 
 
 @router.get("/status", response_model=HubStatus)
-async def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
+def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
     """Get current hub status."""
     total_share = ctx.total_share
     return HubStatus(
@@ -213,7 +214,7 @@ async def get_hub_status(ctx=Depends(get_hub_context)) -> HubStatus:
 
 
 @router.get("/config", response_model=HubConfig)
-async def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
+def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
     """Get hub configuration."""
     return HubConfig(
         hub_name=ctx.get_config("config", "hub_name"),
@@ -231,35 +232,89 @@ async def get_hub_config(ctx=Depends(get_hub_context)) -> HubConfig:
 
 class HubConfigUpdate(BaseModel):
     """Request to update hub configuration."""
+    # General
     hub_name: Optional[str] = None
     hub_desc: Optional[str] = None
     hub_topic: Optional[str] = None
     hub_host: Optional[str] = None
     hub_owner: Optional[str] = None
     hub_encoding: Optional[str] = None
+    hub_category: Optional[str] = None
+    # Network — UI sends "port" and "enable_tls"; accept both names
     listen_port: Optional[int] = None
+    port: Optional[int] = None          # alias for listen_port (UI data-key)
+    listen_ip: Optional[str] = None
+    tls_enabled: Optional[bool] = None
+    enable_tls: Optional[bool] = None   # alias for tls_enabled (UI data-key)
+    use_regserver: Optional[bool] = None
+    regserver_host: Optional[str] = None
+    hublist_servers: Optional[list[str]] = None
+    hublist_server_enabled: Optional[bool] = None
+    # Limits
     max_users: Optional[int] = None
     min_share: Optional[int] = None
-    tls_enabled: Optional[bool] = None
+    min_slots: Optional[int] = None
+    max_hubs_user: Optional[int] = None
+    max_hubs_op: Optional[int] = None
+    max_conn_per_ip: Optional[int] = None
+    # Security settings
+    allow_unregistered: Optional[bool] = None
+    require_password: Optional[bool] = None
+    login_timeout: Optional[int] = None
+    max_pass_attempts: Optional[int] = None
+    flood_protection: Optional[int] = None
+    chat_filter: Optional[bool] = None
+    anti_clone: Optional[bool] = None
+    registration_require_invite: Optional[bool] = None
+    # Messages
+    hub_motd: Optional[str] = None
+    hub_security: Optional[str] = None
+    opchat_name: Optional[str] = None
 
 
 @router.put("/config")
-async def update_hub_config(
+def update_hub_config(
     request: HubConfigUpdate,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.ADMIN)),
 ) -> dict:
     """Update hub configuration. Requires ADMIN (5) permission."""
     updated = {}
+
+    # Resolve UI alias names: "port" → "listen_port", "enable_tls" → "tls_enabled"
+    effective_listen_port = request.listen_port if request.listen_port is not None else request.port
+    effective_tls = request.tls_enabled if request.tls_enabled is not None else request.enable_tls
+
     field_map = {
         "hub_name": ("config", "hub_name"),
         "hub_desc": ("config", "hub_desc"),
         "hub_host": ("config", "hub_host"),
         "hub_owner": ("config", "hub_owner"),
         "hub_encoding": ("config", "hub_encoding"),
-        "listen_port": ("config", "listen_port"),
+        "hub_category": ("config", "hub_category"),
+        "hub_security": ("config", "hub_security"),
+        "opchat_name": ("config", "opchat_name"),
+        "listen_ip": ("config", "listen_ip"),
+        "regserver_host": ("config", "regserver_host"),
         "max_users": ("config", "max_users"),
         "min_share": ("config", "min_share"),
+        "min_slots": ("config", "min_slots"),
+        "max_hubs_user": ("config", "max_hubs_user"),
+        "max_hubs_op": ("config", "max_hubs_op"),
+        "max_conn_per_ip": ("config", "max_conn_per_ip"),
+        "login_timeout": ("config", "login_timeout"),
+        "max_pass_attempts": ("config", "max_pass_attempts"),
+        "flood_protection": ("config", "flood_protection"),
+    }
+
+    # Boolean fields that need "0"/"1" conversion
+    bool_field_map = {
+        "allow_unregistered": ("config", "allow_unregistered"),
+        "require_password": ("config", "require_password"),
+        "chat_filter": ("config", "chat_filter"),
+        "anti_clone": ("config", "anti_clone"),
+        "registration_require_invite": ("config", "registration_require_invite"),
+        "use_regserver": ("config", "use_regserver"),
     }
 
     for field, (section, key) in field_map.items():
@@ -268,19 +323,81 @@ async def update_hub_config(
             ctx.set_config(section, key, str(value))
             updated[field] = value
 
+    for field, (section, key) in bool_field_map.items():
+        value = getattr(request, field, None)
+        if value is not None:
+            ctx.set_config(section, key, "1" if value else "0")
+            updated[field] = value
+
+    # Aliased fields: listen_port / port, tls_enabled / enable_tls
+    if effective_listen_port is not None:
+        ctx.set_config("config", "listen_port", str(effective_listen_port))
+        updated["listen_port"] = effective_listen_port
+
+    if effective_tls is not None:
+        ctx.set_config("config", "tls_enabled", "1" if effective_tls else "0")
+        updated["tls_enabled"] = effective_tls
+
+    # Hub topic — set directly on the context property
     if request.hub_topic is not None:
         ctx.hub_topic = request.hub_topic
         updated["hub_topic"] = request.hub_topic
 
-    if request.tls_enabled is not None:
-        ctx.set_config("config", "tls_enabled", "1" if request.tls_enabled else "0")
-        updated["tls_enabled"] = request.tls_enabled
+    # MOTD — stored as a file, not a C++ config key
+    if request.hub_motd is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            config_dir = cfg._config_dir if cfg else "/etc/verlihub"
+            motd_file = Path(config_dir) / "motd"
+            motd_file.write_text(request.hub_motd, encoding="utf-8")
+            updated["hub_motd"] = request.hub_motd
+            # Push to live server so new connections see it immediately
+            try:
+                ctx.set_motd(request.hub_motd)
+            except AttributeError:
+                pass  # SWIG wrapper may not expose SetMOTD yet
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to write MOTD file: %s", exc)
+
+    # Sync registration_require_invite to the Python config singleton
+    if request.registration_require_invite is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.api.registration_require_invite = request.registration_require_invite
+        except Exception:
+            pass
+
+    # Hublist servers (Python config — list of external hublist servers)
+    if request.hublist_servers is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.hub.hublist_servers = request.hublist_servers
+                updated["hublist_servers"] = request.hublist_servers
+        except Exception:
+            pass
+
+    # Hublist server enabled (Python config — run built-in hublist directory)
+    if request.hublist_server_enabled is not None:
+        try:
+            from verlihub.config import get_config_optional
+            cfg = get_config_optional()
+            if cfg is not None:
+                cfg.hublist.server_enabled = request.hublist_server_enabled
+                updated["hublist_server_enabled"] = request.hublist_server_enabled
+        except Exception:
+            pass
 
     return {"success": True, "updated": updated}
 
 
 @router.put("/topic")
-async def set_hub_topic(
+def set_hub_topic(
     request: HubTopicUpdate,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -296,7 +413,7 @@ class ChatMessageRequest(BaseModel):
 
 
 @router.post("/chat")
-async def send_chat_message(
+def send_chat_message(
     request: ChatMessageRequest,
     ctx=Depends(get_hub_context),
     user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -312,18 +429,26 @@ async def send_chat_message(
         # Broadcast via WebSocket so all dashboard users see it.
         # The C++ SendChatToAll only sends to DC clients, it does NOT
         # trigger the OnChatMessage callback, so we must emit manually.
-        from verlihub.dashboard.websocket import broadcast_hub_event
-        await broadcast_hub_event("chat", {
+        from verlihub.dashboard.websocket import emit_hub_event
+        emit_hub_event("chat", {
             "nick": user.nick,
             "message": request.message,
             "user_class": user.user_class,
         })
 
+        # Dispatch the chat_message event so the bot handler sees it too.
+        # Without this, messages sent from the web dashboard never reach
+        # the bot's _on_chat callback.
+        try:
+            ctx.events.OnChatMessage(user.nick, request.message)
+        except Exception:
+            pass  # best-effort — don't fail the REST response
+
     return {"success": success}
 
 
 @router.post("/broadcast")
-async def broadcast_message(
+def broadcast_message(
     request: BroadcastRequest,
     ctx=Depends(get_hub_context),
     _user: TokenData = Depends(require_permission(Permission.OPERATOR)),
@@ -348,7 +473,7 @@ class HubStartRequest(BaseModel):
 
 
 @router.post("/start")
-async def start_hub(
+def start_hub(
     request: HubStartRequest = HubStartRequest(),
     _user: RequireAdmin = None,
 ) -> dict:
@@ -382,7 +507,7 @@ async def start_hub(
 
 
 @router.post("/shutdown")
-async def shutdown_hub(
+def shutdown_hub(
     ctx=Depends(get_hub_context),
     _user: RequireMaster = None,
 ) -> dict:
@@ -392,7 +517,7 @@ async def shutdown_hub(
 
 
 @router.post("/reload")
-async def reload_config(
+def reload_config(
     ctx=Depends(get_hub_context),
     _user: RequireAdmin = None,
 ) -> dict:
@@ -407,7 +532,7 @@ async def reload_config(
 
 
 @router.get("/geo-stats")
-async def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
+def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
     """Get geographic distribution of online users."""
     from verlihub.enrichment import enrich_user_list, compute_geo_distribution
 
@@ -422,7 +547,7 @@ async def get_geo_stats(ctx=Depends(get_hub_context)) -> dict:
 
 
 @router.get("/share-stats")
-async def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
+def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
     """Get share size statistics for online users."""
     from verlihub.enrichment import compute_share_stats
 
@@ -441,3 +566,492 @@ async def get_share_stats(ctx=Depends(get_hub_context)) -> dict:
         "max_nick": stats.max_nick,
         "zero_share_count": stats.zero_share_count,
     }
+
+
+# =============================================================================
+# Phase 4: ForceMove / Redirect
+# =============================================================================
+
+
+class ForceMoveRequest(BaseModel):
+    nick: str
+    address: str
+
+
+@router.post("/force-move")
+def force_move_user(
+    request: ForceMoveRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Force-move a user to another hub. Requires ADMIN."""
+    if not request.nick or not request.address:
+        raise HTTPException(400, "nick and address are required")
+    ok = ctx.force_move(request.nick, request.address)
+    if not ok:
+        raise HTTPException(404, f"User '{request.nick}' not found or already disconnected")
+    return {"success": True, "nick": request.nick, "address": request.address}
+
+
+# =============================================================================
+# Phase 4: Protocol Statistics
+# =============================================================================
+
+
+@router.get("/protocol-stats")
+def get_protocol_stats(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get protocol-level message counters. Requires OPERATOR."""
+    return ctx.get_protocol_stats()
+
+
+# =============================================================================
+# Phase 4: GeoIP Lookup
+# =============================================================================
+
+
+@router.get("/geoip/{ip}")
+def geoip_lookup(
+    ip: str,
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Look up GeoIP data for an IP address. Requires OPERATOR."""
+    result = ctx.lookup_geoip(ip)
+    if not result.get("available"):
+        raise HTTPException(404, f"No GeoIP data for '{ip}'")
+    return result
+
+
+# =============================================================================
+# Phase 4: User IP Lookup (WhoIP)
+# =============================================================================
+
+
+@router.get("/whoip/{ip}")
+def who_ip(
+    ip: str,
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Find users by IP address. Requires OPERATOR."""
+    users = ctx.get_user_list()
+    matches = [
+        {"nick": u["nick"], "user_class": u["user_class"], "share": u["share"]}
+        for u in users
+        if u.get("ip") == ip
+    ]
+    return {"ip": ip, "count": len(matches), "users": matches}
+
+
+# =============================================================================
+# Phase 4: Flood Protection Config
+# =============================================================================
+
+FLOOD_TYPES = {
+    "chat": 0, "pm": 1, "search": 2, "myinfo": 3, "ctm": 4, "extjson": 5,
+}
+FLOOD_TYPE_NAMES = {v: k for k, v in FLOOD_TYPES.items()}
+
+
+class FloodConfigUpdate(BaseModel):
+    flood_type: str  # "chat", "pm", "search", "myinfo", "ctm", "extjson"
+    period_ms: int
+    max_tokens: int
+
+
+@router.get("/flood-config")
+def get_flood_config(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get all flood protection settings. Requires OPERATOR."""
+    configs = {}
+    for name, type_id in FLOOD_TYPES.items():
+        period_ms, max_tokens = ctx.get_flood_config(type_id)
+        configs[name] = {"period_ms": period_ms, "max_tokens": max_tokens}
+    return configs
+
+
+@router.put("/flood-config")
+def set_flood_config(
+    request: FloodConfigUpdate,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Update flood protection for a message type. Requires ADMIN."""
+    type_id = FLOOD_TYPES.get(request.flood_type.lower())
+    if type_id is None:
+        raise HTTPException(400, f"Unknown flood type '{request.flood_type}'. Valid: {list(FLOOD_TYPES.keys())}")
+    if request.period_ms < 100:
+        raise HTTPException(400, "period_ms must be >= 100")
+    if request.max_tokens < 1:
+        raise HTTPException(400, "max_tokens must be >= 1")
+    ctx.set_flood_config(type_id, request.period_ms, request.max_tokens)
+    return {"success": True, "flood_type": request.flood_type, "period_ms": request.period_ms, "max_tokens": request.max_tokens}
+
+
+# =============================================================================
+# Phase 4: OpChat
+# =============================================================================
+
+
+class OpChatRequest(BaseModel):
+    message: str
+    from_nick: str = ""
+
+
+@router.post("/opchat")
+def send_opchat(
+    request: OpChatRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to OpChat. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ok = ctx.send_to_opchat(request.message, request.from_nick)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 4: Disconnect User
+# =============================================================================
+
+
+class DisconnectRequest(BaseModel):
+    nick: str
+
+
+@router.post("/disconnect")
+def disconnect_user(
+    request: DisconnectRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Disconnect a user without redirect. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.disconnect_user(request.nick)
+    if not ok:
+        raise HTTPException(404, f"User '{request.nick}' not found")
+    return {"success": True, "nick": request.nick}
+
+
+# =============================================================================
+# Phase 5: Messaging – send_to_active / send_to_passive / broadcast_chat
+# =============================================================================
+
+
+class ClassMessageRequest(BaseModel):
+    message: str
+    min_class: int = 0
+    max_class: int = 10
+
+
+@router.post("/send-to-active")
+def send_to_active(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message only to active-mode users. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_active(request.message)
+    return {"success": True}
+
+
+@router.post("/send-to-passive")
+def send_to_passive(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message only to passive-mode users. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_passive(request.message)
+    return {"success": True}
+
+
+@router.post("/send-to-active-class")
+def send_to_active_class(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to active-mode users in a class range. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_active_class(request.message, request.min_class, request.max_class)
+    return {"success": True}
+
+
+@router.post("/send-to-passive-class")
+def send_to_passive_class(
+    request: ClassMessageRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Send a message to passive-mode users in a class range. Requires ADMIN."""
+    if not request.message:
+        raise HTTPException(400, "message is required")
+    ctx.send_to_passive_class(request.message, request.min_class, request.max_class)
+    return {"success": True}
+
+
+class BroadcastChatRequest(BaseModel):
+    from_nick: str
+    message: str
+
+
+@router.post("/broadcast-chat")
+def broadcast_chat(
+    request: BroadcastChatRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Broadcast a main-chat message as a specific nick. Requires ADMIN."""
+    if not request.from_nick or not request.message:
+        raise HTTPException(400, "from_nick and message are required")
+    ctx.broadcast_chat(request.from_nick, request.message)
+    return {"success": True}
+
+
+# =============================================================================
+# Phase 5: Robot Management
+# =============================================================================
+
+
+class AddRobotRequest(BaseModel):
+    nick: str
+    description: str = ""
+    user_class: int = 3
+
+
+@router.post("/robot")
+def add_robot(
+    request: AddRobotRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add a bot/robot nick to the hub. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.add_robot(request.nick, request.description, request.user_class)
+    return {"success": ok, "nick": request.nick}
+
+
+class RemoveRobotRequest(BaseModel):
+    nick: str
+
+
+@router.delete("/robot")
+def remove_robot(
+    request: RemoveRobotRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Remove a bot/robot nick from the hub. Requires ADMIN."""
+    if not request.nick:
+        raise HTTPException(400, "nick is required")
+    ok = ctx.remove_robot(request.nick)
+    return {"success": ok, "nick": request.nick}
+
+
+# =============================================================================
+# Phase 5: Active/Passive User Counts
+# =============================================================================
+
+
+@router.get("/active-passive-counts")
+def get_active_passive_counts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Get active and passive user counts. Requires OPERATOR."""
+    return {"active": ctx.get_active_user_count(), "passive": ctx.get_passive_user_count()}
+
+
+# =============================================================================
+# Phase 5: Plugin Management
+# =============================================================================
+
+
+@router.get("/plugins")
+def list_plugins(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded plugins. Requires OPERATOR."""
+    return ctx.get_loaded_plugins()
+
+
+class PluginPathRequest(BaseModel):
+    plugin_path: str
+
+
+class PluginNameRequest(BaseModel):
+    plugin_name: str
+
+
+@router.post("/plugins/load")
+def load_plugin(
+    request: PluginPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a plugin by path. Requires ADMIN."""
+    ok = ctx.load_plugin(request.plugin_path)
+    return {"success": ok}
+
+
+@router.post("/plugins/unload")
+def unload_plugin(
+    request: PluginNameRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a plugin by name. Requires ADMIN."""
+    ok = ctx.unload_plugin(request.plugin_name)
+    return {"success": ok}
+
+
+@router.post("/plugins/reload")
+def reload_plugin(
+    request: PluginNameRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Reload a plugin by name. Requires ADMIN."""
+    ok = ctx.reload_plugin(request.plugin_name)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 5: Script Management (Lua / Python)
+# =============================================================================
+
+
+@router.get("/lua-scripts")
+def list_lua_scripts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded Lua scripts. Requires OPERATOR."""
+    return ctx.get_loaded_lua_scripts()
+
+
+class ScriptPathRequest(BaseModel):
+    script_path: str
+
+
+@router.post("/lua-scripts/load")
+def load_lua_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a Lua script. Requires ADMIN."""
+    ok = ctx.execute_lua_script(request.script_path)
+    return {"success": ok}
+
+
+@router.post("/lua-scripts/unload")
+def unload_lua_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a Lua script. Requires ADMIN."""
+    ok = ctx.unload_lua_script(request.script_path)
+    return {"success": ok}
+
+
+@router.get("/python-scripts")
+def list_python_scripts(
+    _user: RequireOperator = None,
+    ctx=Depends(get_hub_context),
+) -> list:
+    """List loaded Python scripts. Requires OPERATOR."""
+    return ctx.get_loaded_python_scripts()
+
+
+@router.post("/python-scripts/load")
+def load_python_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Load a Python script. Requires ADMIN."""
+    ok = ctx.execute_python_script(request.script_path)
+    return {"success": ok}
+
+
+@router.post("/python-scripts/unload")
+def unload_python_script(
+    request: ScriptPathRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Unload a Python script. Requires ADMIN."""
+    ok = ctx.unload_python_script(request.script_path)
+    return {"success": ok}
+
+
+# =============================================================================
+# Phase 5: Ban Cache Operations
+# =============================================================================
+
+
+@router.post("/ban-cache/sync")
+def sync_ban_cache(
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Reload ban cache from database. Requires ADMIN."""
+    ctx.load_ban_cache()
+    return {"success": True}
+
+
+class BanCacheIpRequest(BaseModel):
+    ip: str
+
+
+class BanCacheNickRequest(BaseModel):
+    nick: str
+
+
+@router.post("/ban-cache/add-ip")
+def add_ban_cache_ip(
+    request: BanCacheIpRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add an IP to the in-memory ban cache. Requires ADMIN."""
+    ctx.add_ban_cache_ip(request.ip)
+    return {"success": True}
+
+
+@router.post("/ban-cache/add-nick")
+def add_ban_cache_nick(
+    request: BanCacheNickRequest,
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Add a nick to the in-memory ban cache. Requires ADMIN."""
+    ctx.add_ban_cache_nick(request.nick)
+    return {"success": True}
+
+
+@router.post("/ban-cache/clear")
+def clear_ban_cache(
+    _user: RequireAdmin = None,
+    ctx=Depends(get_hub_context),
+) -> dict:
+    """Clear the entire in-memory ban cache. Requires ADMIN."""
+    ctx.clear_ban_cache()
+    return {"success": True}

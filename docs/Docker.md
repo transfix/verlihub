@@ -658,8 +658,8 @@ api:
 
 llm:
   enabled: true
-  base_url: "https://vllm-qwen35-35b.tinyhost.xyz/v1"
-  model: "Qwen3.5-27B-Q4_K_M.gguf"
+  base_url: "https://qwopus.tinyhost.xyz/v1"
+  model: "Qwopus3.5-27B-v3.5-Q5_K_M.gguf"
   api_key: "none"
   temperature: 0.3
   max_tokens: 2048

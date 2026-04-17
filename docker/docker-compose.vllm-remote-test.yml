@@ -61,8 +61,8 @@ services:
         --api-url http://vllm-hub:8000
         --admin-user admin
         --admin-pass admin123
-        --model Qwen3.5-27B-Q4_K_M.gguf
-        --vllm-url https://vllm-qwen35-35b.tinyhost.xyz
+        --model Qwopus3.5-27B-v3.5-Q5_K_M.gguf
+        --vllm-url https://qwopus.tinyhost.xyz
     networks:
       - vllm-test-network
 

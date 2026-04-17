@@ -23,7 +23,7 @@ jobs:
         id: vllm-check
         run: |
           echo "Checking remote vLLM endpoint..."
-          if curl -sf --max-time 10 https://vllm-qwen35-35b.tinyhost.xyz/v1/models > /dev/null; then
+          if curl -sf --max-time 10 https://qwopus.tinyhost.xyz/v1/models > /dev/null; then
             echo "vLLM endpoint is reachable"
             echo "reachable=true" >> "$GITHUB_OUTPUT"
           else

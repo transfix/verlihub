@@ -460,7 +460,7 @@ run_vllm_remote_tests() {
     cd "$PROJECT_DIR"
 
     # Quick reachability check
-    if curl -sf --max-time 10 https://vllm-qwen35-35b.tinyhost.xyz/v1/models > /dev/null 2>&1; then
+    if curl -sf --max-time 10 https://qwopus.tinyhost.xyz/v1/models > /dev/null 2>&1; then
         log_success "Remote vLLM endpoint is reachable"
     else
         log_warning "Remote vLLM endpoint may be unreachable — tests may fail"

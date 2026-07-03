@@ -17,6 +17,8 @@ A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 - **Remote Client** - Python client library for hub administration
 - **NMDCpb Protocol Extension** - Protobuf structured messaging with hub-relayed
   transfers, E2E encrypted PM, media sharing, channels, and voice/video signaling
+- **LLM & MCP Integration** - AI chat assistant with hub tool-calling, an NMDC
+  `Hub-Security` bot, and a Model Context Protocol server for AI editors
 
 ## Quick Start
 
@@ -136,6 +138,28 @@ for non-NMDCpb clients.
 | [NMDCPB_IMPLEMENTATION.md](../docs/NMDCPB_IMPLEMENTATION.md) | Hub plugin architecture, message flow, storage backends |
 | [NMDCPB_ADMIN_GUIDE.md](../docs/NMDCPB_ADMIN_GUIDE.md) | Commands, REST/WebSocket API, dashboard, config, troubleshooting |
 | [NMDCPB_PROTOCOL_WORKFLOWS.md](../docs/NMDCPB_PROTOCOL_WORKFLOWS.md) | End-to-end sequence walkthroughs for every extension |
+
+## LLM & MCP Integration
+
+verlihub-py includes optional LLM integration that connects to any
+**OpenAI-compatible backend** (Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, or a
+hosted API):
+
+- **AI Chat Assistant** — a dashboard chat tab (`POST /api/v1/llm/chat`,
+  streaming over `/ws/llm-chat`) where admins ask natural-language questions and
+  the LLM executes **hub tool-calls** (list users, kick, ban, read stats) and
+  feeds results back for a final answer.
+- **NMDC `Hub-Security` Bot** — hub users chat with an LLM-backed bot via PM or
+  main chat, with session memory, a mood engine, web access (search/fetch/RSS),
+  and persistent notes.
+- **MCP Server** — a [Model Context Protocol](https://modelcontextprotocol.io/)
+  server exposing the hub as tools/resources/prompts to AI editors (VS Code,
+  Claude Desktop) over stdio or HTTP; ships the `verlihub-mcp` CLI.
+
+Enable it in config and point `base_url` at your backend. See
+**[LLM_INTEGRATION.md](docs/LLM_INTEGRATION.md)** for the full architecture,
+configuration reference, setup guides (Ollama/vLLM/llama.cpp), the tool-calling
+flow, bot features, and MCP server/client usage.
 
 ## Performance Benchmarks
 

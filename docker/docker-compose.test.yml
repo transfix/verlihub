@@ -33,8 +33,9 @@ services:
       MYSQL_DATABASE: verlihub_test
       MYSQL_USER: verlihub
       MYSQL_PASSWORD: verlihub
-    ports:
-      - "3306:3306"
+    # No host port publish: test runners reach this DB via the service name
+    # (VH_MYSQL_HOST=mysql) on test-network. Publishing 3306 on the host
+    # collides with any host-side MySQL/other DB on shared self-hosted runners.
     volumes:
       - mysql-test-data:/var/lib/mysql
     healthcheck:
@@ -54,8 +55,10 @@ services:
       POSTGRES_DB: verlihub_test
       POSTGRES_USER: verlihub
       POSTGRES_PASSWORD: verlihub
-    ports:
-      - "5432:5432"
+    # No host port publish: test runners reach this DB via the service name
+    # (VH_POSTGRES_HOST=postgres) on test-network. Publishing 5432 on the host
+    # collides with the production vh-prod-db (and any host Postgres) on
+    # shared self-hosted runners.
     volumes:
       - postgres-test-data:/var/lib/postgresql/data
     healthcheck:

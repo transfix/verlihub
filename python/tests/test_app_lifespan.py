@@ -411,19 +411,35 @@ class TestLifespanSwig:
 # create_app structure
 # ===================================================================
 
+def _app_paths(app):
+    """Collect an app's route paths robustly across FastAPI versions.
+
+    Newer FastAPI wraps included routers in lazy ``_IncludedRouter`` objects
+    that don't expose ``.path``; their endpoints only surface in the OpenAPI
+    schema. Combine directly-attached route paths (e.g. ``@app.get`` routes
+    and mounts) with the OpenAPI paths so both are covered.
+    """
+    paths = {getattr(r, "path", "") for r in app.routes}
+    try:
+        paths.update(app.openapi().get("paths", {}).keys())
+    except Exception:
+        pass
+    return {p for p in paths if p}
+
+
 class TestCreateApp:
     """Test create_app returns properly configured FastAPI app."""
 
     def test_create_app_has_api_routes(self):
         from verlihub.api.app import create_app
         app = create_app()
-        paths = [r.path for r in app.routes]
+        paths = _app_paths(app)
         assert any("/health" in p for p in paths)
 
     def test_create_app_has_dashboard(self):
         from verlihub.api.app import create_app
         app = create_app()
-        paths = [r.path for r in app.routes]
+        paths = _app_paths(app)
         # Dashboard router is mounted at /dashboard
         assert any("dashboard" in str(p) for p in paths)
 

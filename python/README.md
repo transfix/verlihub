@@ -2,6 +2,11 @@
 
 A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 
+> **Fork notice:** `verlihub-py` is a **modified fork** of
+> [Verlihub](https://github.com/verlihub/verlihub), maintained at
+> [github.com/transfix/verlihub](https://github.com/transfix/verlihub). It is not the
+> original project. Licensed GPL-3.0-or-later; all upstream copyrights are preserved.
+
 ## Features
 
 - **REST API** - Full hub management via HTTP endpoints

@@ -25,9 +25,21 @@ A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 ### Installation
 
 ```bash
-cd python
+# From PyPI (recommended)
+pip install verlihub-py
+
+# With LLM / MCP integration extras (OpenAI-compatible client + MCP server)
+pip install "verlihub-py[ai]"
+
+# From source (development)
+git clone https://github.com/transfix/verlihub
+cd verlihub/python
 pip install -e ".[dev]"
 ```
+
+> **Note:** the published wheels bundle the native Verlihub C++ core (built via
+> scikit-build-core + SWIG). A source build additionally needs CMake, SWIG, a
+> C++17 compiler, and the hub's build dependencies.
 
 ### Running the API Server
 
@@ -134,10 +146,10 @@ for non-NMDCpb clients.
 
 | Document | Contents |
 |----------|----------|
-| [NMDCPB_PROTOCOL.md](../docs/NMDCPB_PROTOCOL.md) | Wire format, envelope types, feature negotiation |
-| [NMDCPB_IMPLEMENTATION.md](../docs/NMDCPB_IMPLEMENTATION.md) | Hub plugin architecture, message flow, storage backends |
-| [NMDCPB_ADMIN_GUIDE.md](../docs/NMDCPB_ADMIN_GUIDE.md) | Commands, REST/WebSocket API, dashboard, config, troubleshooting |
-| [NMDCPB_PROTOCOL_WORKFLOWS.md](../docs/NMDCPB_PROTOCOL_WORKFLOWS.md) | End-to-end sequence walkthroughs for every extension |
+| [NMDCPB_PROTOCOL.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_PROTOCOL.md) | Wire format, envelope types, feature negotiation |
+| [NMDCPB_IMPLEMENTATION.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_IMPLEMENTATION.md) | Hub plugin architecture, message flow, storage backends |
+| [NMDCPB_ADMIN_GUIDE.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_ADMIN_GUIDE.md) | Commands, REST/WebSocket API, dashboard, config, troubleshooting |
+| [NMDCPB_PROTOCOL_WORKFLOWS.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_PROTOCOL_WORKFLOWS.md) | End-to-end sequence walkthroughs for every extension |
 
 ## LLM & MCP Integration
 
@@ -157,7 +169,7 @@ hosted API):
   Claude Desktop) over stdio or HTTP; ships the `verlihub-mcp` CLI.
 
 Enable it in config and point `base_url` at your backend. See
-**[LLM_INTEGRATION.md](docs/LLM_INTEGRATION.md)** for the full architecture,
+**[LLM_INTEGRATION.md](https://github.com/transfix/verlihub/blob/master/python/docs/LLM_INTEGRATION.md)** for the full architecture,
 configuration reference, setup guides (Ollama/vLLM/llama.cpp), the tool-calling
 flow, bot features, and MCP server/client usage.
 
@@ -397,4 +409,4 @@ python/
 
 ## License
 
-GPL-3.0-or-later - See [LICENSE](../License.md) for details.
+GPL-3.0-or-later - See [LICENSE](https://github.com/transfix/verlihub/blob/master/License.md) for details.

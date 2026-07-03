@@ -1,0 +1,760 @@
+{% extends "base.html" %}
+
+{% block title %}Plugins - {{ hub_name }}{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title is-4">
+                <i class="fas fa-puzzle-piece mr-2"></i>
+                Plugin Management
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="refreshPlugins()">
+                <i class="fas fa-sync mr-2"></i> Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="columns">
+    <!-- Main Plugin List -->
+    <div class="column is-8">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-list mr-2"></i>
+                Loaded Plugins
+            </h2>
+            
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Version</th>
+                            <th>Status</th>
+                            <th>Auto-load</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="plugins-body">
+                        {% for plugin in plugins %}
+                        <tr data-plugin="{{ plugin.nick }}">
+                            <td>
+                                <strong>{{ plugin.nick }}</strong>
+                                {% if plugin.desc %}
+                                <br><small class="has-text-grey">{{ plugin.desc }}</small>
+                                {% endif %}
+                            </td>
+                            <td>{{ plugin.version or 'N/A' }}</td>
+                            <td>
+                                {% if plugin.loaded %}
+                                <span class="tag is-success">
+                                    <i class="fas fa-check mr-1"></i> Loaded
+                                </span>
+                                {% else %}
+                                <span class="tag is-warning">
+                                    <i class="fas fa-times mr-1"></i> Not Loaded
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if plugin.autoload %}
+                                <span class="tag is-info is-light">Yes</span>
+                                {% else %}
+                                <span class="tag is-light">No</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if plugin.loaded %}
+                                <button class="button is-small is-warning" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'reload')"
+                                        title="Reload plugin">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                                <button class="button is-small is-danger" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'unload')"
+                                        title="Unload plugin">
+                                    <i class="fas fa-power-off"></i>
+                                </button>
+                                {% else %}
+                                <button class="button is-small is-success" 
+                                        onclick="pluginAction('{{ plugin.nick }}', 'load')"
+                                        title="Load plugin">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="has-text-centered has-text-grey">
+                                <i class="fas fa-puzzle-piece mr-2"></i>
+                                No plugins found
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Python Scripts Section -->
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fab fa-python mr-2"></i>
+                Python Scripts
+            </h2>
+            
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Script</th>
+                            <th>Path</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="scripts-body">
+                        {% for script in scripts %}
+                        <tr data-script="{{ script.name }}">
+                            <td><strong>{{ script.name }}</strong></td>
+                            <td><code class="is-size-7">{{ script.path }}</code></td>
+                            <td>
+                                {% if script.loaded %}
+                                <span class="tag is-success">
+                                    <i class="fas fa-check mr-1"></i> Loaded
+                                </span>
+                                {% else %}
+                                <span class="tag is-warning">
+                                    <i class="fas fa-times mr-1"></i> Not Loaded
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if script.loaded %}
+                                <button class="button is-small is-warning" 
+                                        onclick="scriptAction('{{ script.name }}', 'reload')"
+                                        title="Reload script">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                                <button class="button is-small is-danger" 
+                                        onclick="scriptAction('{{ script.name }}', 'unload')"
+                                        title="Unload script">
+                                    <i class="fas fa-power-off"></i>
+                                </button>
+                                {% else %}
+                                <button class="button is-small is-success" 
+                                        onclick="scriptAction('{{ script.name }}', 'load')"
+                                        title="Load script">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" class="has-text-centered has-text-grey">
+                                <i class="fab fa-python mr-2"></i>
+                                No Python scripts found
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Load New Script -->
+            <div class="field has-addons mt-4">
+                <div class="control is-expanded">
+                    <input class="input" type="text" id="new-script-path" placeholder="Script path (e.g., /path/to/script.py)">
+                </div>
+                <div class="control">
+                    <button class="button is-primary" onclick="loadNewScript()">
+                        <i class="fas fa-plus mr-2"></i> Load Script
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Lua Scripts Section -->
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-moon mr-2"></i>
+                Lua Scripts
+            </h2>
+            
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Script</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="lua-scripts-body">
+                        {% for lua_script in lua_scripts %}
+                        <tr data-lua="{{ lua_script.name }}">
+                            <td>
+                                <strong>{{ lua_script.name }}</strong>
+                                {% if lua_script.name == 'ledokol.lua' %}
+                                <br><small class="has-text-grey">
+                                    <a href="https://github.com/Verlihub/ledokol" target="_blank">
+                                        <i class="fas fa-external-link-alt mr-1"></i>70+ features — security, chat, entertainment
+                                    </a>
+                                </small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if lua_script.loaded %}
+                                <span class="tag is-success">
+                                    <i class="fas fa-check mr-1"></i> Loaded
+                                </span>
+                                {% else %}
+                                <span class="tag is-warning">
+                                    <i class="fas fa-times mr-1"></i> Not Loaded
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if lua_script.loaded %}
+                                <button class="button is-small is-warning"
+                                        onclick="luaAction('{{ lua_script.name }}', 'reload')"
+                                        title="Reload script">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                                <button class="button is-small is-danger"
+                                        onclick="luaAction('{{ lua_script.name }}', 'unload')"
+                                        title="Unload script">
+                                    <i class="fas fa-power-off"></i>
+                                </button>
+                                {% else %}
+                                <button class="button is-small is-success"
+                                        onclick="luaAction('{{ lua_script.name }}', 'load')"
+                                        title="Load script">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="has-text-centered has-text-grey">
+                                <i class="fas fa-moon mr-2"></i>
+                                No Lua scripts found
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Load New Lua Script -->
+            <div class="field has-addons mt-4">
+                <div class="control is-expanded">
+                    <input class="input" type="text" id="new-lua-script" placeholder="Script name (e.g., ledokol.lua)">
+                </div>
+                <div class="control">
+                    <button class="button is-info" onclick="luaAction(document.getElementById('new-lua-script').value.trim(), 'load')">
+                        <i class="fas fa-plus mr-2"></i> Load Lua Script
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Ledokol Management Section -->
+        <div class="box" id="ledokol-section">
+            <h2 class="title is-5">
+                <i class="fas fa-ship mr-2"></i>
+                Ledokol — Hub Management Script
+                <a href="https://github.com/Verlihub/ledokol" target="_blank" class="is-size-7 ml-2">
+                    <i class="fas fa-external-link-alt"></i> GitHub
+                </a>
+            </h2>
+            
+            <p class="mb-4 has-text-grey">
+                <a href="https://github.com/Verlihub/ledokol" target="_blank">Ledokol</a> by RoLex — 70+ features for hub security, 
+                chat management, entertainment, and administration.
+            </p>
+            
+            <div class="columns is-multiline">
+                <!-- Ledokol Status -->
+                <div class="column is-6">
+                    <div class="notification is-light" id="ledokol-status-box">
+                        <p class="has-text-weight-bold mb-2">
+                            <i class="fas fa-info-circle mr-1"></i> Status
+                        </p>
+                        <div id="ledokol-status">
+                            <span class="tag is-light">Checking...</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Actions -->
+                <div class="column is-6">
+                    <div class="notification is-light">
+                        <p class="has-text-weight-bold mb-2">
+                            <i class="fas fa-bolt mr-1"></i> Quick Actions
+                        </p>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="ledokolCmd('!ledohelp')">
+                                <i class="fas fa-question-circle mr-1"></i> Help
+                            </button>
+                            <button class="button is-info is-light" onclick="ledokolCmd('!ledostats')">
+                                <i class="fas fa-chart-bar mr-1"></i> Stats
+                            </button>
+                            <button class="button is-info is-light" onclick="ledokolCmd('!ledoconf')">
+                                <i class="fas fa-cog mr-1"></i> Config
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Chat Features -->
+                <div class="column is-4">
+                    <div class="card">
+                        <header class="card-header">
+                            <p class="card-header-title is-size-7">
+                                <i class="fas fa-comments mr-2"></i> Chat
+                            </p>
+                        </header>
+                        <div class="card-content p-3">
+                            <div class="buttons are-small is-flex is-flex-wrap-wrap">
+                                <button class="button is-light" onclick="ledokolCmd('!say Hub-Security Hello from the dashboard!')">!say</button>
+                                <button class="button is-light" onclick="ledokolCmd('+calculate 2+2')">+calc</button>
+                                <button class="button is-light" onclick="ledokolCmd('+history')">+history</button>
+                                <button class="button is-light" onclick="ledokolCmd('+showtopic')">+topic</button>
+                                <button class="button is-light" onclick="ledokolCmd('!clear 5')">!clear</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Content Features -->
+                <div class="column is-4">
+                    <div class="card">
+                        <header class="card-header">
+                            <p class="card-header-title is-size-7">
+                                <i class="fas fa-newspaper mr-2"></i> Content
+                            </p>
+                        </header>
+                        <div class="card-content p-3">
+                            <div class="buttons are-small is-flex is-flex-wrap-wrap">
+                                <button class="button is-light" onclick="ledokolCmd('+hubnews')">+news</button>
+                                <button class="button is-light" onclick="ledokolCmd('!newslist')">!newslist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!repllist')">!repllist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!resplist')">!resplist</button>
+                                <button class="button is-light" onclick="ledokolCmd('+rellist')">+releases</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Security Features -->
+                <div class="column is-4">
+                    <div class="card">
+                        <header class="card-header">
+                            <p class="card-header-title is-size-7">
+                                <i class="fas fa-shield-alt mr-2"></i> Security
+                            </p>
+                        </header>
+                        <div class="card-content p-3">
+                            <div class="buttons are-small is-flex is-flex-wrap-wrap">
+                                <button class="button is-light" onclick="ledokolCmd('!antilist')">!antilist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!sefilist')">!sefilist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!protlist')">!protlist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!gagiplist')">!gagiplist</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- User Management -->
+                <div class="column is-6">
+                    <div class="card">
+                        <header class="card-header">
+                            <p class="card-header-title is-size-7">
+                                <i class="fas fa-users mr-2"></i> Users
+                            </p>
+                        </header>
+                        <div class="card-content p-3">
+                            <div class="buttons are-small is-flex is-flex-wrap-wrap">
+                                <button class="button is-light" onclick="ledokolCmd('!reglist')">!reglist</button>
+                                <button class="button is-light" onclick="ledokolCmd('+cclive')">+cclive</button>
+                                <button class="button is-light" onclick="ledokolCmd('!ipwlist')">!ipwlist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!hblist')">!hblist</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Hub Features -->
+                <div class="column is-6">
+                    <div class="card">
+                        <header class="card-header">
+                            <p class="card-header-title is-size-7">
+                                <i class="fas fa-server mr-2"></i> Hub
+                            </p>
+                        </header>
+                        <div class="card-content p-3">
+                            <div class="buttons are-small is-flex is-flex-wrap-wrap">
+                                <button class="button is-light" onclick="ledokolCmd('+showhubs')">+showhubs</button>
+                                <button class="button is-light" onclick="ledokolCmd('!hublist')">!hublist</button>
+                                <button class="button is-light" onclick="ledokolCmd('!rcmenu')">!rcmenu</button>
+                                <button class="button is-light" onclick="ledokolCmd('!cmndshow')">!cmndshow</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Ledokol Command Input -->
+            <div class="field has-addons mt-4">
+                <div class="control is-expanded">
+                    <input class="input" type="text" id="ledokol-command" 
+                           placeholder="Enter ledokol command (e.g., !ledoset calculator 1)"
+                           onkeypress="if(event.key==='Enter') sendLedokolCmd()">
+                </div>
+                <div class="control">
+                    <button class="button is-link" onclick="sendLedokolCmd()">
+                        <i class="fas fa-paper-plane mr-2"></i> Send
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Command Output -->
+            <div class="mt-3" id="ledokol-output-wrapper" style="display:none;">
+                <p class="has-text-weight-bold mb-2">
+                    <i class="fas fa-terminal mr-1"></i> Output
+                </p>
+                <pre id="ledokol-output" class="has-background-dark has-text-light p-3" style="max-height:250px; overflow-y:auto; border-radius:5px; font-size:0.85em;"></pre>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div class="column is-4">
+        <!-- Plugin Summary -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-chart-pie mr-2"></i>
+                Summary
+            </h3>
+            
+            <div class="content">
+                <table class="table is-narrow is-fullwidth">
+                    <tbody>
+                        <tr>
+                            <td>Total Plugins</td>
+                            <td><strong>{{ plugins|length }}</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Loaded</td>
+                            <td>
+                                <span class="tag is-success">
+                                    {{ plugins|selectattr('loaded')|list|length }}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Python Scripts</td>
+                            <td><strong>{{ scripts|length }}</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Available Plugins Reference -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-info-circle mr-2"></i>
+                Available Plugins
+            </h3>
+            
+            <div class="content is-small">
+                <ul>
+                    <li><strong>plugman</strong> - Plugin Manager</li>
+                    <li><strong>python</strong> - Python Scripting Engine</li>
+                    <li><strong>lua</strong> - Lua Scripting Engine</li>
+                    <li><strong>replacer</strong> - Text Replacement</li>
+                    <li><strong>floodprot</strong> - Flood Protection</li>
+                    <li><strong>messenger</strong> - Offline Messages</li>
+                    <li><strong>stats</strong> - Hub Statistics</li>
+                    <li><strong>pisg</strong> - Statistics Generator</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- Quick Commands -->
+        <div class="box">
+            <h3 class="title is-6">
+                <i class="fas fa-terminal mr-2"></i>
+                Quick Commands
+            </h3>
+            
+            <div class="buttons are-small">
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!lstplug')">
+                    !lstplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!onplug python')">
+                    !onplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('!offplug python')">
+                    !offplug
+                </a>
+                <a href="/dashboard/console" class="button is-link is-light" onclick="runInConsole('+py')">
+                    +py
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Load Script Modal -->
+<div class="modal" id="load-script-modal">
+    <div class="modal-background" onclick="closeModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Load Python Script</p>
+            <button class="delete" aria-label="close" onclick="closeModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label">Script Path</label>
+                <div class="control">
+                    <input class="input" type="text" id="modal-script-path" placeholder="/path/to/script.py">
+                </div>
+                <p class="help">Enter the full path to the Python script</p>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" onclick="submitLoadScript()">Load</button>
+            <button class="button" onclick="closeModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const authToken = '{{ auth_token }}';
+    
+    function refreshPlugins() {
+        location.reload();
+    }
+    
+    async function pluginAction(name, action) {
+        const actionMap = {
+            'load': '!onplug',
+            'unload': '!offplug',
+            'reload': '!replug'
+        };
+        
+        const command = `${actionMap[action]} ${name}`;
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            showNotification(data.success ? 'success' : 'danger', data.message || data.output || 'Command sent');
+            
+            // Refresh after action
+            setTimeout(refreshPlugins, 1000);
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    async function scriptAction(name, action) {
+        const actionMap = {
+            'load': '+py load',
+            'unload': '+py unload',
+            'reload': '+py reload'
+        };
+        
+        const command = `${actionMap[action]} ${name}`;
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            showNotification(data.success ? 'success' : 'danger', data.message || data.output || 'Command sent');
+            
+            // Refresh after action
+            setTimeout(refreshPlugins, 1000);
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    function loadNewScript() {
+        const path = document.getElementById('new-script-path').value.trim();
+        if (!path) {
+            showNotification('warning', 'Please enter a script path');
+            return;
+        }
+        
+        scriptAction(path, 'load');
+    }
+    
+    // Lua script actions
+    async function luaAction(name, action) {
+        if (!name) {
+            showNotification('warning', 'Please enter a script name');
+            return;
+        }
+        
+        const actionMap = {
+            'load': '!luaload',
+            'unload': '!luaunload',
+            'reload': '!luareload'
+        };
+        
+        const command = `${actionMap[action]} ${name}`;
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            showNotification(data.success ? 'success' : 'danger', data.message || data.output || 'Command sent');
+            
+            // Refresh after action
+            setTimeout(refreshPlugins, 1000);
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    // Ledokol command execution
+    async function ledokolCmd(command) {
+        const outputWrapper = document.getElementById('ledokol-output-wrapper');
+        const outputEl = document.getElementById('ledokol-output');
+        
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const data = await response.json();
+            
+            outputWrapper.style.display = 'block';
+            const timestamp = new Date().toLocaleTimeString();
+            const output = data.output || data.message || 'No output';
+            outputEl.textContent = `[${timestamp}] > ${command}\n${output}\n`;
+            outputEl.scrollTop = outputEl.scrollHeight;
+            
+            if (!data.success) {
+                showNotification('warning', data.message || 'Command may have failed');
+            }
+        } catch (error) {
+            showNotification('danger', 'Error: ' + error.message);
+        }
+    }
+    
+    function sendLedokolCmd() {
+        const input = document.getElementById('ledokol-command');
+        const command = input.value.trim();
+        if (!command) {
+            showNotification('warning', 'Please enter a command');
+            return;
+        }
+        ledokolCmd(command);
+        input.value = '';
+    }
+    
+    // Check ledokol status on load
+    async function checkLedokolStatus() {
+        const statusEl = document.getElementById('ledokol-status');
+        try {
+            const response = await fetch('/api/v1/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({ command: '!lualist' })
+            });
+            
+            const data = await response.json();
+            const output = (data.output || data.message || '').toLowerCase();
+            
+            if (output.includes('ledokol')) {
+                statusEl.innerHTML = '<span class="tag is-success"><i class="fas fa-check mr-1"></i> Ledokol loaded</span>';
+                document.getElementById('ledokol-status-box').classList.remove('is-warning');
+                document.getElementById('ledokol-status-box').classList.add('is-success');
+            } else {
+                statusEl.innerHTML = '<span class="tag is-warning"><i class="fas fa-times mr-1"></i> Ledokol not loaded</span>' +
+                    ' <button class="button is-small is-success ml-2" onclick="luaAction(\'ledokol.lua\', \'load\')">' +
+                    '<i class="fas fa-play mr-1"></i> Load</button>';
+                document.getElementById('ledokol-status-box').classList.remove('is-success');
+                document.getElementById('ledokol-status-box').classList.add('is-warning');
+            }
+        } catch (error) {
+            statusEl.innerHTML = '<span class="tag is-danger"><i class="fas fa-exclamation-triangle mr-1"></i> Error checking status</span>';
+        }
+    }
+    
+    // Run ledokol status check on page load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkLedokolStatus);
+    } else {
+        checkLedokolStatus();
+    }
+    
+    function runInConsole(command) {
+        // Store command in sessionStorage for console page
+        sessionStorage.setItem('pendingCommand', command);
+    }
+    
+    function showNotification(type, message) {
+        const container = document.getElementById('notification-container');
+        const notification = document.createElement('div');
+        notification.className = `notification is-${type} is-light`;
+        notification.innerHTML = `
+            <button class="delete" onclick="this.parentElement.remove()"></button>
+            ${message}
+        `;
+        container.appendChild(notification);
+        
+        setTimeout(() => notification.remove(), 5000);
+    }
+    
+    function closeModal() {
+        document.getElementById('load-script-modal').classList.remove('is-active');
+    }
+</script>
+{% endblock %}

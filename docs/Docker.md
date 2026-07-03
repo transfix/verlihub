@@ -12,6 +12,7 @@ This guide explains how to configure and run Verlihub using Docker for both deve
 - [User Management](#user-management)
 - [Matterbridge Integration](#matterbridge-integration)
 - [FastAPI Web Interface](#fastapi-web-interface)
+- [LLM Chat & MCP Integration](#llm-chat--mcp-integration)
 - [Troubleshooting](#troubleshooting)
 
 ## Quick Start
@@ -23,7 +24,7 @@ This guide explains how to configure and run Verlihub using Docker for both deve
 sg docker ./run_integration_tests.sh
 
 # Or run with docker-compose directly
-sg docker docker compose up --build
+sg docker -c "docker compose up --build"
 ```
 
 ### Production
@@ -34,13 +35,13 @@ cp production.example.yml production.yml
 # Edit production.yml with your settings
 
 # 2. Start the hub
-sg docker ./run_production.sh --config production.yml
+sg docker -c "./run_production.sh --config production.yml"
 
 # 3. View logs
-sg docker ./run_production.sh --logs
+sg docker -c "./run_production.sh --logs"
 
 # 4. Stop the hub
-sg docker ./run_production.sh --stop
+sg docker -c "./run_production.sh --stop"
 ```
 
 ## Development Environment
@@ -58,16 +59,16 @@ The development setup uses `docker-compose.yml` for quick testing and developmen
 
 ```bash
 # Build and start
-sg docker docker compose up --build
+sg docker -c "docker compose up --build"
 
 # Run in background
-sg docker docker compose up -d --build
+sg docker -c "docker compose up -d --build"
 
 # View logs
-sg docker docker compose logs -f verlihub
+sg docker -c "docker compose logs -f verlihub"
 
 # Stop and remove
-sg docker docker compose down
+sg docker -c "docker compose down"
 ```
 
 ### Environment Variables
@@ -290,14 +291,21 @@ registration:
 
 ### Hublist Registration
 
+Register this hub on external hublist servers and optionally host a
+built-in hublist directory for other hubs:
+
 ```yaml
+# External hublist servers to register on (in hub section)
+hub:
+  hublist_servers:
+    - hublist.te-home.net
+    - hublist.pwiam.com
+
+# Built-in hublist server (optional)
 hublist:
-  host: "hublist.te-home.net"
-  port: 2501
-  enabled: true
-  interval: 600                 # Ping interval (seconds)
-  send_address: true
-  send_min_share: true
+  server_enabled: true         # serve directory at /api/v1/hublist
+  registration_interval: 600   # client re-registration interval (seconds)
+  stale_timeout: 1800          # prune hubs not pinged within 30 min
 ```
 
 ### Permissions
@@ -357,41 +365,63 @@ docker:
 ## TLS/SSL Configuration
 
 Enable encrypted NMDCS connections for clients.
+In Docker deployments TLS is handled by a lightweight **Go TLS proxy sidecar** that terminates TLS and forwards plaintext NMDC to the hub.
+The proxy also injects `$MyIP` messages so the hub knows each client's real IP and TLS version.
 
-> **Note**: Requires Verlihub built with `USE_FEARTLS_PROXY=ON` or `USE_TLS_PROXY=ON`
+This architecture works identically for both the **py** and **legacy** editions.
+
+### Architecture
+
+```
+Client ─── NMDCS ──▸ TLS Proxy (Go, :411) ─── NMDC ──▸ Hub (:4111)
+```
+
+- TLS termination happens in the sidecar, not in the hub process.
+- The sidecar auto-generates a self-signed certificate when no custom cert is provided.
+- Optional **certbot sidecar** automates Let's Encrypt certificate management.
 
 ### Basic TLS (Self-Signed Certificate)
 
 ```yaml
 tls:
   enabled: true
-  internal_port: 411      # Internal proxy port
-  only_mode: false        # Allow both TLS and non-TLS clients
-  min_version: 2          # TLS 1.2 minimum
+  port: 411               # TLS proxy listen port
+  only_mode: false         # Allow both TLS and non-TLS clients
+  min_version: 2           # TLS 1.2 minimum
   cert_org: "My Hub"
   cert_email: "admin@example.com"
+  cert_host: "hub.example.com"
 ```
 
-Verlihub will automatically generate a self-signed certificate.
+The proxy generates a self-signed certificate automatically.
 
-### TLS with Custom Certificate
+### TLS with Custom Certificates
 
 ```yaml
 tls:
   enabled: true
-  internal_port: 411
-  cert_file: "/path/to/certificate.pem"
-  key_file: "/path/to/private.key"
+  port: 411
+  cert_file: "/path/to/fullchain.pem"
+  key_file: "/path/to/privkey.pem"
 ```
+
+The cert/key files are bind-mounted into the TLS proxy container.
 
 ### TLS with Let's Encrypt
 
+A certbot sidecar obtains and renews certificates automatically.
+Port 80 must be reachable from the internet for the HTTP-01 challenge.
+
 ```yaml
 tls:
   enabled: true
-  internal_port: 411
-  cert_file: "/etc/letsencrypt/live/hub.example.com/fullchain.pem"
-  key_file: "/etc/letsencrypt/live/hub.example.com/privkey.pem"
+  port: 411
+  cert_host: "hub.example.com"
+  letsencrypt:
+    enabled: true
+    domain: "hub.example.com"
+    email: "admin@example.com"
+    staging: false   # set true to use LE staging during testing
 ```
 
 ### TLS-Only Mode
@@ -412,6 +442,12 @@ tls:
 | 1 | TLS 1.1 |
 | 2 | TLS 1.2 (default, recommended) |
 | 3 | TLS 1.3 |
+
+### Legacy Edition Notes
+
+For the legacy C++ hub, `apply_config.py` writes TLS settings to the `SetupList`
+database table (e.g. `tls_listen_port`, `tls_only_mode`, `tls_min_ver`).
+The TLS proxy sidecar is used identically to the py edition.
 
 ### Client Connection
 
@@ -576,6 +612,235 @@ plugin_commands:
 
 Commands are executed as the first master user via NMDC protocol.
 
+## LLM Chat & MCP Integration
+
+Verlihub-py can integrate with any OpenAI-compatible LLM endpoint to provide
+AI-powered chat through the Hub-Security bot and an MCP (Model Context Protocol)
+server for external AI clients.
+
+When enabled:
+
+- Users can **PM Hub-Security** for tool-assisted AI chat (tools vary by user class)
+- Users can **mention Hub-Security in main chat** for conversational replies
+- The **MCP endpoint** at `/api/v1/mcp` exposes hub tools to external AI clients
+
+### Example: Remote vLLM Endpoint (no GPU required)
+
+Use a remote OpenAI-compatible server such as vLLM. No Ollama sidecar is
+started — the hub calls the remote API directly.
+
+**production.yml:**
+
+```yaml
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Local Hub"
+  description: "Local dev hub with LLM + dashboard"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30000
+
+llm:
+  enabled: true
+  base_url: "https://qwopus.tinyhost.xyz/v1"
+  model: "Qwopus3.5-27B-v3.5-Q5_K_M.gguf"
+  api_key: "none"
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 8
+  min_class: 3
+  admin_class: 5
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+lua:
+  enabled: true
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files: ["ledokol.lua"]
+  autoload: ["ledokol.lua"]
+
+python:
+  enabled: true
+python_mode: single
+
+startup_commands:
+  - "!onplug python"
+  - "!onplug lua"
+  - "!api start 30000"
+```
+
+**Launch:**
+
+```bash
+sg docker -c "./run_production.sh --config production.yml --edition py"
+```
+
+### Example: Local Ollama Sidecar (CPU, no GPU)
+
+When `llm.base_url` points to the default Ollama sidecar
+(`http://vh-prod-ollama:11434/v1`), `run_production.sh` automatically starts an
+Ollama container and pulls the configured model on first boot.
+
+**production.yml** — only the `llm:` section differs:
+
+```yaml
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Local Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30000
+
+llm:
+  enabled: true
+  # Default Ollama sidecar URL — run_production.sh starts Ollama for you
+  base_url: "http://vh-prod-ollama:11434/v1"
+  model: "qwen2.5:0.5b"         # ~400 MB, runs on CPU
+  # model: "qwen2.5:3b"          # ~2 GB,  better quality
+  # model: "qwen2.5:7b"          # ~4.5 GB, best quality (GPU recommended)
+  api_key: "ollama"              # Ollama ignores this but the client requires it
+  temperature: 0.3
+  max_tokens: 2048
+  min_class: 3
+  admin_class: 5
+  # Expose Ollama API on the host (optional, 0 = don't expose)
+  # ollama_port: 11434
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+lua:
+  enabled: true
+  github_scripts:
+    - repo: "Verlihub/ledokol"
+      files: ["ledokol.lua"]
+  autoload: ["ledokol.lua"]
+
+python:
+  enabled: true
+python_mode: single
+
+startup_commands:
+  - "!onplug python"
+  - "!onplug lua"
+  - "!api start 30000"
+```
+
+**Launch** (same command — the script detects the Ollama URL and starts the sidecar):
+
+```bash
+sg docker -c "./run_production.sh --config production.yml --edition py"
+```
+
+### What You Get
+
+| Component | Access |
+|-----------|--------|
+| DC++ hub (NMDC) | `dchub://localhost:4111` |
+| Dashboard / REST API | `http://localhost:30000` |
+| LLM chat | PM **Hub-Security** or mention it in main chat (class 3+) |
+| MCP endpoint | `http://localhost:30000/api/v1/mcp` |
+| PostgreSQL | Internal on `postgres:5432` |
+
+### Lifecycle Commands
+
+```bash
+sg docker -c "./run_production.sh --logs"       # tail logs
+sg docker -c "./run_production.sh --status"     # container status
+sg docker -c "./run_production.sh --stop"       # shut down
+sg docker -c "./run_production.sh --restart"    # restart
+```
+
+### LLM Configuration Reference
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `llm.enabled` | `false` | Enable LLM chat integration |
+| `llm.base_url` | `http://vh-prod-ollama:11434/v1` | OpenAI-compatible API base URL |
+| `llm.model` | `qwen2.5:7b` | Model name to use |
+| `llm.api_key` | `ollama` | API key (Ollama ignores this) |
+| `llm.temperature` | `0.3` | Generation temperature |
+| `llm.max_tokens` | `2048` | Maximum tokens per response |
+| `llm.max_tool_rounds` | `8` | Max tool-calling iterations per request |
+| `llm.min_class` | `3` (operator) | Minimum user class to access LLM chat |
+| `llm.admin_class` | `5` (master) | Minimum class for admin-level LLM tools |
+| `llm.ollama_port` | `0` | Expose Ollama API on this host port |
+| `mcp.enabled` | `false` | Enable MCP server endpoint |
+| `mcp.min_class` | `3` | Minimum class for MCP access |
+| `mcp.admin_class` | `5` | Minimum class for admin MCP tools |
+
+#### Bot Behavior
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `bots.behavior.endpoint` | `""` | LLM endpoint name for the bot (empty = default) |
+| `bots.behavior.personality` | `""` | Custom personality injected into system prompts |
+| `bots.behavior.chat_mode` | `"direct"` | How bot responds in main chat (`direct` / `mention` / `keyword`) |
+| `bots.behavior.triggers` | `[]` | Extra keywords that trigger responses (when `chat_mode: keyword`) |
+| `bots.behavior.proactive_interval` | `0` | Seconds between proactive messages (0 = disabled, ±30% jitter) |
+| `bots.behavior.proactive_prompts` | `[]` | Prompts the bot can choose from for proactive messages |
+| `bots.behavior.thinking_interval` | `15` | Seconds between "thinking..." feedback in PM sessions |
+| `bots.behavior.max_chat_length` | `400` | Max characters for main-chat replies |
+| `bots.behavior.mood_enabled` | `false` | Enable dynamic mood engine |
+| `bots.behavior.mood_window` | `3600` | Interaction tracking window in seconds |
+| `bots.behavior.mood_low_interaction` | `2.0` | Msgs/hr below this = "low activity" |
+| `bots.behavior.mood_high_interaction` | `10.0` | Msgs/hr above this = "high activity" |
+| `bots.behavior.mood_low_user_ratio` | `0.5` | Current/avg users below this = "few users" |
+| `bots.behavior.mood_high_user_ratio` | `1.5` | Current/avg users above this = "many users" |
+| `bots.behavior.mood_user_history` | `86400` | Rolling average window for user counts (seconds) |
+| `bots.behavior.web_enabled` | `false` | Give bot web search / fetch / RSS tools |
+| `bots.behavior.rss_feeds` | `[]` | RSS/Atom feed URLs for the bot to read |
+| `bots.behavior.memory_enabled` | `false` | Enable persistent memory (notes in shared database) |
+
+### Tips
+
+- **No GPU?** Use `qwen2.5:0.5b` (~400 MB) with the Ollama sidecar, or point
+  `base_url` at a remote endpoint.
+- **Remote endpoint:** Set `base_url` to any OpenAI-compatible URL
+  (vLLM, Together, OpenRouter, etc.) and `api_key` to the provider's key.
+  No Ollama container is started.
+- **Disable MCP:** Set `mcp.enabled: false` if you only want bot chat.
+- **Class permissions:** `min_class: 0` lets guests use LLM chat;
+  `min_class: 3` restricts it to operators and above.
+
 ## Troubleshooting
 
 ### View Logs
@@ -585,7 +850,7 @@ Commands are executed as the first master user via NMDC protocol.
 ./run_production.sh --logs
 
 # Development logs
-sg docker docker compose logs -f
+sg docker -c "docker compose logs -f"
 
 # Specific container
 docker logs vh-prod-hub -f
@@ -716,9 +981,9 @@ registration:
   request_password: true
 
 hublist:
-  host: "hublist.te-home.net"
-  enabled: true
-  interval: 600
+  server_enabled: true
+  registration_interval: 600
+  stale_timeout: 1800
 
 permissions:
   oplist_class: 3

@@ -29,6 +29,10 @@
 #include "cdcconsole.h"
 #include "i18n.h"
 
+#ifdef WITH_NMDCPB
+#include "cpbtranslate.h"
+#endif
+
 #include <string>
 #include <string.h>
 #include <stdio.h>
@@ -304,6 +308,18 @@ int cDCProto::TreatMsg(cMessageParser *pMsg, cAsyncConn *pConn)
 			this->DC_IN(msg, conn);
 			break;
 
+		case eDC_PB:
+			this->DC_PB(msg, conn);
+			break;
+
+		case eDC_PBB:
+			this->DC_PBB(msg, conn);
+			break;
+
+		case eDC_PBR:
+			this->DC_PBR(msg, conn);
+			break;
+
 		default:
 			if (Log(1))
 				LogStream() << "Incoming untreated command: " << msg->mStr << endl;
@@ -513,6 +529,22 @@ int cDCProto::DC_Supports(cMessageDC *msg, cConnDC *conn)
 
 			if (!mS->mC.disable_extjson)
 				pars.append("ExtJSON2 ");
+
+		} else if ((feature.size() == 6) && (StrCompare(feature, 0, 6, "NMDCpb") == 0)) {
+			conn->mFeatures |= eSF_NMDCPB;
+			pars.append("NMDCpb ");
+
+		} else if ((feature.size() == 8) && (StrCompare(feature, 0, 8, "HubRelay") == 0)) {
+			conn->mFeatures |= eSF_HUBRELAY;
+
+			if (mS->mC.relay_enabled)
+				pars.append("HubRelay ");
+
+		} else if ((feature.size() == 9) && (StrCompare(feature, 0, 9, "RelayOnly") == 0)) {
+			conn->mFeatures |= eSF_RELAYONLY;
+
+			if (mS->mC.relay_enabled)
+				pars.append("RelayOnly ");
 		}
 	}
 
@@ -1654,6 +1686,228 @@ int cDCProto::DC_ExtJSON(cMessageDC *msg, cConnDC *conn)
 	return 0;
 }
 
+/*
+	$PB <nick> <base64data>
+	NMDCpb unicast: sender broadcasts a protobuf-encoded message to all NMDCpb-capable users.
+	Hub also translates to legacy NMDC for non-NMDCpb users when possible.
+*/
+int cDCProto::DC_PB(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) { // check support
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &nick = msg->ChunkString(eCH_PB_NICK);
+
+	if (CheckUserNick(conn, nick))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB)) // protocol flood
+		return -1;
+
+	if ((conn->mpUser->mClass < eUC_OPERATOR) && (mS->mSysLoad >= eSL_CAPACITY)) { // check hub load
+		if (mS->Log(3))
+			mS->LogStream() << "Hub load is too high for NMDCpb: " << mS->mSysLoad << endl;
+
+		return -2;
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		// forward to all users who support NMDCpb
+		string omsg(msg->mStr);
+		mS->mUserList.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+
+		#ifdef WITH_NMDCPB
+		// translation layer: decode protobuf, if PbChat, translate to legacy format
+		// and send to users without NMDCpb support
+		{
+			const string &base64data = msg->ChunkString(eCH_PB_DATA);
+			string legacy;
+
+			if (cPbTranslate::PbToLegacy(base64data, nick, legacy)) {
+				mS->mUserList.SendToAllWithoutFeature(legacy, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+			}
+		}
+		#endif
+	}
+
+	return 0;
+}
+
+/*
+	$PBB <nick> <base64data>
+	NMDCpb broadcast: binary broadcast message (bulk data, file metadata, etc).
+	Only forwarded to NMDCpb-capable users. No legacy translation.
+*/
+int cDCProto::DC_PBB(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) {
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &nick = msg->ChunkString(eCH_PBB_NICK);
+
+	if (CheckUserNick(conn, nick))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB))
+		return -1;
+
+	if ((conn->mpUser->mClass < eUC_OPERATOR) && (mS->mSysLoad >= eSL_CAPACITY)) {
+		if (mS->Log(3))
+			mS->LogStream() << "Hub load is too high for NMDCpb broadcast: " << mS->mSysLoad << endl;
+
+		return -2;
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		// forward only to NMDCpb users, no legacy translation for binary broadcasts
+		string omsg(msg->mStr);
+		mS->mUserList.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_myinfo, true);
+	}
+
+	return 0;
+}
+
+/*
+	$PBR <to_nick> <from_nick> <base64data>
+	NMDCpb routed: protobuf message sent to a specific user (like PM but binary).
+	Requires recipient to also support NMDCpb.
+*/
+int cDCProto::DC_PBR(cMessageDC *msg, cConnDC *conn)
+{
+	if (CheckUserLogin(conn, msg))
+		return -1;
+
+	ostringstream os;
+
+	if (!(conn->mFeatures & eSF_NMDCPB)) {
+		os << _("Invalid login sequence, you didn't specify support for NMDCpb command.");
+
+		if (conn->Log(1))
+			conn->LogStream() << os.str() << endl;
+
+		mS->ConnCloseMsg(conn, os.str(), 1000, eCR_LOGIN_ERR);
+		return -1;
+	}
+
+	if (CheckProtoLen(conn, msg))
+		return -1;
+
+	if (CheckProtoSyntax(conn, msg))
+		return -1;
+
+	const string &from = msg->ChunkString(eCH_PBR_FROM);
+
+	if (CheckUserNick(conn, from))
+		return -1;
+
+	if (conn->CheckProtoFlood(msg->mStr, ePF_NMDCPB))
+		return -1;
+
+	string &to = msg->ChunkString(eCH_PBR_TO);
+	cUser *other = mS->mUserList.GetUserByNick(to); // find target user
+
+	if (!other) {
+		os << autosprintf(_("You're trying to send NMDCpb routed message to an offline user: %s"), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	if (!other->mxConn) {
+		os << autosprintf(_("You're trying to send NMDCpb routed message to a bot: %s"), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	if (!(other->mxConn->mFeatures & eSF_NMDCPB)) { // recipient must support NMDCpb
+		os << autosprintf(_("User %s does not support NMDCpb protocol."), to.c_str());
+		mS->DCPublicHS(os.str(), conn);
+		return -2;
+	}
+
+	// E2EPM permission and size checks
+	// Routed messages may carry E2EPM payloads (key exchange, encrypted PM).
+	// We don't deserialize the protobuf — we check config permissions and size.
+	if (mS->mC.e2epm_enabled) {
+		// Check minimum class for E2EPM
+		if (conn->mpUser->mClass < mS->mC.e2epm_min_class) {
+			os << autosprintf(_("Your user class (%d) is too low to use encrypted PM (minimum: %d)."), conn->mpUser->mClass, mS->mC.e2epm_min_class);
+			mS->DCPublicHS(os.str(), conn);
+			return -2;
+		}
+
+		// Check message size limit
+		const string &data = msg->ChunkString(eCH_PBR_DATA);
+
+		if (data.size() > mS->mC.e2epm_max_msg_size) {
+			os << autosprintf(_("NMDCpb routed message too large: %zu bytes (maximum: %u)."), data.size(), mS->mC.e2epm_max_msg_size);
+			mS->DCPublicHS(os.str(), conn);
+			return -2;
+		}
+	}
+
+	#ifndef WITHOUT_PLUGINS
+	if (mS->mCallBacks.mOnParsedMsgNMDCpb.CallAll(conn, msg))
+	#endif
+	{
+		string omsg(msg->mStr);
+		other->mxConn->Send(omsg, true); // send to target user
+
+		#ifdef WITH_NMDCPB
+		// ECHO route (ADC E-type): also send a copy back to the sender
+		{
+			const string &data = msg->ChunkString(eCH_PBR_DATA);
+
+			if (cPbTranslate::IsEchoRoute(data))
+				conn->Send(omsg, true);
+		}
+		#endif
+	}
+
+	return 0;
+}
+
 int cDCProto::DC_GetINFO(cMessageDC *msg, cConnDC *conn)
 {
 	if (CheckUserLogin(conn, msg))
@@ -1991,7 +2245,30 @@ int cDCProto::DC_Chat(cMessageDC *msg, cConnDC *conn)
 	#endif
 
 	string omsg(msg->mStr);
+
+	#ifdef WITH_NMDCPB
+	// reverse translation: send legacy chat to non-NMDCpb users,
+	// and a protobuf-wrapped version to NMDCpb-capable users
+	mS->mChatUsers.SendToAllWithoutFeature(omsg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+
+	{
+		// detect /me action prefix
+		bool is_action = (text.size() >= 4 && text.compare(0, 4, "/me ") == 0);
+		const string chat_text = is_action ? text.substr(4) : text;
+		string pb_out;
+
+		if (cPbTranslate::LegacyToPb(nick, chat_text, is_action, false, "", pb_out)) {
+			string pb_msg = "$PB " + nick + " " + pb_out;
+			mS->mChatUsers.SendToAllWithFeature(pb_msg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+		} else {
+			// fallback: send legacy format to NMDCpb users too
+			mS->mChatUsers.SendToAllWithFeature(omsg, eSF_NMDCPB, mS->mC.delayed_chat, true);
+		}
+	}
+	#else
 	mS->mChatUsers.SendToAll(omsg, mS->mC.delayed_chat, true); // send it
+	#endif
+
 	return 0;
 }
 
@@ -2005,6 +2282,13 @@ int cDCProto::DC_ConnectToMe(cMessageDC *msg, cConnDC *conn)
 
 	if (conn->CheckProtoFlood(msg->mStr, ePF_CTM)) // protocol flood
 		return -1;
+
+	// Relay-only users must not send or receive $ConnectToMe (IP leakage)
+	if (conn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $ConnectToMe from relay-only user" << endl;
+		return -1;
+	}
 
 	ostringstream os;
 	string &nick = msg->ChunkString(eCH_CM_NICK); // find other user
@@ -2243,6 +2527,14 @@ int cDCProto::DC_ConnectToMe(cMessageDC *msg, cConnDC *conn)
 
 	string ctm;
 	Create_ConnectToMe(ctm, nick, temp, StringFrom(iport), extra);
+
+	// Don't deliver CTM to relay-only users
+	if (other->mxConn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $ConnectToMe to relay-only target: " << nick << endl;
+		return -1;
+	}
+
 	other->mxConn->Send(ctm, true); // send it
 	return 0;
 }
@@ -2262,6 +2554,13 @@ int cDCProto::DC_RevConnectToMe(cMessageDC *msg, cConnDC *conn)
 
 	if (conn->CheckProtoFlood(msg->mStr, ePF_RCTM)) // protocol flood
 		return -1;
+
+	// Relay-only users must not send or receive $RevConnectToMe (triggers CTM with IP)
+	if (conn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $RevConnectToMe from relay-only user" << endl;
+		return -1;
+	}
 
 	ostringstream os;
 	const string &nick = msg->ChunkString(eCH_RC_OTHER); // find other user
@@ -2380,6 +2679,14 @@ int cDCProto::DC_RevConnectToMe(cMessageDC *msg, cConnDC *conn)
 	#endif
 
 	string _str(msg->mStr);
+
+	// Don't deliver RCTM to relay-only users
+	if (other->mxConn->mFeatures & eSF_RELAYONLY) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked $RevConnectToMe to relay-only target: " << nick << endl;
+		return -1;
+	}
+
 	other->mxConn->Send(_str, true); // send it
 	return 0;
 }
@@ -2428,6 +2735,13 @@ int cDCProto::DC_Search(cMessageDC *msg, cConnDC *conn)
 
 		default:
 			break;
+	}
+
+	// Relay-only users must use passive search only (active search leaks IP)
+	if (!passive && (conn->mFeatures & eSF_RELAYONLY)) {
+		if (conn->Log(2))
+			conn->LogStream() << "Blocked active $Search from relay-only user" << endl;
+		return -1;
 	}
 
 	string nick, saddr, addr;

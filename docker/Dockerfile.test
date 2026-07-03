@@ -1,0 +1,60 @@
+# Verlihub Test Runner Image
+#
+# Minimal image for running Python tests against different database backends.
+# Includes the verlihub-py package and test dependencies.
+
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    default-libmysqlclient-dev \
+    pkg-config \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy Python package and requirements
+COPY python/pyproject.toml python/
+COPY python/verlihub/ python/verlihub/
+COPY python/tests/ python/tests/
+
+# Copy docker tests directory
+COPY docker/tests/ docker/tests/
+
+# Install the verlihub package and test dependencies
+RUN pip install --no-cache-dir \
+    pytest>=7.4.0 \
+    pytest-asyncio>=0.23.0 \
+    pytest-cov>=4.1.0 \
+    sqlmodel>=0.0.16 \
+    sqlalchemy[asyncio]>=2.0.0 \
+    aiomysql>=0.2.0 \
+    asyncmy>=0.2.9 \
+    asyncpg>=0.29.0 \
+    aiosqlite>=0.19.0 \
+    pydantic>=2.0.0 \
+    bcrypt>=4.0.0 \
+    python-jose>=3.3.0 \
+    pyyaml>=6.0 \
+    requests>=2.31.0 \
+    python-multipart>=0.0.6 \
+    httpx>=0.26.0 \
+    uvicorn>=0.27.0 \
+    fastapi>=0.109.0 \
+    jinja2>=3.1.0 \
+    openai>=1.12.0 \
+    "mcp[cli]>=1.0.0" \
+    click>=8.0.0 \
+    dnspython>=2.4.0
+
+# Install the verlihub package in editable mode (include ai extra for LLM + MCP tests)
+RUN pip install --no-cache-dir -e "./python[ai]"
+
+# Create results directory
+RUN mkdir -p /app/results
+
+# Default command runs all tests
+CMD ["pytest", "python/tests/", "-v", "--tb=short"]

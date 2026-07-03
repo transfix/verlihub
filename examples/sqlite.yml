@@ -1,0 +1,17 @@
+edition: py
+
+database:
+  type: sqlite
+  path: /data/verlihub.db
+
+hub:
+  name: "My Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  port: 8000

@@ -1,0 +1,428 @@
+{% extends "base.html" %}
+
+{% block title %}Invite Codes - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="title">
+        <i class="fas fa-ticket-alt mr-2"></i>
+        Invite Codes
+    </h1>
+    <p class="subtitle">Manage invite codes for user registration</p>
+    
+    <div id="notification-area"></div>
+    
+    <!-- Admin Section: Allocate Invite Codes -->
+    {% if is_admin %}
+    <div class="box mb-5">
+        <h2 class="title is-5">
+            <i class="fas fa-plus-circle mr-2"></i>
+            Allocate Invite Codes
+        </h2>
+        <p class="subtitle is-6 has-text-grey">
+            Create invite codes and assign them to a user.
+            The invited user will be registered with the specified class (up to the recipient's class).
+        </p>
+        
+        <form id="allocate-form" onsubmit="allocateInvites(event)">
+            <div class="columns">
+                <div class="column is-3">
+                    <div class="field">
+                        <label class="label">User Nick</label>
+                        <div class="control has-icons-left">
+                            <input class="input" type="text" id="alloc-nick" 
+                                   placeholder="Username" required>
+                            <span class="icon is-small is-left">
+                                <i class="fas fa-user"></i>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="field">
+                        <label class="label">Count</label>
+                        <div class="control">
+                            <input class="input" type="number" id="alloc-count"
+                                   value="1" min="1" max="100" required>
+                        </div>
+                    </div>
+                </div>
+                <div class="column is-3">
+                    <div class="field">
+                        <label class="label">Max Class</label>
+                        <div class="control">
+                            <div class="select is-fullwidth">
+                                <select id="alloc-class">
+                                    <option value="1">Registered (1)</option>
+                                    <option value="2">VIP (2)</option>
+                                    <option value="3">Operator (3)</option>
+                                    <option value="4">Cheef (4)</option>
+                                    <option value="5">Admin (5)</option>
+                                    {% if user.user_class >= 10 %}
+                                    <option value="10">Master (10)</option>
+                                    {% endif %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="column is-4">
+                    <div class="field">
+                        <label class="label">&nbsp;</label>
+                        <div class="control">
+                            <button class="button is-primary is-fullwidth" type="submit">
+                                <i class="fas fa-ticket-alt mr-2"></i>
+                                Allocate Codes
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </form>
+        
+        <!-- Newly created codes display -->
+        <div id="new-codes" class="mt-4" style="display: none;">
+            <div class="notification is-success is-light">
+                <p class="mb-2"><strong>Codes created successfully!</strong></p>
+                <div id="new-codes-list" class="content">
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- My Invite Codes -->
+    <div class="box mb-5">
+        <h2 class="title is-5">
+            <i class="fas fa-list mr-2"></i>
+            My Invite Codes
+        </h2>
+        
+        <div id="my-invites-summary" class="columns mb-4">
+            <div class="column has-text-centered">
+                <p class="heading">Total</p>
+                <p class="title is-4" id="stat-total">-</p>
+            </div>
+            <div class="column has-text-centered">
+                <p class="heading">Available</p>
+                <p class="title is-4 has-text-success" id="stat-available">-</p>
+            </div>
+            <div class="column has-text-centered">
+                <p class="heading">Used</p>
+                <p class="title is-4 has-text-grey" id="stat-used">-</p>
+            </div>
+        </div>
+        
+        <div id="my-invites-table">
+            <p class="has-text-grey has-text-centered">Loading...</p>
+        </div>
+    </div>
+    
+    <!-- Admin: All Invite Codes -->
+    {% if is_admin %}
+    <div class="box">
+        <h2 class="title is-5">
+            <i class="fas fa-list-alt mr-2"></i>
+            All Invite Codes (Admin)
+        </h2>
+        
+        <div class="field is-grouped mb-4">
+            <div class="control">
+                <input class="input" type="text" id="filter-nick" 
+                       placeholder="Filter by nick..." oninput="loadAllInvites()">
+            </div>
+            <div class="control">
+                <div class="select">
+                    <select id="filter-used" onchange="loadAllInvites()">
+                        <option value="">All</option>
+                        <option value="false">Available</option>
+                        <option value="true">Used</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div id="all-invites-table">
+            <p class="has-text-grey has-text-centered">Loading...</p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+const AUTH_TOKEN = '{{ auth_token }}';
+const API_BASE = '/api/v1/invites';
+const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+
+function authHeaders() {
+    return {
+        'Authorization': `Bearer ${AUTH_TOKEN}`,
+        'Content-Type': 'application/json',
+    };
+}
+
+function showNotification(message, type) {
+    const area = document.getElementById('notification-area');
+    const div = document.createElement('div');
+    div.className = `notification is-${type} is-light`;
+    div.innerHTML = `<button class="delete" onclick="this.parentElement.remove()"></button>${message}`;
+    area.prepend(div);
+    setTimeout(() => div.remove(), 8000);
+}
+
+function classLabel(cls) {
+    const labels = {
+        0: 'Pinger', 1: 'Registered', 2: 'VIP',
+        3: 'Operator', 4: 'Cheef', 5: 'Admin', 10: 'Master'
+    };
+    return labels[cls] || `Class ${cls}`;
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleString();
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        showNotification('Copied to clipboard!', 'info');
+    }).catch(() => {
+        // Fallback
+        const input = document.createElement('input');
+        input.value = text;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+        showNotification('Copied to clipboard!', 'info');
+    });
+}
+
+function buildRegistrationLink(code) {
+    const base = window.location.origin;
+    return `${base}/dashboard/invite/${encodeURIComponent(code)}`;
+}
+
+async function allocateInvites(event) {
+    event.preventDefault();
+    
+    const nick = document.getElementById('alloc-nick').value.trim();
+    const count = parseInt(document.getElementById('alloc-count').value);
+    const maxClass = parseInt(document.getElementById('alloc-class').value);
+    
+    try {
+        const resp = await fetch(`${API_BASE}/allocate`, {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({ nick, count, max_class: maxClass }),
+        });
+        
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Allocation failed');
+        }
+        
+        const data = await resp.json();
+        
+        // Show newly created codes
+        const codesDiv = document.getElementById('new-codes');
+        const codesList = document.getElementById('new-codes-list');
+        let html = '<ul>';
+        for (const code of data.codes) {
+            const link = buildRegistrationLink(code);
+            html += `<li>
+                <code>${code}</code>
+                <button class="button is-small is-info ml-2" onclick="copyToClipboard('${code}')">
+                    <i class="fas fa-copy"></i>
+                </button>
+                <button class="button is-small is-link ml-1" onclick="copyToClipboard('${link}')" title="Copy registration link">
+                    <i class="fas fa-link"></i>
+                </button>
+            </li>`;
+        }
+        html += '</ul>';
+        html += `<p class="mt-2"><small>Allocated to <strong>${data.nick}</strong> | Max class: ${classLabel(data.max_class)}</small></p>`;
+        codesList.innerHTML = html;
+        codesDiv.style.display = 'block';
+        
+        showNotification(`${data.allocated} invite code(s) allocated to ${data.nick}`, 'success');
+        
+        // Refresh lists
+        loadMyInvites();
+        if (IS_ADMIN) loadAllInvites();
+        
+    } catch (err) {
+        showNotification(err.message, 'danger');
+    }
+}
+
+async function revokeInvite(code) {
+    if (!confirm('Revoke this invite code?')) return;
+    
+    try {
+        const resp = await fetch(`${API_BASE}/${encodeURIComponent(code)}`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+        });
+        
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Revoke failed');
+        }
+        
+        showNotification('Invite code revoked', 'success');
+        loadMyInvites();
+        if (IS_ADMIN) loadAllInvites();
+        
+    } catch (err) {
+        showNotification(err.message, 'danger');
+    }
+}
+
+async function loadMyInvites() {
+    try {
+        const resp = await fetch(`${API_BASE}/mine`, {
+            headers: authHeaders(),
+        });
+        
+        if (!resp.ok) throw new Error('Failed to load invites');
+        const data = await resp.json();
+        
+        document.getElementById('stat-total').textContent = data.total;
+        document.getElementById('stat-available').textContent = data.available;
+        document.getElementById('stat-used').textContent = data.used;
+        
+        const tableDiv = document.getElementById('my-invites-table');
+        
+        if (data.codes.length === 0) {
+            tableDiv.innerHTML = '<p class="has-text-grey has-text-centered">No invite codes allocated to you yet.</p>';
+            return;
+        }
+        
+        let html = `<table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Code</th>
+                    <th>Max Class</th>
+                    <th>Status</th>
+                    <th>Used By</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        
+        for (const inv of data.codes) {
+            const statusTag = inv.used 
+                ? '<span class="tag is-light">Used</span>'
+                : '<span class="tag is-success is-light">Available</span>';
+            const link = buildRegistrationLink(inv.code);
+            
+            html += `<tr>
+                <td><code>${inv.code.substring(0, 12)}...</code></td>
+                <td><span class="tag is-info is-light">${classLabel(inv.max_class)}</span></td>
+                <td>${statusTag}</td>
+                <td>${inv.used_by || '-'}</td>
+                <td><small>${formatDate(inv.created_at)}</small></td>
+                <td>
+                    ${!inv.used ? `
+                        <div class="buttons are-small">
+                            <button class="button is-info" onclick="copyToClipboard('${inv.code}')" title="Copy code">
+                                <span class="icon"><i class="fas fa-copy"></i></span>
+                            </button>
+                            <button class="button is-link" onclick="copyToClipboard('${link}')" title="Copy invite permalink">
+                                <span class="icon"><i class="fas fa-link"></i></span>
+                            </button>
+                            <a class="button is-light" href="${link}" target="_blank" title="Open invite link">
+                                <span class="icon"><i class="fas fa-external-link-alt"></i></span>
+                            </a>
+                        </div>
+                    ` : ''}
+                </td>
+            </tr>`;
+        }
+        
+        html += '</tbody></table>';
+        tableDiv.innerHTML = html;
+        
+    } catch (err) {
+        document.getElementById('my-invites-table').innerHTML = 
+            `<p class="has-text-danger has-text-centered">${err.message}</p>`;
+    }
+}
+
+async function loadAllInvites() {
+    if (!IS_ADMIN) return;
+    
+    const nick = document.getElementById('filter-nick')?.value?.trim() || '';
+    const used = document.getElementById('filter-used')?.value || '';
+    
+    let url = `${API_BASE}/admin?limit=200`;
+    if (nick) url += `&nick=${encodeURIComponent(nick)}`;
+    if (used) url += `&used=${used}`;
+    
+    try {
+        const resp = await fetch(url, { headers: authHeaders() });
+        if (!resp.ok) throw new Error('Failed to load invites');
+        const invites = await resp.json();
+        
+        const tableDiv = document.getElementById('all-invites-table');
+        
+        if (invites.length === 0) {
+            tableDiv.innerHTML = '<p class="has-text-grey has-text-centered">No invite codes found.</p>';
+            return;
+        }
+        
+        let html = `<table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Code</th>
+                    <th>Owner</th>
+                    <th>Max Class</th>
+                    <th>Status</th>
+                    <th>Used By</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        
+        for (const inv of invites) {
+            const statusTag = inv.used
+                ? '<span class="tag is-light">Used</span>'
+                : '<span class="tag is-success is-light">Available</span>';
+            
+            html += `<tr>
+                <td><code>${inv.code.substring(0, 12)}...</code></td>
+                <td>${inv.created_by}</td>
+                <td><span class="tag is-info is-light">${classLabel(inv.max_class)}</span></td>
+                <td>${statusTag}</td>
+                <td>${inv.used_by || '-'}</td>
+                <td><small>${formatDate(inv.created_at)}</small></td>
+                <td>
+                    ${!inv.used ? `
+                        <button class="button is-small is-danger is-outlined" 
+                                onclick="revokeInvite('${inv.code}')" title="Revoke">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    ` : ''}
+                </td>
+            </tr>`;
+        }
+        
+        html += '</tbody></table>';
+        tableDiv.innerHTML = html;
+        
+    } catch (err) {
+        document.getElementById('all-invites-table').innerHTML = 
+            `<p class="has-text-danger has-text-centered">${err.message}</p>`;
+    }
+}
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', () => {
+    loadMyInvites();
+    if (IS_ADMIN) loadAllInvites();
+});
+</script>
+{% endblock %}

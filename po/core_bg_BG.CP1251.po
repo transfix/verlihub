@@ -55,7 +55,7 @@ msgstr ""
 #: ../src/cban.cpp:129 ../src/cbanlist.cpp:528 ../src/cbanlist.cpp:717
 #: ../src/cbanlist.cpp:767
 msgid "Time"
-msgstr "Време"
+msgstr "Р’СЂРµРјРµ"
 
 #: ../src/cban.cpp:133 ../src/cbanlist.cpp:717 ../src/cbanlist.cpp:767
 #, c-format
@@ -103,16 +103,16 @@ msgstr ""
 
 #: ../src/cban.cpp:176
 msgid "Nick + IP"
-msgstr "Прякор + IP"
+msgstr "РџСЂСЏРєРѕСЂ + IP"
 
 #: ../src/cban.cpp:176 ../src/cdcconsole.cpp:332 ../src/cdcconsole.cpp:407
 #: ../src/cdcconsole.cpp:556 ../src/cdcconsole.cpp:1341
 msgid "IP"
-msgstr "IP-адрес"
+msgstr "IP-Р°РґСЂРµСЃ"
 
 #: ../src/cban.cpp:176 ../src/cpenaltylist.cpp:209
 msgid "Nick"
-msgstr "Прякор"
+msgstr "РџСЂСЏРєРѕСЂ"
 
 #: ../src/cban.cpp:176
 msgid "IP range"
@@ -149,7 +149,7 @@ msgstr ""
 
 #: ../src/cban.cpp:217
 msgid "Permanent"
-msgstr "Перманентен"
+msgstr "РџРµСЂРјР°РЅРµРЅС‚РµРЅ"
 
 #: ../src/cbanlist.cpp:525
 msgid "Item"
@@ -158,16 +158,16 @@ msgstr ""
 #: ../src/cbanlist.cpp:526 ../src/cbanlist.cpp:718 ../src/cbanlist.cpp:768
 #: ../src/ccustomredirects.cpp:322
 msgid "Type"
-msgstr "Тип"
+msgstr "РўРёРї"
 
 #: ../src/cbanlist.cpp:527 ../src/cpenaltylist.cpp:209
 #: ../src/cserverdc.cpp:2828
 msgid "Operator"
-msgstr "Оператор"
+msgstr "РћРїРµСЂР°С‚РѕСЂ"
 
 #: ../src/cbanlist.cpp:722 ../src/cbanlist.cpp:772 ../src/cconndc.cpp:159
 msgid "Password"
-msgstr "Парола"
+msgstr "РџР°СЂРѕР»Р°"
 
 #: ../src/cbanlist.cpp:726 ../src/cbanlist.cpp:776
 msgid "Reconnect"
@@ -253,7 +253,7 @@ msgstr ""
 
 #: ../src/cconndc.cpp:159
 msgid "Key"
-msgstr "Клавиш"
+msgstr "РљР»Р°РІРёС€"
 
 #: ../src/cconndc.cpp:159
 msgid "ValidateNick"
@@ -261,11 +261,11 @@ msgstr ""
 
 #: ../src/cconndc.cpp:159
 msgid "Login"
-msgstr "Потребител"
+msgstr "РџРѕС‚СЂРµР±РёС‚РµР»"
 
 #: ../src/cconndc.cpp:159
 msgid "MyINFO"
-msgstr "Профил"
+msgstr "РџСЂРѕС„РёР»"
 
 #: ../src/cconndc.cpp:182
 #, c-format
@@ -294,7 +294,7 @@ msgstr ""
 #: ../src/cpluginmanager.cpp:240 ../src/cpluginmanager.cpp:253
 #: ../src/ctriggers.cpp:438
 msgid "Name"
-msgstr "Име"
+msgstr "РРјРµ"
 
 #: ../src/cconntypes.cpp:191
 msgid "Slots"
@@ -310,7 +310,7 @@ msgstr ""
 
 #: ../src/cconntypes.cpp:194
 msgid "Description"
-msgstr "Описание"
+msgstr "РћРїРёСЃР°РЅРёРµ"
 
 #: ../src/ccustomredirect.cpp:77 ../src/cdcclient.cpp:65
 #: ../src/creglist.cpp:117
@@ -324,7 +324,7 @@ msgstr ""
 #: ../src/ccustomredirect.cpp:123 ../src/ccustomredirect.cpp:125
 #: ../src/cdcclient.cpp:50 ../src/cdcclient.cpp:61
 msgid "Any"
-msgstr "Всеки"
+msgstr "Р’СЃРµРєРё"
 
 #: ../src/ccustomredirect.cpp:125 ../src/cdcclient.cpp:65
 #: ../src/cdcconsole.cpp:567 ../src/cdcconsole.cpp:568
@@ -342,7 +342,7 @@ msgstr "Всеки"
 #: ../src/cuser.cpp:317 ../src/cuser.cpp:327 ../src/cuser.cpp:337
 #: ../src/cuser.cpp:347 ../src/cuser.cpp:357
 msgid "Yes"
-msgstr "Да"
+msgstr "Р”Р°"
 
 #: ../src/ccustomredirect.cpp:125 ../src/cdcclient.cpp:65
 #: ../src/cdcconsole.cpp:565 ../src/cdcconsole.cpp:567
@@ -361,7 +361,7 @@ msgstr "Да"
 #: ../src/cuser.cpp:321 ../src/cuser.cpp:331 ../src/cuser.cpp:341
 #: ../src/cuser.cpp:351
 msgid "No"
-msgstr "Не"
+msgstr "РќРµ"
 
 #: ../src/ccustomredirect.cpp:126 ../src/stringutils.cpp:292
 msgid "GB"
@@ -389,12 +389,12 @@ msgstr ""
 
 #: ../src/ccustomredirects.cpp:321 ../src/cdcclients.cpp:453
 msgid "Status"
-msgstr "Статус"
+msgstr "РЎС‚Р°С‚СѓСЃ"
 
 #: ../src/ccustomredirects.cpp:323 ../src/cdcconsole.cpp:408
 #: ../src/cdcconsole.cpp:561
 msgid "Country"
-msgstr "Държава"
+msgstr "Р”СЉСЂР¶Р°РІР°"
 
 #: ../src/ccustomredirects.cpp:324
 msgid "Secure"
@@ -424,7 +424,7 @@ msgstr ""
 
 #: ../src/cdcclients.cpp:450 ../src/cpluginmanager.cpp:241
 msgid "Version"
-msgstr "Версия"
+msgstr "Р’РµСЂСЃРёСЏ"
 
 #: ../src/cdcclients.cpp:451
 msgid "Use hub"
@@ -440,12 +440,12 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:311
 msgid "Full list of commands"
-msgstr "Пълен списък на командите"
+msgstr "РџСЉР»РµРЅ СЃРїРёСЃСЉРє РЅР° РєРѕРјР°РЅРґРёС‚Рµ"
 
 #: ../src/cdcconsole.cpp:331 ../src/cdcconsole.cpp:364
 #: ../src/cdcconsole.cpp:406
 msgid "User"
-msgstr "Потребител"
+msgstr "РџРѕС‚СЂРµР±РёС‚РµР»"
 
 #: ../src/cdcconsole.cpp:334 ../src/cdcconsole.cpp:369
 #: ../src/cdcconsole.cpp:414 ../src/cdcconsole.cpp:1226
@@ -456,7 +456,7 @@ msgstr "Потребител"
 #: ../src/cserverdc.cpp:2933
 #, c-format
 msgid "User not found: %s"
-msgstr "Не е намерен потребител: %s"
+msgstr "РќРµ Рµ РЅР°РјРµСЂРµРЅ РїРѕС‚СЂРµР±РёС‚РµР»: %s"
 
 #: ../src/cdcconsole.cpp:340 ../src/cdcconsole.cpp:375
 #: ../src/cdcconsole.cpp:421
@@ -483,7 +483,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:409 ../src/cdcconsole.cpp:562
 msgid "City"
-msgstr "Град"
+msgstr "Р“СЂР°Рґ"
 
 #: ../src/cdcconsole.cpp:462
 msgid "Please note, hub is no longer scheduled for restart."
@@ -513,7 +513,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:517
 msgid "Usage example: !ccbc :US:GB: <message>"
-msgstr "Например: !ccbc :US:GB: <message>"
+msgstr "РќР°РїСЂРёРјРµСЂ: !ccbc :US:GB: <message>"
 
 #: ../src/cdcconsole.cpp:531
 #, c-format
@@ -525,7 +525,7 @@ msgstr[1] ""
 #: ../src/cdcconsole.cpp:540 ../src/cdcconsole.cpp:734
 #: ../src/cserverdc.cpp:1275
 msgid "Your information"
-msgstr "Вашата информация"
+msgstr "Р’Р°С€Р°С‚Р° РёРЅС„РѕСЂРјР°С†РёСЏ"
 
 #: ../src/cdcconsole.cpp:555
 msgid "Your IP information"
@@ -589,7 +589,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:657
 msgid "Authors"
-msgstr "Автори"
+msgstr "РђРІС‚РѕСЂРё"
 
 #: ../src/cdcconsole.cpp:664
 msgid "Not forgetting other 4 people who didn't want to be listed here."
@@ -597,7 +597,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:665
 msgid "Translators"
-msgstr "Преводачи"
+msgstr "РџСЂРµРІРѕРґР°С‡Рё"
 
 #: ../src/cdcconsole.cpp:671 ../src/cdcconsole.cpp:681
 msgid "Translate"
@@ -605,7 +605,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:672
 msgid "Contributors"
-msgstr "Помощници"
+msgstr "РџРѕРјРѕС‰РЅРёС†Рё"
 
 #: ../src/cdcconsole.cpp:674
 msgid "Credits"
@@ -740,11 +740,11 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:761 ../src/cdctag.cpp:223 ../src/ctrigger.cpp:151
 msgid "Passive"
-msgstr "Пасивен"
+msgstr "РџР°СЃРёРІРµРЅ"
 
 #: ../src/cdcconsole.cpp:761 ../src/cdctag.cpp:221 ../src/ctrigger.cpp:151
 msgid "Active"
-msgstr "Активен"
+msgstr "РђРєС‚РёРІРµРЅ"
 
 #: ../src/cdcconsole.cpp:766
 #, c-format
@@ -758,7 +758,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:778
 msgid "This functionality is currently disabled."
-msgstr "Тази функционалност е изключена в момента."
+msgstr "РўР°Р·Рё С„СѓРЅРєС†РёРѕРЅР°Р»РЅРѕСЃС‚ Рµ РёР·РєР»СЋС‡РµРЅР° РІ РјРѕРјРµРЅС‚Р°."
 
 #: ../src/cdcconsole.cpp:783
 msgid "Registration failed. Please contact an operator for help."
@@ -766,7 +766,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:791
 msgid "You are already registered."
-msgstr "Вие вече сте регистриран"
+msgstr "Р’РёРµ РІРµС‡Рµ СЃС‚Рµ СЂРµРіРёСЃС‚СЂРёСЂР°РЅ"
 
 #: ../src/cdcconsole.cpp:794
 msgid "You are not registered yet."
@@ -824,7 +824,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:945
 msgid "An error occured while registering."
-msgstr "Възникна грешка по време на регистрацията/"
+msgstr "Р’СЉР·РЅРёРєРЅР° РіСЂРµС€РєР° РїРѕ РІСЂРµРјРµ РЅР° СЂРµРіРёСЃС‚СЂР°С†РёСЏС‚Р°/"
 
 #: ../src/cdcconsole.cpp:956
 #, c-format
@@ -833,7 +833,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:958
 msgid "Registration request without password"
-msgstr "Заявка за регистрация без парола"
+msgstr "Р—Р°СЏРІРєР° Р·Р° СЂРµРіРёСЃС‚СЂР°С†РёСЏ Р±РµР· РїР°СЂРѕР»Р°"
 
 #: ../src/cdcconsole.cpp:961
 msgid ""
@@ -2202,7 +2202,7 @@ msgstr ""
 
 #: ../src/cdctag.cpp:235 ../src/cdctag.cpp:243
 msgid "Not available"
-msgstr "Недостъпен"
+msgstr "РќРµРґРѕСЃС‚СЉРїРµРЅ"
 
 #: ../src/cdctag.cpp:238
 msgid "Open slots"
@@ -3040,11 +3040,11 @@ msgstr ""
 
 #: ../src/cserverdc.cpp:2824
 msgid "Registered"
-msgstr "Регистриран"
+msgstr "Р РµРіРёСЃС‚СЂРёСЂР°РЅ"
 
 #: ../src/cserverdc.cpp:2826
 msgid "VIP"
-msgstr "ВИП"
+msgstr "Р’РРџ"
 
 #: ../src/cserverdc.cpp:2830
 msgid "Cheef"
@@ -3052,11 +3052,11 @@ msgstr ""
 
 #: ../src/cserverdc.cpp:2832
 msgid "Administrator"
-msgstr "Администратор"
+msgstr "РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ"
 
 #: ../src/cserverdc.cpp:2834
 msgid "Master"
-msgstr "Майстор"
+msgstr "РњР°Р№СЃС‚РѕСЂ"
 
 #: ../src/cserverdc.cpp:2899 ../src/cserverdc.cpp:2910
 #, c-format

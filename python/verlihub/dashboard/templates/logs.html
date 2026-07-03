@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+
+{% block title %}System Logs - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-file-alt mr-2"></i> System Logs
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-info" onclick="refreshLogs()">
+                <i class="fas fa-sync mr-2"></i> Refresh
+            </button>
+        </div>
+        <div class="level-item">
+            <button class="button is-warning" onclick="clearLogs()">
+                <i class="fas fa-trash mr-2"></i> Clear
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Log filters -->
+<div class="box">
+    <div class="columns">
+        <div class="column is-3">
+            <div class="field">
+                <label class="label">Log Level</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="log-level" onchange="filterLogs()">
+                            <option value="all">All Levels</option>
+                            <option value="debug">Debug</option>
+                            <option value="info">Info</option>
+                            <option value="warning">Warning</option>
+                            <option value="error">Error</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="field">
+                <label class="label">Log Type</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="log-type" onchange="filterLogs()">
+                            <option value="all">All Types</option>
+                            <option value="core">Core (C++)</option>
+                            <option value="system">System</option>
+                            <option value="connection">Connection</option>
+                            <option value="pm">Private Messages</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="column is-4">
+            <div class="field">
+                <label class="label">Search</label>
+                <div class="control has-icons-left">
+                    <input class="input" type="text" id="log-search" 
+                           placeholder="Search logs..." oninput="filterLogs()">
+                    <span class="icon is-small is-left">
+                        <i class="fas fa-search"></i>
+                    </span>
+                </div>
+            </div>
+        </div>
+        <div class="column is-2">
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="log-autoscroll" checked>
+                    Auto-scroll
+                </label>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log viewer -->
+<div class="box" style="padding:0.5rem">
+    <div id="log-container" class="log-viewer">
+        {% if logs %}
+            {% for log in logs %}
+            <div class="log-entry log-{{ log.level }}" data-level="{{ log.level }}" data-type="{{ log.log_type }}"><span class="log-time">{{ log.time[-15:-6] if log.time|length > 15 else log.time }}</span> <span class="ll ll-{{ log.level }}">{{ log.level[0]|upper }}</span> <span class="lt">{{ log.log_type }}</span> <span class="log-message">{{ log.message }}</span></div>
+            {% endfor %}
+        {% else %}
+            <div class="has-text-centered has-text-grey py-6" id="no-logs-placeholder">
+                <i class="fas fa-file-alt fa-3x mb-3"></i>
+                <p>No log entries</p>
+                <p class="is-size-7">Logs will appear here when events occur</p>
+            </div>
+        {% endif %}
+    </div>
+    <div class="is-size-7 has-text-grey mt-1" id="log-status">
+        <span id="log-count">{{ logs|length }}</span> entries loaded
+        &middot; <span id="ws-status" class="has-text-warning">Connecting&hellip;</span>
+    </div>
+</div>
+
+<!-- Download logs -->
+<div class="box">
+    <h2 class="subtitle">Download Logs</h2>
+    <div class="buttons">
+        <button class="button" onclick="downloadLogs('text')">
+            <i class="fas fa-file-alt mr-2"></i> Download as Text
+        </button>
+        <button class="button" onclick="downloadLogs('json')">
+            <i class="fas fa-file-code mr-2"></i> Download as JSON
+        </button>
+        <button class="button" onclick="downloadLogs('csv')">
+            <i class="fas fa-file-csv mr-2"></i> Download as CSV
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<style>
+    .log-viewer {
+        background-color: #1a1a2e;
+        color: #e4e4e4;
+        padding: 0.25rem 0.4rem;
+        border-radius: 4px;
+        scroll-behavior: smooth;
+        height: calc(100vh - 340px);
+        min-height: 300px;
+        overflow-y: auto;
+        font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 0.75rem;
+        line-height: 1.35;
+    }
+    [data-theme="light"] .log-viewer { background-color: #f5f5f5; color: #363636; }
+    .log-entry {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0 0.2rem;
+    }
+    .log-entry:hover { white-space: pre-wrap; word-break: break-all; background-color: rgba(255,255,255,0.05); }
+    [data-theme="light"] .log-entry:hover { background-color: rgba(0,0,0,0.04); }
+    .log-entry.hidden { display: none; }
+    .log-time { color: #888; margin-right: 0.3rem; }
+    .ll { display: inline-block; width: 1.1em; text-align: center; border-radius: 2px; margin-right: 0.3rem; font-weight: 600; font-size: 0.7rem; }
+    .ll-info { color: #43b0f1; }
+    .ll-warning { color: #ffd254; }
+    .ll-error { color: #ff6b81; }
+    .ll-debug { color: #777; }
+    .lt { color: #666; margin-right: 0.3rem; }
+    .log-entry.log-error { background-color: rgba(241,70,104,0.08); }
+    .log-entry.log-warning { background-color: rgba(255,221,87,0.06); }
+    .log-entry:nth-child(even) { background-color: rgba(255,255,255,0.015); }
+    [data-theme="light"] .log-entry:nth-child(even) { background-color: rgba(0,0,0,0.02); }
+</style>
+
+<script>
+    let ws = null;
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        connectWebSocket();
+        scrollToBottom();
+    });
+    
+    function connectWebSocket() {
+        // Connect to WebSocket for real-time logs
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+        
+        try {
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('Log WebSocket connected');
+                const el = document.getElementById('ws-status');
+                if (el) { el.textContent = 'Live'; el.className = 'has-text-success'; }
+            };
+            
+            ws.onmessage = (event) => {
+                const log = JSON.parse(event.data);
+                if (log.type === 'log') {
+                    addLogEntry(log);
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('Log WebSocket disconnected, reconnecting...');
+                const el = document.getElementById('ws-status');
+                if (el) { el.textContent = 'Disconnected — reconnecting\u2026'; el.className = 'has-text-warning'; }
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        } catch (error) {
+            console.log('WebSocket not available');
+        }
+    }
+    
+    function addLogEntry(log) {
+        const container = document.getElementById('log-container');
+        
+        // Remove "no logs" placeholder if present
+        const emptyMsg = document.getElementById('no-logs-placeholder');
+        if (emptyMsg) {
+            emptyMsg.remove();
+        }
+        
+        const entry = document.createElement('div');
+        entry.className = `log-entry log-${log.level}`;
+        entry.dataset.level = log.level;
+        entry.dataset.type = log.log_type || log.type || 'system';
+        
+        const logType = log.log_type || log.type || 'system';
+        const ts = (log.time || new Date().toISOString());
+        const short_ts = ts.length > 15 ? ts.slice(-15, -6) : ts;
+        const lvl = (log.level || 'info');
+        entry.innerHTML = `<span class="log-time">${short_ts}</span> <span class="ll ll-${lvl}">${lvl.charAt(0).toUpperCase()}</span> <span class="lt">${escapeHtml(logType)}</span> <span class="log-message">${escapeHtml(log.message)}</span>`;
+        
+        container.appendChild(entry);
+        
+        // Apply current filters
+        filterLogs();
+        
+        // Auto-scroll if enabled
+        if (document.getElementById('log-autoscroll').checked) {
+            scrollToBottom();
+        }
+        
+        // Limit entries
+        while (container.querySelectorAll('.log-entry').length > 2000) {
+            const first = container.querySelector('.log-entry');
+            if (first) first.remove();
+        }
+
+        // Update counter
+        const countEl = document.getElementById('log-count');
+        if (countEl) {
+            countEl.textContent = container.querySelectorAll('.log-entry').length;
+        }
+    }
+    
+    function filterLogs() {
+        const level = document.getElementById('log-level').value;
+        const type = document.getElementById('log-type').value;
+        const search = document.getElementById('log-search').value.toLowerCase();
+        
+        document.querySelectorAll('.log-entry').forEach(entry => {
+            let show = true;
+            
+            // Filter by level
+            if (level !== 'all' && entry.dataset.level !== level) {
+                show = false;
+            }
+            
+            // Filter by type
+            if (type !== 'all' && entry.dataset.type !== type) {
+                show = false;
+            }
+            
+            // Filter by search
+            if (search && !entry.textContent.toLowerCase().includes(search)) {
+                show = false;
+            }
+            
+            entry.classList.toggle('hidden', !show);
+        });
+    }
+    
+    function refreshLogs() {
+        location.reload();
+    }
+    
+    async function clearLogs() {
+        confirmAction(
+            'Clear Logs',
+            'Are you sure you want to clear all logs? This action cannot be undone.',
+            async () => {
+                try {
+                    await apiCall('DELETE', '/logs');
+                    document.getElementById('log-container').innerHTML = `
+                        <div class="has-text-centered has-text-grey py-6" id="no-logs-placeholder">
+                            <i class="fas fa-file-alt fa-3x mb-3"></i>
+                            <p>Logs cleared</p>
+                        </div>
+                    `;
+                    const countEl = document.getElementById('log-count');
+                    if (countEl) countEl.textContent = '0';
+                    showNotification('Logs cleared successfully', 'success');
+                } catch (error) {
+                    showNotification('Failed to clear logs: ' + error.message, 'danger');
+                }
+            }
+        );
+    }
+    
+    function downloadLogs(format) {
+        const logs = [];
+        document.querySelectorAll('.log-entry:not(.hidden)').forEach(entry => {
+            logs.push({
+                time: entry.querySelector('.log-time')?.textContent || '',
+                level: entry.dataset.level || '',
+                type: entry.dataset.type || '',
+                message: entry.querySelector('.log-message')?.textContent || '',
+            });
+        });
+        
+        let content, filename, mimeType;
+        
+        if (format === 'json') {
+            content = JSON.stringify(logs, null, 2);
+            filename = 'verlihub-logs.json';
+            mimeType = 'application/json';
+        } else if (format === 'csv') {
+            content = 'Time,Level,Type,Message\n';
+            logs.forEach(log => {
+                content += `"${log.time}","${log.level}","${log.type}","${log.message.replace(/"/g, '""')}"\n`;
+            });
+            filename = 'verlihub-logs.csv';
+            mimeType = 'text/csv';
+        } else {
+            content = logs.map(log => `[${log.time}] [${log.level.toUpperCase()}] ${log.message}`).join('\n');
+            filename = 'verlihub-logs.txt';
+            mimeType = 'text/plain';
+        }
+        
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+    
+    function scrollToBottom() {
+        const container = document.getElementById('log-container');
+        container.scrollTop = container.scrollHeight;
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
+{% endblock %}

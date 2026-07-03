@@ -1,0 +1,68 @@
+name: Docker Tests
+
+on:
+  push:
+    branches: [master, main, develop, verlihub-py]
+  pull_request:
+
+jobs:
+  docker-multi-db-tests:
+    name: Multi-DB Docker Tests
+    runs-on: self-hosted
+    timeout-minutes: 90
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.??* 2>/dev/null || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean up previous Docker resources
+        run: |
+          docker compose -f docker/docker-compose.test.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker compose -f docker/docker-compose.dual-test.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker compose -f docker/docker-compose.smoke-tests.yml down --remove-orphans --volumes 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+      - name: Run verlihub-py unit tests (SQLite)
+        run: ./docker_test_launcher.sh py-unit --coverage
+
+      - name: Run verlihub-py MySQL tests
+        run: ./docker_test_launcher.sh py-mysql --coverage
+
+      - name: Run verlihub-py PostgreSQL tests
+        run: ./docker_test_launcher.sh py-postgres --coverage
+
+      - name: Run SQL semantics comparison
+        run: ./docker_test_launcher.sh sql-semantics
+
+      - name: Upload Python coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-reports
+          path: build/coverage-reports/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose -f docker/docker-compose.test.yml logs > /tmp/ci-logs/test-compose.log 2>&1 || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-logs
+          path: /tmp/ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Clean up
+        if: always()
+        run: |
+          ./docker_test_launcher.sh cleanup || true
+          docker system prune -f 2>/dev/null || true

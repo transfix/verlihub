@@ -64,7 +64,7 @@ services:
       - "30000:30000" # FastAPI port for integration tests
     volumes:
       - verlihub-config:/etc/verlihub
-      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
+      - ./plugins/python/scripts:/usr/local/share/verlihub/scripts
     networks:
       - verlihub-net
     restart: unless-stopped
@@ -108,7 +108,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      target: builder
+      target: test-builder
     container_name: verlihub-unit-tests
     depends_on:
       mysql:
@@ -119,8 +119,6 @@ services:
       VH_DB_PASS: verlihub
       VH_DB_NAME: verlihub_test
       CTEST_OUTPUT_ON_FAILURE: 1
-    volumes:
-      - ./:/src:ro
     command: ["bash", "-c", "cd /src/build && ctest --output-on-failure"]
     networks:
       - verlihub-net

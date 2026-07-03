@@ -1,0 +1,1144 @@
+{% extends "base.html" %}
+
+{% block title %}AI Chat - {{ hub_name }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* ------------------------------------------------------------------ */
+    /* Override base layout — the AI chat needs full height, no section    */
+    /* padding, no footer.                                                */
+    /* ------------------------------------------------------------------ */
+    .main-section { padding: 0.5rem 0.75rem 0 0.75rem !important; }
+    .footer { display: none !important; }
+
+    /* ------------------------------------------------------------------ */
+    /* Full-height two-column layout: sidebar + chat                      */
+    /* ------------------------------------------------------------------ */
+    .ai-page {
+        display: flex;
+        height: calc(100vh - 72px);
+        gap: 0;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+        background: var(--chat-outer-bg, #fff);
+    }
+
+    [data-theme="dark"] .ai-page {
+        --chat-outer-bg: #161625;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.3);
+    }
+
+    /* ---- Session sidebar ---- */
+    .ai-sidebar {
+        width: 260px;
+        min-width: 200px;
+        background: var(--sidebar-bg, #f7f7fa);
+        border-right: 1px solid var(--sidebar-border, #e8e8ec);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+    }
+
+    [data-theme="dark"] .ai-sidebar {
+        --sidebar-bg: #13131f;
+        --sidebar-border: #2a2a42;
+    }
+
+    .ai-sidebar-header {
+        padding: 0.75rem 1rem;
+        font-weight: 600;
+        font-size: 0.92rem;
+        border-bottom: 1px solid var(--sidebar-border, #e8e8ec);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .ai-sidebar-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.4rem 0;
+    }
+
+    .ai-sidebar-item {
+        padding: 0.7rem 1rem;
+        cursor: pointer;
+        font-size: 0.84rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border-left: 3px solid transparent;
+        border-bottom: 1px solid var(--sidebar-border, #e8e8ec);
+        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .ai-sidebar-item:last-child { border-bottom: none; }
+
+    .ai-sidebar-item:hover {
+        background: var(--item-hover, rgba(108,92,231,0.06));
+        box-shadow: inset 0 0 0 1px var(--item-hover-ring, rgba(108,92,231,0.12));
+    }
+
+    [data-theme="dark"] .ai-sidebar-item:hover {
+        --item-hover: rgba(162,155,254,0.08);
+        --item-hover-ring: rgba(162,155,254,0.15);
+    }
+
+    .ai-sidebar-item .item-spinner {
+        color: var(--thinking-text, #6c5ce7);
+        font-size: 0.78rem;
+        flex-shrink: 0;
+        animation: thinkPulse 2s ease-in-out infinite;
+    }
+
+    [data-theme="dark"] .ai-sidebar-item .item-spinner { --thinking-text: #a29bfe; }
+
+    .ai-sidebar-item.active {
+        background: var(--item-active-bg, rgba(108,92,231,0.08));
+        border-left-color: var(--item-active-border, #6c5ce7);
+        font-weight: 600;
+    }
+
+    [data-theme="dark"] .ai-sidebar-item.active {
+        --item-active-bg: rgba(162,155,254,0.12);
+        --item-active-border: #a29bfe;
+    }
+
+    .ai-sidebar-item .item-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ai-sidebar-item .item-time {
+        font-size: 0.7rem;
+        color: #999;
+        flex-shrink: 0;
+    }
+
+    .ai-sidebar-item .item-delete {
+        opacity: 0;
+        cursor: pointer;
+        color: #e74c3c;
+        flex-shrink: 0;
+        transition: opacity 0.15s;
+    }
+
+    .ai-sidebar-item:hover .item-delete {
+        opacity: 0.6;
+    }
+
+    .ai-sidebar-item .item-delete:hover {
+        opacity: 1;
+    }
+
+    /* ---- Main chat area ---- */
+    .ai-main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+    .ai-header {
+        padding: 0.6rem 1.2rem;
+        border-bottom: 1px solid var(--header-border, #eee);
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        flex-shrink: 0;
+        background: var(--header-bg, #fff);
+    }
+
+    [data-theme="dark"] .ai-header {
+        --header-border: #2a2a42;
+        --header-bg: #161625;
+    }
+
+    .ai-header .title-text {
+        font-weight: 700;
+        font-size: 1rem;
+    }
+
+    /* ---- Messages pane ---- */
+    .ai-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1.2rem 1.5rem;
+        background: var(--msg-bg, #fafbfc);
+        scroll-behavior: smooth;
+    }
+
+    [data-theme="dark"] .ai-messages {
+        --msg-bg: #111120;
+    }
+
+    /* ---- Bubbles ---- */
+    .ai-msg {
+        margin-bottom: 0.3rem;
+        display: flex;
+        flex-direction: column;
+        animation: fadeSlideIn 0.2s ease-out;
+    }
+
+    @keyframes fadeSlideIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* User */
+    .ai-msg.user-msg { align-items: flex-end; }
+
+    .ai-msg.user-msg .bubble.box {
+        background: var(--user-bubble, #6c5ce7);
+        color: #fff;
+        padding: 0.75rem 1.1rem;
+        border-radius: 18px 18px 4px 18px;
+        max-width: 72%;
+        line-height: 1.55;
+        word-wrap: break-word;
+        font-size: 0.92rem;
+        box-shadow: 0 2px 6px rgba(108,92,231,0.18);
+        border: none;
+    }
+
+    [data-theme="dark"] .ai-msg.user-msg .bubble.box {
+        --user-bubble: #5b4cdb;
+        box-shadow: 0 2px 6px rgba(91,76,219,0.25);
+    }
+
+    /* Assistant */
+    .ai-msg.assistant-msg { align-items: flex-start; }
+
+    .ai-msg.assistant-msg .bubble.box {
+        background: var(--asst-bubble, #fff);
+        color: var(--asst-text, #2d3436);
+        padding: 0.85rem 1.1rem;
+        border-radius: 18px 18px 18px 4px;
+        max-width: 82%;
+        line-height: 1.6;
+        word-wrap: break-word;
+        font-size: 0.92rem;
+        border: 1px solid var(--asst-border, #eee);
+    }
+
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box {
+        --asst-bubble: #1c1c32;
+        --asst-text: #e4e4e4;
+        --asst-border: #2a2a42;
+    }
+
+    /* Rendered markdown inside assistant bubbles — use Bulma .content */
+    .ai-msg.assistant-msg .bubble.box .content {
+        font-size: 0.92rem;
+        line-height: 1.6;
+    }
+    .ai-msg.assistant-msg .bubble.box .content p:last-child { margin-bottom: 0; }
+    .ai-msg.assistant-msg .bubble.box .content h1 { font-size: 1.15em; }
+    .ai-msg.assistant-msg .bubble.box .content h2 { font-size: 1.05em; }
+    .ai-msg.assistant-msg .bubble.box .content h3 { font-size: 0.98em; }
+
+    /* Bulma .table inside chat bubbles */
+    .ai-msg.assistant-msg .bubble.box .table {
+        font-size: 0.88em;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table {
+        background: transparent;
+        color: #e4e4e4;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table th {
+        background: rgba(108,92,231,0.12);
+        color: #c8c8d8;
+        border-color: #2a2a42;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table td {
+        border-color: #2a2a42;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .table tr:nth-child(even) td {
+        background: rgba(255,255,255,0.025);
+    }
+    /* Bulma .content handles blockquote, hr, lists, etc. — dark overrides only */
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content blockquote,
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content .notification {
+        background: rgba(255,255,255,0.04);
+        border-left-color: #444;
+        color: #aaa;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content hr {
+        background-color: #333;
+    }
+    /* Code blocks inside chat */
+    .ai-msg.assistant-msg .bubble.box .content pre {
+        border-radius: 6px;
+        font-size: 0.86em;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content pre {
+        background: #0d0d1a;
+        color: #e0e0e0;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box .content code {
+        background: rgba(255,255,255,0.06);
+        color: #e0e0e0;
+    }
+
+    /* Role + time label */
+    .ai-msg .meta {
+        font-size: 0.7rem;
+        color: #999;
+        margin-bottom: 0.25rem;
+        padding: 0 0.3rem;
+    }
+
+    .ai-msg.user-msg .meta { text-align: right; }
+
+    /* System messages */
+    .ai-msg.system-msg {
+        align-items: center;
+        margin: 0.5rem 0;
+    }
+
+    .ai-msg.system-msg .system-text {
+        font-size: 0.82rem;
+        color: #999;
+        font-style: italic;
+        background: var(--sys-bg, rgba(0,0,0,0.03));
+        padding: 0.3rem 0.75rem;
+        border-radius: 12px;
+        max-width: 80%;
+        text-align: center;
+    }
+
+    [data-theme="dark"] .ai-msg.system-msg .system-text {
+        --sys-bg: rgba(255,255,255,0.04);
+    }
+
+    /* Tool badge */
+    .ai-tool-badge {
+        display: inline-block;
+        background: var(--tool-bg, #fff3cd);
+        color: var(--tool-text, #856404);
+        padding: 0.2rem 0.65rem;
+        border-radius: 12px;
+        font-size: 0.78rem;
+        font-family: 'Consolas', 'Monaco', monospace;
+    }
+
+    [data-theme="dark"] .ai-tool-badge {
+        --tool-bg: #2a2500;
+        --tool-text: #ffd83d;
+    }
+
+    /* Thinking animation */
+    .ai-msg.thinking-msg { align-items: flex-start; }
+
+    .thinking-bubble {
+        background: var(--asst-bubble, #fff);
+        border: 1px solid var(--asst-border, #eee);
+        border-radius: 18px 18px 18px 4px;
+        padding: 0.65rem 1.2rem;
+        display: inline-flex;
+        gap: 0.45rem;
+        align-items: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+
+    [data-theme="dark"] .thinking-bubble {
+        --asst-bubble: #1c1c32;
+        --asst-border: #2a2a42;
+    }
+
+    .thinking-label {
+        font-size: 0.82rem;
+        color: var(--thinking-text, #6c5ce7);
+        font-weight: 500;
+        margin-right: 0.25rem;
+        animation: thinkPulse 2s ease-in-out infinite;
+    }
+
+    [data-theme="dark"] .thinking-label { --thinking-text: #a29bfe; }
+
+    @keyframes thinkPulse {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+
+    .thinking-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--dot-color, #6c5ce7);
+        animation: dotBounce 1.4s infinite;
+    }
+
+    [data-theme="dark"] .thinking-dot { --dot-color: #a29bfe; }
+
+    .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes dotBounce {
+        0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+        40% { opacity: 1; transform: scale(1.15); }
+    }
+
+    .thinking-elapsed {
+        font-size: 0.68rem;
+        color: #aaa;
+        margin-left: 0.4rem;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ---- Input bar ---- */
+    .ai-input-bar {
+        padding: 0.7rem 1.2rem;
+        border-top: 1px solid var(--input-border, #eee);
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-shrink: 0;
+        background: var(--input-bg, #fff);
+    }
+
+    [data-theme="dark"] .ai-input-bar {
+        --input-border: #2a2a42;
+        --input-bg: #161625;
+    }
+
+    .ai-input-bar input {
+        flex: 1;
+        border-radius: 20px !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .ai-input-bar .send-btn {
+        border-radius: 50% !important;
+        width: 38px; height: 38px;
+        padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    }
+
+    /* ---- Code styling inside assistant bubbles ---- */
+    .ai-msg.assistant-msg .bubble.box code {
+        background: rgba(0,0,0,0.06);
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
+        font-size: 0.88em;
+        font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box code {
+        background: rgba(255,255,255,0.1);
+    }
+    .ai-msg.assistant-msg .bubble.box pre {
+        background: var(--pre-bg, #f5f5f5);
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        overflow-x: auto;
+        font-size: 0.86em;
+        margin: 0.5rem 0;
+        line-height: 1.5;
+    }
+    .ai-msg.assistant-msg .bubble.box pre code {
+        background: none;
+        padding: 0;
+        border-radius: 0;
+        font-size: inherit;
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box pre {
+        --pre-bg: rgba(255,255,255,0.06);
+    }
+    .ai-msg.assistant-msg .bubble.box ul,
+    .ai-msg.assistant-msg .bubble.box ol {
+        margin: 0.5em 0; padding-left: 1.6rem;
+    }
+    .ai-msg.assistant-msg .bubble.box li {
+        margin-bottom: 0.25em;
+        line-height: 1.55;
+    }
+    .ai-msg.assistant-msg .bubble.box li strong {
+        color: var(--li-strong, #2d3436);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box li strong {
+        --li-strong: #e8e8f0;
+    }
+    .ai-msg.assistant-msg .bubble.box a { color: #6c5ce7; text-decoration: underline; }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box a { color: #a29bfe; }
+    .ai-msg.assistant-msg .bubble.box strong {
+        font-weight: 700;
+    }
+    .ai-msg.assistant-msg .bubble.box em {
+        font-style: italic;
+        color: var(--em-color, #555);
+    }
+    [data-theme="dark"] .ai-msg.assistant-msg .bubble.box em {
+        --em-color: #bbb;
+    }
+
+    /* Streaming cursor */
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .streaming-cursor {
+        display: inline-block;
+        width: 2px; height: 1em;
+        background: var(--asst-text, #2d3436);
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        animation: blink 0.8s step-end infinite;
+    }
+
+    /* ---- Responsive: hide sidebar on small screens ---- */
+    @media (max-width: 768px) {
+        .ai-sidebar { display: none; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ai-page">
+    <!-- Session sidebar -->
+    <div class="ai-sidebar">
+        <div class="ai-sidebar-header">
+            <span><i class="fas fa-history mr-1"></i> Sessions</span>
+            <button class="button is-small is-primary is-light" onclick="newSession()" title="New chat">
+                <i class="fas fa-plus"></i>
+            </button>
+        </div>
+        <div class="ai-sidebar-list" id="session-list"></div>
+    </div>
+
+    <!-- Chat area -->
+    <div class="ai-main">
+        <div class="ai-header">
+            <i class="fas fa-robot" style="font-size:1.1rem; color:#6c5ce7;"></i>
+            <span class="title-text">AI Assistant</span>
+            <span class="tag is-rounded is-small" id="ai-status">
+                {% if llm_enabled %}Connecting...{% else %}Disabled{% endif %}
+            </span>
+            {% if llm_enabled %}
+            <span class="tag is-info is-light is-rounded is-small" id="ai-model">{{ llm_model }}</span>
+            {% if llm_endpoints|length > 1 %}
+            <div class="select is-small is-rounded" style="margin-left:0.25rem;">
+                <select id="ai-endpoint-select" title="Select LLM endpoint">
+                    {% for ep in llm_endpoints %}
+                    <option value="{{ ep }}"{% if loop.first %} selected{% endif %}>{{ ep }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+            {% endif %}
+            <span style="flex:1"></span>
+            <button class="button is-small is-light is-rounded" onclick="scrollAiToBottom()" title="Scroll to bottom">
+                <i class="fas fa-arrow-down"></i>
+            </button>
+        </div>
+
+        <div class="ai-messages" id="ai-messages">
+            {% if llm_enabled %}
+            <div class="ai-msg system-msg">
+                <span class="system-text">
+                    Welcome! Ask anything about the hub &mdash;
+                    &ldquo;who is online?&rdquo;, &ldquo;show share stats&rdquo;, or &ldquo;broadcast hello&rdquo;.
+                </span>
+            </div>
+            <div class="ai-msg system-msg">
+                <span class="system-text">
+                    Logged in as <strong>{{ user.nick }}</strong> ({{ access_level }}).
+                    {% if access_level == "admin" %}Full admin access.{% else %}Read-only.{% endif %}
+                </span>
+            </div>
+            {% else %}
+            <div class="ai-msg system-msg">
+                <span class="system-text">LLM not enabled. Set <code>llm:</code> in your <code>config.yml</code>.</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="ai-input-bar">
+            <input class="input" type="text" id="ai-input"
+                   placeholder="{% if llm_enabled %}Message the assistant...{% else %}LLM not enabled{% endif %}"
+                   autocomplete="off" {% if not llm_enabled %}disabled{% endif %}>
+            <button class="button is-primary send-btn" id="ai-send-btn"
+                    onclick="sendAiMessage()"
+                    {% if not llm_enabled %}disabled{% endif %} title="Send">
+                <i class="fas fa-arrow-up"></i>
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+<script>
+(function() {
+    /* ---- DOM refs ---- */
+    const aiMessages  = document.getElementById('ai-messages');
+    const aiInput     = document.getElementById('ai-input');
+    const aiSendBtn   = document.getElementById('ai-send-btn');
+    const sessionList = document.getElementById('session-list');
+    const statusEl    = document.getElementById('ai-status');
+    const authToken   = '{{ auth_token }}';
+    const llmEnabled  = {{ 'true' if llm_enabled else 'false' }};
+    const hubTimezone = '{{ hub_timezone|default("UTC") }}';
+    const epSelect    = document.getElementById('ai-endpoint-select');
+    const modelTag    = document.getElementById('ai-model');
+
+    let aiSocket = null;
+    let aiWaiting = false;
+    let currentSessionId = null;
+    let currentEndpoint = epSelect ? epSelect.value : null;
+    const pendingSessions = new Set();   /* sessions with in-flight LLM requests */
+
+    /* ==============================================================
+       LocalStorage-backed session history
+       ============================================================== */
+    const STORE_KEY = 'vh_ai_sessions';
+
+    function loadSessions() {
+        try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; }
+        catch { return {}; }
+    }
+    function saveSessions(d) { localStorage.setItem(STORE_KEY, JSON.stringify(d)); }
+
+    function getSession(sid) { return loadSessions()[sid] || null; }
+
+    function saveSessionMessages(sid, title, msgs) {
+        const all = loadSessions();
+        if (!all[sid]) all[sid] = { title: title || 'New chat', created: Date.now(), messages: [] };
+        all[sid].messages = msgs;
+        if (title && title !== 'New chat') all[sid].title = title;
+        all[sid].updated = Date.now();
+        saveSessions(all);
+    }
+
+    function deleteStoredSession(sid) {
+        const all = loadSessions();
+        delete all[sid];
+        saveSessions(all);
+    }
+
+    function getSessionsSorted() {
+        const all = loadSessions();
+        return Object.entries(all)
+            .map(([id, s]) => ({ id, ...s }))
+            .sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
+    }
+
+    /* ==============================================================
+       Sidebar
+       ============================================================== */
+    function renderSidebar() {
+        const sessions = getSessionsSorted();
+        sessionList.innerHTML = '';
+        if (sessions.length === 0) {
+            sessionList.innerHTML = '<div style="padding:1rem;color:#999;font-size:0.83rem;text-align:center">No sessions yet</div>';
+            return;
+        }
+        sessions.forEach(s => {
+            const div = document.createElement('div');
+            div.className = 'ai-sidebar-item' + (s.id === currentSessionId ? ' active' : '');
+            const d = new Date(s.updated || s.created);
+            const t = relativeTime(s.updated || s.created);
+            const spin = pendingSessions.has(s.id)
+                ? '<i class="fas fa-spinner fa-spin item-spinner" title="Thinking…"></i>'
+                : '';
+            div.innerHTML =
+                `${spin}<span class="item-title">${esc(s.title || 'New chat')}</span>` +
+                `<span class="item-time">${t}</span>` +
+                `<span class="item-delete" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Delete"><i class="fas fa-times"></i></span>`;
+            div.addEventListener('click', () => switchSession(s.id));
+            sessionList.appendChild(div);
+        });
+    }
+
+    /* ==============================================================
+       Session switching
+       ============================================================== */
+    function switchSession(sid) {
+        if (sid === currentSessionId) return;
+        currentSessionId = sid;
+        renderSidebar();
+
+        // Clear and restore messages from storage
+        aiMessages.innerHTML = '';
+        _chatLog = [];
+        const stored = getSession(sid);
+        if (stored && stored.messages) {
+            stored.messages.forEach(m => {
+                _chatLog.push(m);
+                if (m.role === 'user')           appendUserBubble(m.text, m.time, false);
+                else if (m.role === 'assistant') appendAssistantBubble(m.text, m.time, false);
+                else if (m.role === 'system')    appendSystemMsg(m.text, false);
+                else if (m.role === 'tool')      appendToolCall(m.name, m.args, false);
+            });
+        }
+        scrollAiToBottom();
+
+        // If this session has a pending request, show thinking + disable input.
+        // The WS reconnect below will receive the replayed events.
+        if (pendingSessions.has(sid)) {
+            showThinking();
+            setInputEnabled(false);
+        }
+
+        // Reconnect WS for this session
+        if (aiSocket) { aiSocket.onclose = null; aiSocket.close(); }
+        connectAiChat(sid);
+    }
+
+    window.deleteSession = function(sid) {
+        deleteStoredSession(sid);
+        fetch(`/api/v1/llm/sessions/${encodeURIComponent(sid)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` },
+        });
+        if (sid === currentSessionId) newSession();
+        else renderSidebar();
+    };
+
+    window.newSession = function() {
+        if (aiSocket) { aiSocket.onclose = null; aiSocket.close(); }
+        currentSessionId = null;
+        _chatLog = [];
+        aiMessages.innerHTML = '';
+        appendSystemMsg('New conversation started. Ask anything!', false);
+        connectAiChat(null);
+        renderSidebar();
+    };
+
+    /* ==============================================================
+       Helpers
+       ============================================================== */
+    function esc(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    /* ---- Markdown rendering via marked + DOMPurify ---- */
+    /**
+     * Post-process rendered HTML to add Bulma CSS classes to elements.
+     * Tables get Bulma .table classes; other elements are styled by the
+     * wrapping .content div that Bulma provides.
+     */
+    function _bulmaPostProcess(html) {
+        return html
+            /* Add Bulma classes to bare <table> tags */
+            .replace(/<table(?![^>]*class=)/g,
+                '<table class="table is-bordered is-striped is-hoverable is-fullwidth"')
+            /* Add Bulma notification class to blockquotes for nicer styling */
+            .replace(/<blockquote(?![^>]*class=)/g,
+                '<blockquote class="notification"');
+    }
+
+    const _markedOpts = { gfm: true, breaks: true };
+    if (typeof marked !== 'undefined') {
+        if (marked.use) {
+            marked.use(_markedOpts);
+        } else if (marked.setOptions) {
+            marked.setOptions(_markedOpts);
+        }
+    }
+
+    function fmt(text) {
+        if (typeof marked !== 'undefined') {
+            let raw = typeof marked.parse === 'function' ? marked.parse(text) : marked(text);
+            raw = _bulmaPostProcess(raw);
+            const clean = typeof DOMPurify !== 'undefined'
+                ? DOMPurify.sanitize(raw, { ADD_ATTR: ['class'] })
+                : raw;
+            return '<div class="content">' + clean + '</div>';
+        }
+        // Fallback if CDN failed to load
+        return '<div class="content">' + esc(text).replace(/\n/g, '<br>') + '</div>';
+    }
+
+    function ts(t) {
+        const d = t ? new Date(t) : new Date();
+        try {
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: hubTimezone,
+                day: '2-digit', month: '2-digit',
+                hour: '2-digit', minute: '2-digit', hour12: false
+            }).formatToParts(d);
+            const p = {};
+            parts.forEach(x => p[x.type] = x.value);
+            return (p.day||'') + '/' + (p.month||'') + ' ' + (p.hour||'') + ':' + (p.minute||'');
+        } catch {
+            const day = d.getDate().toString().padStart(2,'0');
+            const mon = (d.getMonth()+1).toString().padStart(2,'0');
+            const hr  = d.getHours().toString().padStart(2,'0');
+            const mn  = d.getMinutes().toString().padStart(2,'0');
+            return day + '/' + mon + ' ' + hr + ':' + mn;
+        }
+    }
+
+    function relativeTime(epoch) {
+        const now = Date.now();
+        const diff = Math.max(0, Math.floor((now - epoch) / 1000));
+        if (diff < 60)   return 'now';
+        if (diff < 3600)  return Math.floor(diff / 60) + 'm';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+        if (diff < 604800) return Math.floor(diff / 86400) + 'd';
+        return Math.floor(diff / 604800) + 'w';
+    }
+
+    window.scrollAiToBottom = function() {
+        requestAnimationFrame(() => { aiMessages.scrollTop = aiMessages.scrollHeight; });
+    };
+
+    function setInputEnabled(on) {
+        aiInput.disabled = !on;
+        aiSendBtn.disabled = !on;
+        aiWaiting = !on;
+    }
+
+    /* ==============================================================
+       Session log persistence
+       ============================================================== */
+    let _chatLog = [];
+
+    function persistLog() {
+        if (!currentSessionId) return;
+        const title = _chatLog.find(m => m.role === 'user')?.text || 'New chat';
+        saveSessionMessages(currentSessionId, title, _chatLog);
+        renderSidebar();
+    }
+
+    /* ==============================================================
+       Rendering
+       ============================================================== */
+    function appendUserBubble(text, time, persist) {
+        const div = document.createElement('div');
+        div.className = 'ai-msg user-msg';
+        div.innerHTML =
+            `<div class="meta">You &middot; ${ts(time)}</div>` +
+            `<div class="bubble box">${esc(text)}</div>`;
+        aiMessages.appendChild(div);
+        scrollAiToBottom();
+        if (persist !== false) { _chatLog.push({role:'user', text, time:Date.now()}); persistLog(); }
+    }
+
+    function appendAssistantBubble(text, time, persist) {
+        removeThinking();
+        const div = document.createElement('div');
+        div.className = 'ai-msg assistant-msg';
+        div.innerHTML =
+            `<div class="meta"><i class="fas fa-robot" style="font-size:0.65rem;margin-right:0.2rem"></i>Assistant &middot; ${ts(time)}</div>` +
+            `<div class="bubble box">${fmt(text)}</div>`;
+        aiMessages.appendChild(div);
+        scrollAiToBottom();
+        if (persist !== false) { _chatLog.push({role:'assistant', text, time:Date.now()}); persistLog(); }
+    }
+
+    /* ---- Streaming support ---- */
+    let _streamBubble = null;   // the .bubble.box element being streamed into
+    let _streamBuf = '';        // raw markdown accumulated so far
+
+    function streamStart() {
+        removeThinking();
+        _streamBuf = '';
+        const div = document.createElement('div');
+        div.className = 'ai-msg assistant-msg';
+        div.id = 'ai-streaming-msg';
+        div.innerHTML =
+            `<div class="meta"><i class="fas fa-robot" style="font-size:0.65rem;margin-right:0.2rem"></i>Assistant &middot; ${ts()}</div>` +
+            `<div class="bubble box"><span class="streaming-cursor"></span></div>`;
+        aiMessages.appendChild(div);
+        _streamBubble = div.querySelector('.bubble.box');
+        scrollAiToBottom();
+    }
+
+    function _stripThinkBlocks(s) {
+        // Remove <think>...</think> (Qwen-style reasoning)
+        s = s.replace(/<think>[\s\S]*?<\/think>/g, '');
+        // If still inside an unclosed <think>, hide everything after it
+        const idx = s.indexOf('<think>');
+        if (idx >= 0) s = s.substring(0, idx);
+        return s.trimStart();
+    }
+
+    function streamDelta(content) {
+        _streamBuf += content;
+        const display = _stripThinkBlocks(_streamBuf);
+        // If nothing to show yet (still in think block or leading whitespace only)
+        if (!display) {
+            if (!document.getElementById('ai-thinking')) showThinking();
+            return;
+        }
+        // We have visible content — ensure thinking is removed and bubble exists
+        if (!_streamBubble) streamStart();
+        _streamBubble.innerHTML = fmt(display) + '<span class="streaming-cursor"></span>';
+        scrollAiToBottom();
+    }
+
+    function streamEnd(fullContent) {
+        removeThinking();
+        const raw = fullContent || _streamBuf;
+        const text = _stripThinkBlocks(raw);
+        if (_streamBubble) {
+            _streamBubble.innerHTML = fmt(text);
+        } else if (text) {
+            // No bubble was created (e.g. entire response was a think block)
+            appendAssistantBubble(text);
+            _streamBuf = '';
+            const marker = document.getElementById('ai-streaming-msg');
+            if (marker) marker.removeAttribute('id');
+            scrollAiToBottom();
+            return;
+        }
+        _streamBubble = null;
+        _streamBuf = '';
+        const marker = document.getElementById('ai-streaming-msg');
+        if (marker) marker.removeAttribute('id');
+        scrollAiToBottom();
+        _chatLog.push({role:'assistant', text, time:Date.now()});
+        persistLog();
+    }
+
+    function appendSystemMsg(text, persist) {
+        const div = document.createElement('div');
+        div.className = 'ai-msg system-msg';
+        div.innerHTML = `<span class="system-text">${esc(text)}</span>`;
+        aiMessages.appendChild(div);
+        scrollAiToBottom();
+        if (persist !== false) { _chatLog.push({role:'system', text, time:Date.now()}); }
+    }
+
+    function appendToolCall(name, args, persist) {
+        removeThinking();
+        const div = document.createElement('div');
+        div.className = 'ai-msg system-msg';
+        const a = (args && Object.keys(args).length) ? JSON.stringify(args) : '';
+        div.innerHTML = `<span class="ai-tool-badge">🔧 ${esc(name)}${a ? '('+esc(a)+')' : '()'}</span>`;
+        aiMessages.appendChild(div);
+        scrollAiToBottom();
+        if (persist !== false) { _chatLog.push({role:'tool', name, args:args||{}, time:Date.now()}); }
+    }
+
+    let _thinkTimer = null;
+
+    function showThinking() {
+        removeThinking();
+        const div = document.createElement('div');
+        div.className = 'ai-msg thinking-msg';
+        div.id = 'ai-thinking';
+        div.innerHTML =
+            '<div class="thinking-bubble">' +
+              '<span class="thinking-label">Thinking</span>' +
+              '<div class="thinking-dot"></div>' +
+              '<div class="thinking-dot"></div>' +
+              '<div class="thinking-dot"></div>' +
+              '<span class="thinking-elapsed" id="ai-think-time"></span>' +
+            '</div>';
+        aiMessages.appendChild(div);
+        scrollAiToBottom();
+        // Elapsed timer so user knows it's alive
+        const t0 = Date.now();
+        _thinkTimer = setInterval(() => {
+            const el = document.getElementById('ai-think-time');
+            if (!el) { clearInterval(_thinkTimer); _thinkTimer = null; return; }
+            const s = Math.floor((Date.now() - t0) / 1000);
+            if (s >= 2) el.textContent = s + 's';
+        }, 1000);
+    }
+
+    function removeThinking() {
+        if (_thinkTimer) { clearInterval(_thinkTimer); _thinkTimer = null; }
+        const el = document.getElementById('ai-thinking');
+        if (el) el.remove();
+    }
+
+    /* ==============================================================
+       WebSocket
+       ============================================================== */
+    let _reconTimer = null;
+
+    function connectAiChat(sessionId) {
+        if (!llmEnabled) return;
+        if (_reconTimer) { clearTimeout(_reconTimer); _reconTimer = null; }
+
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let url = `${proto}//${location.host}/ws/llm-chat?token=${encodeURIComponent(authToken)}`;
+        if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
+        if (currentEndpoint) url += `&endpoint=${encodeURIComponent(currentEndpoint)}`;
+
+        aiSocket = new WebSocket(url);
+        aiSocket.onopen = () => { console.log('[AI Chat] WS connected to', url.replace(/token=[^&]+/, 'token=***')); };
+
+        aiSocket.onmessage = (event) => {
+            let data;
+            try { data = JSON.parse(event.data); } catch { return; }
+            console.log('[AI Chat] WS ←', data.type, data.type === 'stream_delta' ? data.content?.slice(0, 40) : '');
+
+            switch (data.type) {
+                case 'connected':
+                    statusEl.textContent = 'Connected (' + data.access + ')';
+                    statusEl.className = 'tag is-success is-rounded is-small';
+                    /* Update model & endpoint from server */
+                    if (data.model && modelTag) modelTag.textContent = data.model;
+                    if (data.endpoint) currentEndpoint = data.endpoint;
+                    if (data.endpoints && epSelect) {
+                        const prev = epSelect.value;
+                        epSelect.innerHTML = '';
+                        data.endpoints.forEach(ep => {
+                            const opt = document.createElement('option');
+                            opt.value = ep; opt.textContent = ep;
+                            if (ep === (data.endpoint || prev)) opt.selected = true;
+                            epSelect.appendChild(opt);
+                        });
+                    }
+                    if (data.session_id && !currentSessionId) {
+                        currentSessionId = data.session_id;
+                        const all = loadSessions();
+                        if (!all[currentSessionId]) {
+                            all[currentSessionId] = { title:'New chat', created:Date.now(), updated:Date.now(), messages:[] };
+                            saveSessions(all);
+                        }
+                        _chatLog = (all[currentSessionId] && all[currentSessionId].messages) || [];
+                        renderSidebar();
+                    }
+                    /* If server still has a background task running (or
+                       completed while we were away), it will replay the
+                       buffered events.  Keep the input locked and show
+                       thinking so the user sees progress. */
+                    if (data.pending) {
+                        pendingSessions.add(currentSessionId);
+                        showThinking();
+                        setInputEnabled(false);
+                        renderSidebar();
+                    } else {
+                        setInputEnabled(true);
+                        aiInput.focus();
+                    }
+                    break;
+
+                case 'thinking':
+                    showThinking();
+                    break;
+
+                case 'tool_call':
+                    appendToolCall(data.name, data.args || {});
+                    showThinking();
+                    break;
+
+                case 'tool_result':
+                    break;
+
+                case 'stream_start':
+                    streamStart();
+                    break;
+
+                case 'stream_delta':
+                    streamDelta(data.content);
+                    break;
+
+                case 'stream_end':
+                    streamEnd(data.content);
+                    pendingSessions.delete(currentSessionId);
+                    setInputEnabled(true);
+                    aiInput.focus();
+                    renderSidebar();
+                    break;
+
+                case 'response':
+                    removeThinking();
+                    appendAssistantBubble(data.content);
+                    pendingSessions.delete(currentSessionId);
+                    setInputEnabled(true);
+                    aiInput.focus();
+                    renderSidebar();
+                    break;
+
+                case 'error':
+                    removeThinking();
+                    appendSystemMsg('\u274c ' + data.content);
+                    pendingSessions.delete(currentSessionId);
+                    setInputEnabled(true);
+                    renderSidebar();
+                    break;
+
+                case 'endpoint_changed':
+                    if (data.model && modelTag) modelTag.textContent = data.model;
+                    if (data.endpoint) {
+                        currentEndpoint = data.endpoint;
+                        if (epSelect) epSelect.value = data.endpoint;
+                        appendSystemMsg('\u2699\ufe0f Switched to endpoint: ' + data.endpoint + ' (' + data.model + ')');
+                    }
+                    break;
+            }
+        };
+
+        aiSocket.onclose = (ev) => {
+            console.log('[AI Chat] WS closed', ev.code, ev.reason);
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = 'tag is-danger is-rounded is-small';
+            setInputEnabled(false);
+            _reconTimer = setTimeout(() => connectAiChat(currentSessionId), 5000);
+        };
+
+        aiSocket.onerror = (ev) => {
+            console.error('[AI Chat] WS error', ev);
+            statusEl.textContent = 'Error';
+            statusEl.className = 'tag is-danger is-rounded is-small';
+        };
+    }
+
+    /* ==============================================================
+       Sending
+       ============================================================== */
+    window.sendAiMessage = function() {
+        if (!aiSocket || aiWaiting) return;
+        const text = aiInput.value.trim();
+        if (!text) return;
+
+        aiInput.value = '';
+        appendUserBubble(text);
+        showThinking();          /* instant client-side feedback */
+        setInputEnabled(false);
+        pendingSessions.add(currentSessionId);
+        renderSidebar();
+
+        aiSocket.send(JSON.stringify({ message: text }));
+    };
+
+    /* Endpoint selector — switch the active endpoint via WebSocket */
+    if (epSelect) {
+        epSelect.addEventListener('change', () => {
+            currentEndpoint = epSelect.value;
+            if (aiSocket && aiSocket.readyState === WebSocket.OPEN) {
+                aiSocket.send(JSON.stringify({ endpoint: currentEndpoint }));
+            }
+        });
+    }
+
+    aiInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); }
+    });
+
+    /* ==============================================================
+       Init
+       ============================================================== */
+    document.addEventListener('DOMContentLoaded', () => {
+        renderSidebar();
+        if (llmEnabled) {
+            const sessions = getSessionsSorted();
+            if (sessions.length > 0) switchSession(sessions[0].id);
+            else connectAiChat(null);
+        }
+    });
+
+    window.clearAiChat = function() {
+        aiMessages.innerHTML = '';
+        _chatLog = [];
+        appendSystemMsg('Chat cleared.');
+    };
+})();
+</script>
+{% endblock %}

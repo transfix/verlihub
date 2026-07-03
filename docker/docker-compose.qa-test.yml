@@ -1,0 +1,101 @@
+# Docker Compose for QA Testing
+#
+# Stands up PostgreSQL + verlihub-py hub + 16 NMDC load test clients.
+# The hub's NMDC port (4111) is exposed to the host so you can also
+# connect with a desktop DC++ client while the load test runs.
+#
+# Usage:
+#   # Run the full QA test (build + start + load test)
+#   ./run_qa_test.sh
+#
+#   # Or manually:
+#   docker compose -f docker/docker-compose.qa-test.yml up --build
+#
+#   # Connect a desktop client to:  dc://localhost:4111
+#
+#   # Clean up
+#   docker compose -f docker/docker-compose.qa-test.yml down -v
+
+services:
+  # ── PostgreSQL database ──────────────────────────────────────────────────
+  qa-postgres:
+    image: postgres:16
+    container_name: qa-postgres
+    environment:
+      POSTGRES_DB: verlihub_qa
+      POSTGRES_USER: verlihub
+      POSTGRES_PASSWORD: verlihub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verlihub -d verlihub_qa"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - qa-postgres-data:/var/lib/postgresql/data
+    networks:
+      - qa-network
+
+  # ── Verlihub-py Hub ──────────────────────────────────────────────────────
+  qa-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: qa-hub
+    depends_on:
+      qa-postgres:
+        condition: service_healthy
+    environment:
+      VH_AUTO_START: "1"
+      VH_PORT: "4111"
+      VH_LISTEN_IP: "0.0.0.0"
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/qa-postgresql.yml
+        --mode api
+    ports:
+      - "4111:4111"    # NMDC hub – connect desktop clients here
+      - "8000:8000"    # API + dashboard
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - qa-network
+
+  # ── NMDC Load Test (16 clients, staggered messages) ─────────────────────
+  qa-load-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: qa-load-test
+    depends_on:
+      qa-hub:
+        condition: service_healthy
+    environment:
+      HUB_HOST: qa-hub
+      HUB_PORT: "4111"
+      NUM_CLIENTS: "16"
+      NUM_MESSAGES: "20"
+      MSG_INTERVAL: "1.0"
+      STAGGER_DELAY: "0.5"
+      KEEP_ALIVE: "${KEEP_ALIVE:-0}"
+    command: >
+      python docker/tests/nmdc_load_test.py
+        --host qa-hub
+        --port 4111
+        --clients 16
+        --messages 20
+        --interval 1.0
+        --stagger 0.5
+        --wait 120
+    networks:
+      - qa-network
+
+volumes:
+  qa-postgres-data:
+
+networks:
+  qa-network:
+    driver: bridge

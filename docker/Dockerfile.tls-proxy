@@ -1,0 +1,33 @@
+# Verlihub TLS Proxy
+#
+# Lightweight Go TLS termination proxy for NMDC connections.
+# Accepts NMDCS (TLS) and plain NMDC on the same port, auto-detects
+# the protocol, terminates TLS, and forwards plaintext to the hub.
+# Injects $MyIP commands so the hub sees real client IPs.
+#
+# Supports:
+#   - Self-signed certificate auto-generation
+#   - Custom certificates (including Let's Encrypt)
+#   - TLS 1.0–1.3 with configurable minimum version
+#   - Mixed TLS/plain on the same port (auto-detection)
+
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /src
+COPY tls-proxy/ .
+
+RUN go build -o /tls-proxy ./cmd/proxy.go
+
+# Minimal runtime
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /tls-proxy /usr/local/bin/tls-proxy
+
+# Certificate directory — mount a volume here for persistent/LE certs
+RUN mkdir -p /certs
+VOLUME /certs
+
+ENTRYPOINT ["tls-proxy"]
+CMD ["-host", ":411", "-hub", "hub:4111", "-cert", "/certs/hub.crt", "-key", "/certs/hub.key", "-log"]

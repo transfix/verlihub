@@ -1,0 +1,24 @@
+edition: py
+
+database:
+  type: sqlite
+  path: /data/verlihub.db
+
+hub:
+  name: "Secure Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  port: 8000
+
+tls:
+  enabled: true
+  only_mode: false
+  min_version: 2
+  cert_org: "My Hub"
+  cert_email: "admin@example.com"

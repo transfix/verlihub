@@ -1,0 +1,21 @@
+edition: py
+
+database:
+  type: postgresql
+  host: postgres
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 5432
+
+hub:
+  name: "My Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  port: 8000

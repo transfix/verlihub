@@ -1,0 +1,45 @@
+# Remote vLLM integration test configuration
+# Uses SQLite in-memory for speed; remote vLLM endpoint provides the LLM.
+environment: development
+mode: api
+
+database:
+  type: sqlite
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+
+hub:
+  name: "vLLM Remote Integration Test Hub"
+  port: 4111
+  max_users: 100
+
+users:
+  masters:
+    - nick: admin
+      password: admin123
+      note: "vLLM remote test admin"
+
+llm:
+  enabled: true
+  base_url: "https://qwopus.tinyhost.xyz/v1"
+  model: "Qwopus3.5-27B-v3.5-Q5_K_M.gguf"
+  api_key: "none"
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 5
+  min_class: 3
+  admin_class: 5
+
+mcp:
+  enabled: true
+  min_class: 3
+  admin_class: 5
+
+logging:
+  level: debug

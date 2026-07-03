@@ -46,7 +46,7 @@ msgstr "Compartir: %llu [%s]"
 #: ../src/cban.cpp:124 ../src/cbanlist.cpp:745 ../src/cbanlist.cpp:795
 #, c-format
 msgid "Reason: %s"
-msgstr "RazÛn: %s"
+msgstr "Raz√≥n: %s"
 
 #: ../src/cban.cpp:127
 #, c-format
@@ -90,7 +90,7 @@ msgstr "Operador: %s"
 
 #: ../src/cban.cpp:164 ../src/cbanlist.cpp:529
 msgid "Last hit"
-msgstr "⁄ltimo golpe"
+msgstr "√öltimo golpe"
 
 #: ../src/cban.cpp:167
 #, c-format
@@ -133,7 +133,7 @@ msgstr "Nivel Host 3"
 
 #: ../src/cban.cpp:176
 msgid "Share size"
-msgstr "TamaÒo Compartido"
+msgstr "Tama√±o Compartido"
 
 #: ../src/cban.cpp:176
 msgid "Nick prefix"
@@ -168,7 +168,7 @@ msgstr "Operador"
 
 #: ../src/cbanlist.cpp:722 ../src/cbanlist.cpp:772 ../src/cconndc.cpp:159
 msgid "Password"
-msgstr "ContraseÒa"
+msgstr "Contrase√±a"
 
 #: ../src/cbanlist.cpp:726 ../src/cbanlist.cpp:776
 msgid "Reconnect"
@@ -228,29 +228,29 @@ msgstr "Miembros de la sala"
 #: ../src/cchatconsole.cpp:203
 #, c-format
 msgid "User is already in chatroom: %s"
-msgstr "El usuario ya est· en la sala: %s"
+msgstr "El usuario ya est√° en la sala: %s"
 
 #: ../src/cchatconsole.cpp:216
 #, c-format
 msgid "User added to chatroom: %s"
-msgstr "Usuario aÒadido a la sala: %s"
+msgstr "Usuario a√±adido a la sala: %s"
 
 #: ../src/ccommand.cpp:111
 #, c-format
 msgid "Command suffix %s is not implemented, known suffixes are"
-msgstr "Sufijo de comando %s no est· implementado, los sufijos conocidos son"
+msgstr "Sufijo de comando %s no est√° implementado, los sufijos conocidos son"
 
 #: ../src/ccommand.cpp:121
 msgid "Suffix regular expression"
-msgstr "Sufijo de expresiÛn regular"
+msgstr "Sufijo de expresi√≥n regular"
 
 #: ../src/ccommand.cpp:121
 msgid "Parameters regular expression"
-msgstr "Par·metros de expresiÛn regular"
+msgstr "Par√°metros de expresi√≥n regular"
 
 #: ../src/ccommandcollection.cpp:71
 msgid "Command parameters error"
-msgstr "Par·metros de comando errÛneo"
+msgstr "Par√°metros de comando err√≥neo"
 
 #: ../src/cconndc.cpp:159
 msgid "Key"
@@ -271,7 +271,7 @@ msgstr "MiInfo"
 #: ../src/cconndc.cpp:182
 #, c-format
 msgid "Operation timeout: %s"
-msgstr "Tiempo de espera excedido para la operaciÛn: %s"
+msgstr "Tiempo de espera excedido para la operaci√≥n: %s"
 
 #: ../src/cconndc.cpp:193
 msgid "General timeout"
@@ -311,7 +311,7 @@ msgstr "Subida por Slot"
 
 #: ../src/cconntypes.cpp:194
 msgid "Description"
-msgstr "DescripciÛn"
+msgstr "Descripci√≥n"
 
 #: ../src/ccustomredirect.cpp:77 ../src/cdcclient.cpp:65
 #: ../src/creglist.cpp:117
@@ -395,7 +395,7 @@ msgstr "Estado"
 #: ../src/ccustomredirects.cpp:323 ../src/cdcconsole.cpp:408
 #: ../src/cdcconsole.cpp:561
 msgid "Country"
-msgstr "PaÌs"
+msgstr "Pa√≠s"
 
 #: ../src/ccustomredirects.cpp:324
 msgid "Secure"
@@ -408,12 +408,12 @@ msgstr "Comparte"
 #: ../src/cdcclient.cpp:52
 #, c-format
 msgid "Minimum: %.4f"
-msgstr "MÌnimo: %.4f"
+msgstr "M√≠nimo: %.4f"
 
 #: ../src/cdcclient.cpp:54
 #, c-format
 msgid "Maximum: %.4f"
-msgstr "M·ximo: %.4f"
+msgstr "M√°ximo: %.4f"
 
 #: ../src/cdcclients.cpp:316
 msgid "Show list of clients"
@@ -425,7 +425,7 @@ msgstr "ID"
 
 #: ../src/cdcclients.cpp:450 ../src/cpluginmanager.cpp:241
 msgid "Version"
-msgstr "VersiÛn"
+msgstr "Versi√≥n"
 
 #: ../src/cdcclients.cpp:451
 msgid "Use hub"
@@ -489,29 +489,29 @@ msgstr "Ciudad"
 
 #: ../src/cdcconsole.cpp:462
 msgid "Please note, hub is no longer scheduled for restart."
-msgstr "Tenga en cuenta que ya no est· prevista la reanudaciÛn del hub."
+msgstr "Tenga en cuenta que ya no est√° prevista la reanudaci√≥n del hub."
 
 #: ../src/cdcconsole.cpp:464
 #, c-format
 msgid "Please note, hub has been scheduled to restart in: %s"
-msgstr "Tenga en cuenta que est· prevista reinciar del hub en: %s"
+msgstr "Tenga en cuenta que est√° prevista reinciar del hub en: %s"
 
 #: ../src/cdcconsole.cpp:466
 msgid "Please note, hub will be restarted now."
-msgstr "Tenga en cuenta que el hub se reiniciar· ahora."
+msgstr "Tenga en cuenta que el hub se reiniciar√° ahora."
 
 #: ../src/cdcconsole.cpp:469
 msgid "Please note, hub is no longer scheduled for stop."
-msgstr "Tenga en cuenta que ya no est· prevista la parada del hub."
+msgstr "Tenga en cuenta que ya no est√° prevista la parada del hub."
 
 #: ../src/cdcconsole.cpp:471
 #, c-format
 msgid "Please note, hub has been scheduled to stop in: %s"
-msgstr "Tenga en cuenta que est· prevista la parada del hub en: %s"
+msgstr "Tenga en cuenta que est√° prevista la parada del hub en: %s"
 
 #: ../src/cdcconsole.cpp:473 ../src/cserverdc.cpp:3695
 msgid "Please note, hub will be stopped now."
-msgstr "Tenga en cuenta que el hub se detendr· ahora."
+msgstr "Tenga en cuenta que el hub se detendr√° ahora."
 
 #: ../src/cdcconsole.cpp:517
 msgid "Usage example: !ccbc :US:GB: <message>"
@@ -528,11 +528,11 @@ msgstr[2] ""
 #: ../src/cdcconsole.cpp:540 ../src/cdcconsole.cpp:734
 #: ../src/cserverdc.cpp:1275
 msgid "Your information"
-msgstr "Su informaciÛn"
+msgstr "Su informaci√≥n"
 
 #: ../src/cdcconsole.cpp:555
 msgid "Your IP information"
-msgstr "Su informaciÛn IP"
+msgstr "Su informaci√≥n IP"
 
 #: ../src/cdcconsole.cpp:559 ../src/cserverdc.cpp:2873 ../src/cuser.cpp:211
 #, c-format
@@ -556,7 +556,7 @@ msgstr ""
 
 #: ../src/cdcconsole.cpp:579
 msgid "This command is currently disabled."
-msgstr "Este comando est· actualmente desactivado."
+msgstr "Este comando est√° actualmente desactivado."
 
 #: ../src/cdcconsole.cpp:587 ../src/cdcproto.cpp:1957
 msgid ""
@@ -570,19 +570,19 @@ msgstr "Tu mensaje no se ha enviado porque es igual a tu mensaje anterior."
 
 #: ../src/cdcconsole.cpp:631 ../src/cdcconsole.cpp:3632
 msgid "Public chat messages are now visible. To hide them, write: +nochat"
-msgstr "Los mensajes del chat p˙blico son ahora visibles. Para ocultarlos, escribe: +nochat"
+msgstr "Los mensajes del chat p√∫blico son ahora visibles. Para ocultarlos, escribe: +nochat"
 
 #: ../src/cdcconsole.cpp:634
 msgid "Public chat messages are already visible. To hide them, write: +nochat"
-msgstr "Los mensajes del chat p˙blico ya son visibles. Para ocultarlos, escribe: +nochat"
+msgstr "Los mensajes del chat p√∫blico ya son visibles. Para ocultarlos, escribe: +nochat"
 
 #: ../src/cdcconsole.cpp:639 ../src/cdcconsole.cpp:3642
 msgid "Public chat messages are now hidden. To show them, write: +chat"
-msgstr "Los mensajes del chat p˙blico ahora est·n ocultos. Para mostrarlos, escribe: +chat"
+msgstr "Los mensajes del chat p√∫blico ahora est√°n ocultos. Para mostrarlos, escribe: +chat"
 
 #: ../src/cdcconsole.cpp:642
 msgid "Public chat messages are already hidden. To show them, write: +chat"
-msgstr "Los mensajes del chat p˙blico ya est·n ocultos. Para mostrarlos, escribe: +chat"
+msgstr "Los mensajes del chat p√∫blico ya est√°n ocultos. Para mostrarlos, escribe: +chat"
 
 #: ../src/cdcconsole.cpp:656 ../src/cserverdc.cpp:2897
 #: ../src/cserverdc.cpp:2908
@@ -596,7 +596,7 @@ msgstr "Autores:"
 
 #: ../src/cdcconsole.cpp:664
 msgid "Not forgetting other 4 people who didn't want to be listed here."
-msgstr "Sin olvidar a otras 4 personas que no quisieron figurar aquÌ."
+msgstr "Sin olvidar a otras 4 personas que no quisieron figurar aqu√≠."
 
 #: ../src/cdcconsole.cpp:665
 msgid "Translators"
@@ -612,14 +612,14 @@ msgstr "Contribuidores"
 
 #: ../src/cdcconsole.cpp:674
 msgid "Credits"
-msgstr "CrÈditos"
+msgstr "Cr√©ditos"
 
 #: ../src/cdcconsole.cpp:675
 msgid ""
 "We would like to thank everyone in our support hub for their input and "
 "valuable support and of course everyone who continues to use this great hub "
 "software."
-msgstr "Queremos dar las gracias a todos los miembros de nuestro centro de asistencia por sus aportaciones y su valioso apoyo y, por supuesto, a todos los que siguen utilizando este magnÌfico programa de hub ."
+msgstr "Queremos dar las gracias a todos los miembros de nuestro centro de asistencia por sus aportaciones y su valioso apoyo y, por supuesto, a todos los que siguen utilizando este magn√≠fico programa de hub ."
 
 #: ../src/cdcconsole.cpp:676
 msgid "Links"
@@ -627,7 +627,7 @@ msgstr "Enlaces"
 
 #: ../src/cdcconsole.cpp:677
 msgid "Website"
-msgstr "P·gina web"
+msgstr "P√°gina web"
 
 #: ../src/cdcconsole.cpp:679
 msgid "Wiki"
@@ -647,7 +647,7 @@ msgstr "Soporte"
 
 #: ../src/cdcconsole.cpp:686
 msgid "Donation"
-msgstr "DonaciÛn"
+msgstr "Donaci√≥n"
 
 #: ../src/cdcconsole.cpp:688
 msgid "Donators"
@@ -655,12 +655,12 @@ msgstr "Donantes"
 
 #: ../src/cdcconsole.cpp:718 ../src/cinfoserver.cpp:526
 msgid "Hub information"
-msgstr "InformaciÛn del hub"
+msgstr "Informaci√≥n del hub"
 
 #: ../src/cdcconsole.cpp:720 ../src/cinfoserver.cpp:533
 #, c-format
 msgid "Owner: %s"
-msgstr "DueÒo: %s"
+msgstr "Due√±o: %s"
 
 #: ../src/cdcconsole.cpp:720 ../src/cdcconsole.cpp:721
 #: ../src/cinfoserver.cpp:532 ../src/cinfoserver.cpp:533
@@ -678,7 +678,7 @@ msgstr "No se ha fijado"
 #: ../src/cdcconsole.cpp:721
 #, c-format
 msgid "Address: %s"
-msgstr "DirecciÛn: %s"
+msgstr "Direcci√≥n: %s"
 
 #: ../src/cdcconsole.cpp:724
 #, c-format
@@ -3459,7 +3459,7 @@ msgstr "Ahora puedes desconectar usuarios por: %s"
 
 #: ../src/cuser.cpp:526
 msgid "You're no longer allowed to temporarily ban users."
-msgstr "Ya no est· permitido banear temporalmente a los usuarios."
+msgstr "Ya no est√° permitido banear temporalmente a los usuarios."
 
 #: ../src/cuser.cpp:529
 #, c-format
@@ -3468,12 +3468,12 @@ msgstr "Ahora se le permite prohibir temporalmente a los usuarios para: %s"
 
 #: ../src/cuser.cpp:536
 msgid "You're no longer allowed to permanently ban users."
-msgstr "Ya no est· permitido banear usuarios permanentemente."
+msgstr "Ya no est√° permitido banear usuarios permanentemente."
 
 #: ../src/cuser.cpp:539
 #, c-format
 msgid "You're now allowed to permanently ban users for: %s"
-msgstr "Ya est· permitido banear usuarios permanentemente para:  %s"
+msgstr "Ya est√° permitido banear usuarios permanentemente para:  %s"
 
 #: ../src/cuser.cpp:636
 msgid "Unknown chatroom command specified."
@@ -3571,28 +3571,28 @@ msgstr "No hay ayuda disponible para este comando."
 
 #: ../src/tlistconsole.h:206
 msgid "Item successfully added"
-msgstr "ArtÌculo aÒadido correctamente"
+msgstr "Art√≠culo a√±adido correctamente"
 
 #: ../src/tlistconsole.h:209
 msgid "Unable to add item."
-msgstr "No se puede aÒadir el artÌculo."
+msgstr "No se puede a√±adir el art√≠culo."
 
 #: ../src/tlistconsole.h:212
 msgid "Item already exists."
-msgstr "ArtÌculo ya existe."
+msgstr "Art√≠culo ya existe."
 
 #: ../src/tlistconsole.h:236
 msgid "Item successfully deleted."
-msgstr "ArtÌculo eliminado correctamente."
+msgstr "Art√≠culo eliminado correctamente."
 
 #: ../src/tlistconsole.h:241 ../src/tlistconsole.h:271
 msgid "Item not found."
-msgstr "ArtÌculo no encontrado."
+msgstr "Art√≠culo no encontrado."
 
 #: ../src/tlistconsole.h:262
 msgid "Item successfully modified"
-msgstr "ArtÌculo modificado correctamente"
+msgstr "Art√≠culo modificado correctamente"
 
 #: ../src/tlistconsole.h:265
 msgid "Error in item data."
-msgstr "Error en los datos del artÌculo."
+msgstr "Error en los datos del art√≠culo."

@@ -62,6 +62,8 @@ option(USE_CUSTOM_AUTOSPRINTF "Build using custom internal autosprintf implement
 OPTION(DEFINE_DEBUG "Build using debugging code" OFF)
 option(USE_TLS_PROXY "Build Go TLS proxy library" OFF)
 option(USE_FEARTLS_PROXY "Use FearTLS proxy library" OFF)
+option(COVERAGE "Build with code coverage instrumentation (gcov)" OFF)
+option(PYTHON_WHEEL_BUILD "Build only targets needed for the Python wheel (skips plugins, scripts, etc.)" OFF)
 
 if(USE_TLS_PROXY AND USE_FEARTLS_PROXY)
 	message(FATAL_ERROR "[ ER ] You can't have both USE_TLS_PROXY and USE_FEARTLS_PROXY at the same time")
@@ -75,9 +77,9 @@ endif()
 SET(PLUGINS_LIST "")
 SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
-if(INSTALL_CMAKE_FILES)
+if(INSTALL_CMAKE_FILES AND NOT PYTHON_WHEEL_BUILD)
 	install(FILES "${CMAKE_SOURCE_DIR}/cmake/Modules/FindVerlihub.cmake" DESTINATION "${CMAKE_INSTALL_PREFIX}/cmake/Modules")
-endif(INSTALL_CMAKE_FILES)
+endif()
 
 INCLUDE(CheckIncludeFiles)
 INCLUDE(MacroLogFeature)
@@ -190,6 +192,15 @@ Find_Package(Threads REQUIRED)
 Find_Package(Gettext REQUIRED)
 Find_Package(Libintl REQUIRED)
 
+# NMDCpb protobuf extension (optional)
+find_package(Protobuf 3.0)
+if(Protobuf_FOUND)
+	message(STATUS "[ OK ] Protobuf found: ${Protobuf_VERSION} — NMDCpb protocol extension enabled")
+	add_definitions(-DWITH_NMDCPB)
+else()
+	message(STATUS "[ !! ] Protobuf not found — NMDCpb protocol extension disabled")
+endif()
+
 if(USE_CUSTOM_AUTOSPRINTF)
 	message(STATUS "[ OK ] Using custom internal autosprintf implementation")
 else(USE_CUSTOM_AUTOSPRINTF)
@@ -222,10 +233,22 @@ ENDIF(UNIX)
 # ----------------------------------------------------------------------------------------------------
 # flags
 
-SET(CMAKE_CXX_STANDARD 17) # note: required by icu 75+
+SET(CMAKE_CXX_STANDARD 20) # note: C++20 required for thin verlihub refactoring
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_EXTENSIONS OFF)
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DU_USING_ICU_NAMESPACE=1")
+
+# C++20 compiler version checks
+IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "11.0")
+        message(FATAL_ERROR "GCC 11+ required for C++20 support")
+    ENDIF()
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fconcepts-diagnostics-depth=2")
+ELSEIF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+        message(FATAL_ERROR "Clang 14+ required for C++20 support")
+    ENDIF()
+ENDIF()
 
 IF(HAVE_BSD)
 	SET(CMAKE_CXX_COMPILER "clang++")
@@ -242,7 +265,11 @@ IF(HAVE_ALPINE)
 	# https://github.com/golang/go/issues/13492
 ENDIF(HAVE_ALPINE)
 
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O3 -Wno-overloaded-virtual") # todo: -Woverloaded-virtual -pthread
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-overloaded-virtual") # todo: -Woverloaded-virtual -pthread
+
+if(NOT COVERAGE)
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+endif(NOT COVERAGE)
 
 IF(DEFINE_DEBUG)
 	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g") # -Wextra
@@ -250,6 +277,15 @@ IF(DEFINE_DEBUG)
 ELSE(DEFINE_DEBUG)
 	SET(CMAKE_BUILD_TYPE "RELEASE")
 ENDIF(DEFINE_DEBUG)
+
+# Coverage instrumentation (gcov/lcov)
+if(COVERAGE)
+	message(STATUS "[ OK ] Building with code coverage instrumentation")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g --coverage -fprofile-arcs -ftest-coverage -O0")
+	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g --coverage -fprofile-arcs -ftest-coverage -O0")
+	SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
+	SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
+endif(COVERAGE)
 
 SET(VERLIHUB_USE_LIBS "-lverlihub -lvhapi")
 
@@ -431,11 +467,18 @@ if(USE_TLS_PROXY)
 endif()
 
 ADD_SUBDIRECTORY(src)
-ADD_SUBDIRECTORY(plugins)
-ADD_SUBDIRECTORY(share)
-ADD_SUBDIRECTORY(scripts)
-ADD_SUBDIRECTORY(po)
-ADD_SUBDIRECTORY(man)
+ADD_SUBDIRECTORY(tests)
+
+if(PYTHON_WHEEL_BUILD)
+	# Wheel builds: only build plugins (lua + python + plugman), skip install-only assets
+	ADD_SUBDIRECTORY(plugins)
+else()
+	ADD_SUBDIRECTORY(plugins)
+	ADD_SUBDIRECTORY(share)
+	ADD_SUBDIRECTORY(scripts)
+	ADD_SUBDIRECTORY(po)
+	ADD_SUBDIRECTORY(man)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
 # todo: build a cpack driven installer package

@@ -1,0 +1,64 @@
+# Bot chat integration test configuration
+#
+# Runs in "both" mode: NMDC hub (port 4112) + REST API (port 8000).
+# Ollama sidecar provides the LLM.  Users at different class levels
+# are pre-registered so integration tests can log in at each level.
+environment: development
+mode: both
+
+database:
+  type: sqlite
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+
+hub:
+  name: "Bot Chat Test Hub"
+  port: 4112
+  listen_host: "0.0.0.0"
+  max_users: 100
+  encoding: CP1252
+
+bots:
+  security:
+    nick: "Hub-Security"
+    description: "Hub security bot (LLM-powered)"
+  op_chat:
+    nick: "OpChat"
+    description: "Operator chat"
+
+users:
+  masters:
+    - nick: admin
+      password: admin123
+      note: "Test admin"
+  operators:
+    - nick: operator1
+      password: oper123
+      note: "Test operator"
+  registered:
+    - nick: regular1
+      password: reg123
+      note: "Test registered user"
+
+llm:
+  enabled: true
+  base_url: "http://ollama:11434/v1"
+  model: "qwen2.5:0.5b"
+  api_key: "ollama"
+  temperature: 0.3
+  max_tokens: 2048
+  max_tool_rounds: 5
+  min_class: 3     # Operators get read-only tools in PM
+  admin_class: 5   # Admins get full tools in PM
+
+mcp:
+  enabled: false
+
+logging:
+  level: debug

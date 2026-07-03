@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ hub_name }}{% endblock %}</title>
+    
+    <!-- Bulma CSS from CDN -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Flag Icons CSS for country flags -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lipis/flag-icons@7.2.3/css/flag-icons.min.css">
+    
+    <!-- Custom styles -->
+    <style>
+        :root {
+            --vh-primary: #00d1b2;
+            --vh-primary-dark: #00b89c;
+            --vh-primary-light: #ebfffc;
+            --vh-info: #3298dc;
+            --vh-info-dark: #2793da;
+            --vh-success: #48c774;
+            --vh-success-dark: #3ec46d;
+            --vh-warning: #ffdd57;
+            --vh-warning-dark: #ffd83d;
+            --vh-danger: #f14668;
+            --vh-danger-dark: #ef2e55;
+            --vh-dark-bg: #1a1a2e;
+            --vh-dark-card: #16213e;
+            --vh-dark-text: #e4e4e4;
+            --vh-dark-border: #2a2a4a;
+        }
+        
+        /* Full-height layout */
+        html, body {
+            min-height: 100vh;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        
+        .section.main-section {
+            flex: 1;
+        }
+        
+        .footer {
+            padding: 1.5rem;
+            flex-shrink: 0;
+        }
+        
+        /* Dark theme */
+        [data-theme="dark"] {
+            --bulma-background: var(--vh-dark-bg);
+            --bulma-body-background-color: var(--vh-dark-bg);
+        }
+        
+        [data-theme="dark"] body {
+            background-color: var(--vh-dark-bg);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .navbar {
+            background-color: var(--vh-dark-card);
+        }
+        
+        [data-theme="dark"] .navbar-item,
+        [data-theme="dark"] .navbar-link {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .box,
+        [data-theme="dark"] .card {
+            background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .table {
+            background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .table th {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .input,
+        [data-theme="dark"] .textarea,
+        [data-theme="dark"] .select select {
+            background-color: #0f172a;
+            border-color: #334155;
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .title,
+        [data-theme="dark"] .subtitle {
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .footer {
+            background-color: var(--vh-dark-card);
+            color: var(--vh-dark-text);
+        }
+        
+        [data-theme="dark"] .section {
+            background-color: var(--vh-dark-bg);
+        }
+
+        /* Button colors — consistent in both themes */
+        .button.is-primary {
+            background-color: var(--vh-primary);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-primary:hover, .button.is-primary:focus {
+            background-color: var(--vh-primary-dark);
+        }
+        .button.is-info {
+            background-color: var(--vh-info);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-info:hover, .button.is-info:focus {
+            background-color: var(--vh-info-dark);
+        }
+        .button.is-success {
+            background-color: var(--vh-success);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-success:hover, .button.is-success:focus {
+            background-color: var(--vh-success-dark);
+        }
+        .button.is-warning {
+            background-color: var(--vh-warning);
+            border-color: transparent;
+            color: rgba(0,0,0,0.7);
+        }
+        .button.is-warning:hover, .button.is-warning:focus {
+            background-color: var(--vh-warning-dark);
+        }
+        .button.is-danger {
+            background-color: var(--vh-danger);
+            border-color: transparent;
+            color: #fff;
+        }
+        .button.is-danger:hover, .button.is-danger:focus {
+            background-color: var(--vh-danger-dark);
+        }
+
+        [data-theme="dark"] .button.is-light {
+            background-color: #2a2a4a;
+            border-color: var(--vh-dark-border);
+            color: var(--vh-dark-text);
+        }
+        [data-theme="dark"] .button.is-light:hover {
+            background-color: #353560;
+        }
+        [data-theme="dark"] .button:not(.is-primary):not(.is-info):not(.is-success):not(.is-warning):not(.is-danger):not(.is-light):not(.is-link) {
+            background-color: #2a2a4a;
+            border-color: var(--vh-dark-border);
+            color: var(--vh-dark-text);
+        }
+        [data-theme="dark"] .button:not(.is-primary):not(.is-info):not(.is-success):not(.is-warning):not(.is-danger):not(.is-light):not(.is-link):hover {
+            background-color: #353560;
+        }
+        [data-theme="dark"] .button.is-link.is-light {
+            background-color: rgba(50, 152, 220, 0.15);
+            color: #6fb8ef;
+        }
+        [data-theme="dark"] .button.is-info.is-light {
+            background-color: rgba(50, 152, 220, 0.15);
+            color: #6fb8ef;
+        }
+        [data-theme="dark"] .button.is-warning.is-light {
+            background-color: rgba(255, 221, 87, 0.15);
+            color: #ffe680;
+        }
+        [data-theme="dark"] .button.is-danger.is-light {
+            background-color: rgba(241, 70, 104, 0.15);
+            color: #f77e96;
+        }
+        [data-theme="dark"] .button.is-success.is-light {
+            background-color: rgba(72, 199, 116, 0.15);
+            color: #7ede9e;
+        }
+        [data-theme="dark"] .button.is-primary.is-light {
+            background-color: rgba(0, 209, 178, 0.15);
+            color: #3ee7d0;
+        }
+
+        /* Common styles */
+        .hero-body {
+            padding: 1.5rem;
+        }
+        
+        .stat-card {
+            text-align: center;
+        }
+        
+        .stat-card .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--vh-primary);
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        
+        .status-indicator.is-online {
+            background-color: #48c774;
+        }
+        
+        .status-indicator.is-offline {
+            background-color: #f14668;
+        }
+        
+        .status-indicator.is-warning {
+            background-color: #ffdd57;
+        }
+        
+        .user-class-badge {
+            font-size: 0.75rem;
+        }
+        
+        .sidebar {
+            position: fixed;
+            top: 52px;
+            left: 0;
+            height: calc(100vh - 52px);
+            width: 200px;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+        
+        .main-content {
+            margin-left: 200px;
+            padding: 1.5rem;
+        }
+        
+        @media screen and (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+            }
+        }
+        
+        .notification-container {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            z-index: 1000;
+            width: 300px;
+        }
+        
+        /* Theme toggle button */
+        .theme-toggle {
+            cursor: pointer;
+        }
+        
+        /* Loading spinner */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        
+        /* User list table */
+        .user-table tr.is-online {
+            background-color: rgba(72, 199, 116, 0.1);
+        }
+
+        /* Navbar hub info */
+        .navbar-hub-info {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            line-height: 1.2;
+        }
+        .navbar-hub-info .hub-name {
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .navbar-hub-info .hub-meta {
+            font-size: 0.7rem;
+            opacity: 0.75;
+            max-width: 280px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ── Responsive burger navbar ─────────────────────────────── */
+        /* On small/medium screens (≤1023 px) the burger is visible and
+           the menu opens as a dropdown overlay.  On wide screens the
+           standard Bulma horizontal navbar is used instead. */
+
+        /* Mobile/tablet: burger always visible, dropdown overlay menu */
+        @media screen and (max-width: 1023px) {
+            .navbar-burger {
+                display: flex !important;   /* show the burger */
+            }
+
+            .navbar-menu {
+                display: none !important;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                z-index: 40;
+                background: var(--vh-navbar-bg, #fff);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+                border-top: 1px solid rgba(0,0,0,0.06);
+                padding: 0.5rem 0;
+                max-height: calc(100vh - 52px);
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .navbar-menu.is-active {
+                display: block !important;
+            }
+
+            /* Items render as stacked list */
+            .navbar-menu .navbar-start,
+            .navbar-menu .navbar-end {
+                display: flex;
+                flex-direction: column;
+            }
+            .navbar-menu .navbar-end {
+                border-top: 1px solid rgba(0,0,0,0.06);
+                margin-top: 0.25rem;
+                padding-top: 0.25rem;
+            }
+            .navbar-menu .navbar-item {
+                padding: 0.55rem 1.25rem;
+            }
+            .navbar-menu .navbar-item:hover {
+                background: rgba(0,0,0,0.04);
+            }
+            .navbar-menu .navbar-item i.fas,
+            .navbar-menu .navbar-item i.far {
+                width: 1.4em;
+                text-align: center;
+            }
+        }
+
+        /* Tablet portrait: cap the dropdown width */
+        @media screen and (min-width: 769px) and (max-width: 1023px) {
+            .navbar-menu {
+                left: auto;
+                right: 0;
+                width: 280px;
+                border-radius: 0 0 8px 8px;
+            }
+        }
+
+        /* Dark theme overrides for mobile/tablet dropdown */
+        @media screen and (max-width: 1023px) {
+            [data-theme="dark"] .navbar-menu {
+                --vh-navbar-bg: var(--vh-dark-card);
+                background: var(--vh-dark-card);
+                border-top-color: var(--vh-dark-border);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-end {
+                border-top-color: var(--vh-dark-border);
+            }
+            [data-theme="dark"] .navbar-menu .navbar-item:hover {
+                background: rgba(255,255,255,0.06);
+            }
+        }
+    </style>
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a class="navbar-item" href="/dashboard/">
+                <img src="{{ hub_logo }}"
+                     alt="{{ hub_name }}" 
+                     style="height: 28px; width: 28px; border-radius: 50%; margin-right: 0.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.15);">
+                <div class="navbar-hub-info">
+                    <span class="hub-name">{{ hub_name }}</span>
+                    {% if hub_topic %}
+                    <span class="hub-meta">{{ hub_topic }}</span>
+                    {% elif hub_description %}
+                    <span class="hub-meta">{{ hub_description }}</span>
+                    {% endif %}
+                </div>
+            </a>
+            
+            <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarMain">
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+            </a>
+        </div>
+        
+        <div id="navbarMain" class="navbar-menu">
+            <div class="navbar-start">
+                {% if user %}
+                <a class="navbar-item" href="/dashboard/">
+                    <i class="fas fa-tachometer-alt mr-2"></i> Dashboard
+                </a>
+                <a class="navbar-item" href="/dashboard/users">
+                    <i class="fas fa-users mr-2"></i> Users
+                </a>
+                <a class="navbar-item" href="/dashboard/bans">
+                    <i class="fas fa-ban mr-2"></i> Bans
+                </a>
+                <a class="navbar-item" href="/dashboard/chat">
+                    <i class="fas fa-comments mr-2"></i> Chat
+                </a>
+                <a class="navbar-item" href="/dashboard/plugins">
+                    <i class="fas fa-puzzle-piece mr-2"></i> Plugins
+                </a>
+                <a class="navbar-item" href="/dashboard/config">
+                    <i class="fas fa-cog mr-2"></i> Config
+                </a>
+                {% if llm_enabled %}
+                <a class="navbar-item" href="/dashboard/ai-chat">
+                    <i class="fas fa-robot mr-2"></i> AI Chat
+                </a>
+                {% endif %}
+                <a class="navbar-item" href="/dashboard/logs">
+                    <i class="fas fa-file-alt mr-2"></i> Logs
+                </a>
+                <a class="navbar-item" href="/dashboard/invites">
+                    <i class="fas fa-ticket-alt mr-2"></i> Invites
+                </a>
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">
+                        <i class="fas fa-toolbox mr-2"></i> Tools
+                    </a>
+                    <div class="navbar-dropdown">
+                        <a class="navbar-item" href="/dashboard/triggers">
+                            <i class="fas fa-bolt mr-2"></i> Triggers
+                        </a>
+                        <a class="navbar-item" href="/dashboard/redirects">
+                            <i class="fas fa-directions mr-2"></i> Redirects
+                        </a>
+                        <a class="navbar-item" href="/dashboard/clients">
+                            <i class="fas fa-desktop mr-2"></i> Client Rules
+                        </a>
+                        <a class="navbar-item" href="/dashboard/penalties">
+                            <i class="fas fa-gavel mr-2"></i> Penalties
+                        </a>
+                        <a class="navbar-item" href="/dashboard/flood-config">
+                            <i class="fas fa-shield-alt mr-2"></i> Flood Config
+                        </a>
+                        <a class="navbar-item" href="/dashboard/protocol-stats">
+                            <i class="fas fa-chart-bar mr-2"></i> Protocol Stats
+                        </a>
+                    </div>
+                </div>
+                {% if user and user.user_class >= 10 %}
+                <a class="navbar-item" href="/dashboard/hublist">
+                    <i class="fas fa-network-wired mr-2"></i> Hub List
+                </a>
+                {% endif %}
+                {% endif %}
+            </div>
+            
+            <div class="navbar-end">
+                <div class="navbar-item">
+                    <span id="ws-status-indicator" class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}"></span>
+                    <span id="ws-status-label">{% if hub_running %}Online{% else %}Offline{% endif %}</span>
+                </div>
+                
+                <a class="navbar-item theme-toggle" onclick="toggleTheme(); return false;" href="#">
+                    <i class="fas fa-moon" id="theme-icon"></i> Theme
+                </a>
+                
+                {% if user %}
+                <a class="navbar-item" href="/dashboard/profile">
+                    <i class="fas fa-user mr-2"></i> {{ user.nick }}
+                </a>
+                <a class="navbar-item" href="/dashboard/logout">
+                    <i class="fas fa-sign-out-alt mr-2"></i> Logout
+                </a>
+                {% else %}
+                <a class="navbar-item" href="/dashboard/login">
+                    <i class="fas fa-sign-in-alt mr-2"></i> Login
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Notification container -->
+    <div id="notification-container" class="notification-container"></div>
+    
+    <!-- Main content -->
+    <section class="section main-section" style="margin-top: 52px;">
+        {% block content %}{% endblock %}
+    </section>
+    
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="content has-text-centered">
+            <p>
+                <strong>Verlihub</strong> v{{ version }}
+                &copy; {{ current_year }}
+            </p>
+        </div>
+    </footer>
+    
+    <!-- JavaScript -->
+    <script>
+        // Navbar burger toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const burgers = document.querySelectorAll('.navbar-burger');
+            burgers.forEach(burger => {
+                burger.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const target = document.getElementById(burger.dataset.target);
+                    const isActive = burger.classList.toggle('is-active');
+                    target.classList.toggle('is-active');
+                    burger.setAttribute('aria-expanded', isActive);
+                });
+            });
+
+            // Close burger menu on outside click
+            document.addEventListener('click', (e) => {
+                const menu = document.getElementById('navbarMain');
+                if (!menu || !menu.classList.contains('is-active')) return;
+                if (!e.target.closest('.navbar')) {
+                    menu.classList.remove('is-active');
+                    document.querySelectorAll('.navbar-burger').forEach(b => {
+                        b.classList.remove('is-active');
+                        b.setAttribute('aria-expanded', 'false');
+                    });
+                }
+            });
+
+            // Close burger menu when a nav link is clicked
+            document.querySelectorAll('#navbarMain a.navbar-item').forEach(link => {
+                link.addEventListener('click', () => {
+                    const menu = document.getElementById('navbarMain');
+                    if (menu) menu.classList.remove('is-active');
+                    document.querySelectorAll('.navbar-burger').forEach(b => {
+                        b.classList.remove('is-active');
+                        b.setAttribute('aria-expanded', 'false');
+                    });
+                });
+            });
+            
+            // Load saved theme
+            const savedTheme = localStorage.getItem('vh-theme') || 'light';
+            setTheme(savedTheme);
+        });
+        
+        // Theme toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            setTheme(newTheme);
+            localStorage.setItem('vh-theme', newTheme);
+        }
+        
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            const icon = document.getElementById('theme-icon');
+            if (icon) {
+                icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+            }
+        }
+        
+        // Notification helper
+        function showNotification(message, type = 'info', duration = 5000) {
+            const container = document.getElementById('notification-container');
+            const notification = document.createElement('div');
+            notification.className = `notification is-${type}`;
+            notification.innerHTML = `
+                <button class="delete" onclick="this.parentElement.remove()"></button>
+                ${message}
+            `;
+            container.appendChild(notification);
+            
+            if (duration > 0) {
+                setTimeout(() => notification.remove(), duration);
+            }
+        }
+        
+        // Confirmation modal
+        function confirmAction(title, message, onConfirm) {
+            const modal = document.createElement('div');
+            modal.className = 'modal is-active';
+            modal.innerHTML = `
+                <div class="modal-background"></div>
+                <div class="modal-card">
+                    <header class="modal-card-head">
+                        <p class="modal-card-title">${title}</p>
+                        <button class="delete" aria-label="close" onclick="this.closest('.modal').remove()"></button>
+                    </header>
+                    <section class="modal-card-body">
+                        <p>${message}</p>
+                    </section>
+                    <footer class="modal-card-foot">
+                        <button class="button is-danger" id="confirm-btn">Confirm</button>
+                        <button class="button" onclick="this.closest('.modal').remove()">Cancel</button>
+                    </footer>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            modal.querySelector('#confirm-btn').addEventListener('click', () => {
+                modal.remove();
+                onConfirm();
+            });
+        }
+        
+        // API helper
+        async function apiCall(method, endpoint, data = null) {
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'same-origin',
+            };
+            
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            
+            const response = await fetch(`/api/v1${endpoint}`, options);
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'API request failed');
+            }
+            
+            return response.json();
+        }
+
+        // =====================================================================
+        // Global WebSocket Client — provides real-time hub updates to all pages
+        // =====================================================================
+        const VHWebSocket = (function() {
+            let ws = null;
+            let reconnectTimer = null;
+            let reconnectDelay = 1000; // start at 1s, back off to 10s
+            const MAX_RECONNECT_DELAY = 10000;
+            let intentionallyClosed = false;
+            let pingTimer = null;
+
+            // Track live state
+            const state = {
+                connected: false,
+                hub_running: {{ 'true' if hub_running else 'false' }},
+                user_count: 0,
+                share_total: 0,
+                uptime: 0,
+                users: [],
+            };
+
+            // Event listeners: { 'event_type': [fn, fn, ...] }
+            const listeners = {};
+
+            function on(eventType, fn) {
+                if (!listeners[eventType]) listeners[eventType] = [];
+                listeners[eventType].push(fn);
+            }
+
+            function off(eventType, fn) {
+                if (!listeners[eventType]) return;
+                listeners[eventType] = listeners[eventType].filter(f => f !== fn);
+            }
+
+            function emit(eventType, data) {
+                (listeners[eventType] || []).forEach(fn => {
+                    try { fn(data); } catch (e) { console.error('WS listener error:', e); }
+                });
+            }
+
+            function updateNavbar() {
+                const indicator = document.getElementById('ws-status-indicator');
+                const label = document.getElementById('ws-status-label');
+                if (indicator && label) {
+                    if (state.connected && state.hub_running) {
+                        indicator.className = 'status-indicator is-online';
+                        label.textContent = 'Online';
+                    } else if (state.connected) {
+                        indicator.className = 'status-indicator is-warning';
+                        label.textContent = 'Hub Stopped';
+                    } else {
+                        indicator.className = 'status-indicator is-offline';
+                        label.textContent = 'Offline';
+                    }
+                }
+            }
+
+            function connect() {
+                if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+                intentionallyClosed = false;
+
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws/hub`;
+
+                try {
+                    ws = new WebSocket(wsUrl);
+                } catch (e) {
+                    console.warn('WebSocket not available:', e);
+                    scheduleReconnect();
+                    return;
+                }
+
+                ws.onopen = function() {
+                    state.connected = true;
+                    reconnectDelay = 1000; // reset backoff
+                    updateNavbar();
+                    emit('ws_connected', state);
+                    startPing();
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        handleMessage(msg);
+                    } catch (e) {
+                        console.error('WS parse error:', e);
+                    }
+                };
+
+                ws.onclose = function() {
+                    state.connected = false;
+                    updateNavbar();
+                    stopPing();
+                    emit('ws_disconnected', state);
+                    if (!intentionallyClosed) scheduleReconnect();
+                };
+
+                ws.onerror = function(err) {
+                    console.warn('WebSocket error:', err);
+                };
+            }
+
+            function scheduleReconnect() {
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                reconnectTimer = setTimeout(() => {
+                    connect();
+                    reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY);
+                }, reconnectDelay);
+            }
+
+            function startPing() {
+                stopPing();
+                pingTimer = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                    }
+                }, 25000);
+            }
+
+            function stopPing() {
+                if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+            }
+
+            function handleMessage(msg) {
+                const type = msg.type;
+
+                if (type === 'pong') return; // keepalive response
+
+                if (type === 'connected' || type === 'stats') {
+                    // Full state update
+                    if (msg.hub_running !== undefined) state.hub_running = msg.hub_running;
+                    if (msg.user_count !== undefined) state.user_count = msg.user_count;
+                    if (msg.share_total !== undefined) state.share_total = msg.share_total;
+                    if (msg.uptime !== undefined) state.uptime = msg.uptime;
+                    if (msg.users !== undefined) state.users = msg.users;
+                    updateNavbar();
+                }
+
+                // Emit the specific event type so pages can react
+                emit(type, msg);
+                // Also emit a generic 'message' for pages that want everything
+                emit('message', msg);
+            }
+
+            function disconnect() {
+                intentionallyClosed = true;
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                stopPing();
+                if (ws) ws.close();
+            }
+
+            function getState() { return { ...state }; }
+
+            // Auto-connect on page load if user is logged in
+            {% if user %}
+            document.addEventListener('DOMContentLoaded', connect);
+            // Reconnect on visibility change (tab focused back)
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && !state.connected && !intentionallyClosed) connect();
+            });
+            {% endif %}
+
+            return { on, off, connect, disconnect, getState, state };
+        })();
+    </script>
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

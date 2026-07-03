@@ -1,0 +1,281 @@
+# Docker Compose for Verlihub-py Smoke Tests
+#
+# Tests verlihub-py startup and operation with different database backends.
+# Each service tests a specific database configuration.
+#
+# Usage:
+#   # Run all smoke tests
+#   docker compose -f docker/docker-compose.smoke-tests.yml up --build
+#
+#   # Run specific backend test
+#   docker compose -f docker/docker-compose.smoke-tests.yml up --build sqlite-memory-test
+#
+#   # Run MySQL tests (starts MySQL first)
+#   docker compose -f docker/docker-compose.smoke-tests.yml up --build mysql-test
+#
+#   # Clean up
+#   docker compose -f docker/docker-compose.smoke-tests.yml down -v
+
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # Database Services
+  # ==========================================================================
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: verlihub_test
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uverlihub", "-pverlihub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smoke-test-network
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: verlihub_test
+      POSTGRES_USER: verlihub
+      POSTGRES_PASSWORD: verlihub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verlihub -d verlihub_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # SQLite In-Memory Test
+  # ==========================================================================
+  sqlite-memory-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/sqlite-memory.yml
+        --mode api
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smoke-test-network
+
+  sqlite-memory-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      sqlite-memory-server:
+        condition: service_healthy
+    command: >
+      python docker/tests/smoke_test.py
+        --external
+        --api-url http://sqlite-memory-server:8000
+        --admin-user admin
+        --admin-pass admin123
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # SQLite File Test
+  # ==========================================================================
+  sqlite-file-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/sqlite-file.yml
+        --mode api
+    volumes:
+      - sqlite-data:/data
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smoke-test-network
+
+  sqlite-file-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      sqlite-file-server:
+        condition: service_healthy
+    command: >
+      python docker/tests/smoke_test.py
+        --external
+        --api-url http://sqlite-file-server:8000
+        --admin-user admin
+        --admin-pass admin123
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # MySQL Test  
+  # ==========================================================================
+  mysql-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/mysql.yml
+        --mode api
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - smoke-test-network
+
+  mysql-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      mysql-server:
+        condition: service_healthy
+    command: >
+      python docker/tests/smoke_test.py
+        --external
+        --api-url http://mysql-server:8000
+        --admin-user admin
+        --admin-pass admin123
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # PostgreSQL Test
+  # ==========================================================================
+  postgres-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/postgresql.yml
+        --mode api
+    ports:
+      - "8004:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - smoke-test-network
+
+  postgres-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      postgres-server:
+        condition: service_healthy
+    command: >
+      python docker/tests/smoke_test.py
+        --external
+        --api-url http://postgres-server:8000
+        --admin-user admin
+        --admin-pass admin123
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # Default Startup Test (no config file)
+  # ==========================================================================
+  default-startup-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    environment:
+      VH_API_USERNAME: admin
+      VH_API_PASSWORD: admin123
+      VH_API_HOST: "0.0.0.0"
+    command: >
+      python3 -m verlihub.server
+        --config-dir /data
+        --mode api
+    volumes:
+      - default-data:/data
+    ports:
+      - "8005:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smoke-test-network
+
+  default-startup-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      default-startup-server:
+        condition: service_healthy
+    command: >
+      python docker/tests/smoke_test.py
+        --external
+        --api-url http://default-startup-server:8000
+        --admin-user admin
+        --admin-pass admin123
+    networks:
+      - smoke-test-network
+
+  # ==========================================================================
+  # Run All Smoke Tests
+  # ==========================================================================
+  all-smoke-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    depends_on:
+      sqlite-memory-test:
+        condition: service_completed_successfully
+      sqlite-file-test:
+        condition: service_completed_successfully
+      mysql-test:
+        condition: service_completed_successfully
+      postgres-test:
+        condition: service_completed_successfully
+      default-startup-test:
+        condition: service_completed_successfully
+    command: echo "All smoke tests passed!"
+    networks:
+      - smoke-test-network
+
+volumes:
+  sqlite-data:
+  default-data:
+
+networks:
+  smoke-test-network:
+    driver: bridge

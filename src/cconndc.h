@@ -139,7 +139,10 @@ namespace nVerliHub {
 			eSF_GETZBLOCK = 1 << 26,
 			eSF_ACTM = 1 << 27,
 			eSF_SALTPASS = 1 << 28,
-			eSF_NICKRULE = 1 << 29
+			eSF_NICKRULE = 1 << 29,
+			eSF_NMDCPB = 1 << 30,
+			eSF_HUBRELAY = 1UL << 31,
+			eSF_RELAYONLY = 1UL << 32
 		} tSupportFeature;
 
 		typedef enum
@@ -156,6 +159,7 @@ namespace nVerliHub {
 			ePF_GETINFO,
 			ePF_MCTO,
 			ePF_IN,
+			ePF_NMDCPB,
 			ePF_PING,
 			ePF_UNKNOWN,
 			ePF_LAST

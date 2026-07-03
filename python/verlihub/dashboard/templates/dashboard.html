@@ -1,0 +1,496 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ hub_name }}{% endblock %}
+
+{% block content %}
+<!-- Hero section with hub status -->
+<div class="hero is-primary is-small mb-5">
+    <div class="hero-body">
+        <div class="container">
+            <div class="has-text-centered mb-4">
+                <img src="{{ hub_logo }}"
+                     alt="{{ hub_name }}" 
+                     style="height: 64px; width: 64px; border-radius: 50%; box-shadow: 0 4px 16px rgba(0,0,0,0.25); border: 2px solid rgba(255,255,255,0.8); vertical-align: middle;">
+            </div>
+            <div class="level">
+                <div class="level-item has-text-centered">
+                    <div>
+                        <span class="status-indicator {% if hub_running %}is-online{% else %}is-offline{% endif %}" style="width: 14px; height: 14px;"></span>
+                        <p class="heading">Status</p>
+                        <p class="title is-5">{% if hub_running %}Online{% else %}Offline{% endif %}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Users Online</p>
+                        <p class="title is-4" id="user-count">{{ user_count }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Total Share</p>
+                        <p class="title is-4" id="share-size">{{ share_size }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Uptime</p>
+                        <p class="title is-4" id="uptime">{{ uptime }}</p>
+                    </div>
+                </div>
+                <div class="level-item has-text-centered">
+                    <div>
+                        <p class="heading">Port</p>
+                        <p class="title is-4">{{ hub_port }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick actions -->
+<div class="columns">
+    <div class="column">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-bolt mr-2"></i>
+                Quick Actions
+            </h2>
+            
+            <div class="buttons">
+                {% if hub_running %}
+                <button class="button is-warning" onclick="hubAction('stop')">
+                    <i class="fas fa-stop mr-2"></i> Stop Hub
+                </button>
+                <button class="button is-info" onclick="hubAction('restart')">
+                    <i class="fas fa-sync mr-2"></i> Restart Hub
+                </button>
+                {% else %}
+                <button class="button is-success" onclick="hubAction('start')">
+                    <i class="fas fa-play mr-2"></i> Start Hub
+                </button>
+                {% endif %}
+                
+                <button class="button" onclick="refreshStats()">
+                    <i class="fas fa-refresh mr-2"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MOTD / Hub Topic -->
+{% if hub_topic or hub_motd %}
+<div class="columns">
+    <div class="column">
+        <div class="box">
+            {% if hub_topic %}
+            <h2 class="title is-5 mb-2">
+                <i class="fas fa-bullhorn mr-2"></i>
+                Topic
+            </h2>
+            <p class="subtitle is-6 mb-4">{{ hub_topic }}</p>
+            {% endif %}
+            {% if hub_motd %}
+            <h2 class="title is-5 mb-2">
+                <i class="fas fa-scroll mr-2"></i>
+                Message of the Day
+            </h2>
+            <div class="content" style="background: var(--vh-primary-light, #f0f0f0); padding: 1rem; border-radius: 6px; font-family: monospace; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ hub_motd }}</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Main content area -->
+<div class="columns">
+    <!-- Online users card -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-users mr-2"></i>
+                Online Users
+                <span class="tag is-primary is-rounded ml-2" id="online-count">{{ user_count }}</span>
+            </h2>
+            
+            <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                <table class="table is-fullwidth is-striped is-hoverable">
+                    <thead>
+                        <tr>
+                            <th>Nick</th>
+                            <th>Class</th>
+                            <th>Share</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="online-users-body">
+                        <!-- Populated via JavaScript -->
+                        <tr>
+                            <td colspan="4" class="has-text-centered has-text-grey">
+                                Loading...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <a href="/dashboard/users" class="button is-small is-link is-light mt-3">
+                View All Users <i class="fas fa-arrow-right ml-2"></i>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Recent activity card -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-clock mr-2"></i>
+                Recent Activity
+            </h2>
+            
+            <div id="activity-feed" style="max-height: 400px; overflow-y: auto;">
+                <article class="message is-info is-small">
+                    <div class="message-body">
+                        Dashboard loaded successfully
+                        <br>
+                        <small class="has-text-grey">Just now</small>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics -->
+<div class="columns">
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-peak-users">--</div>
+            <div class="stat-label">Peak Users Today</div>
+        </div>
+    </div>
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-total-connections">--</div>
+            <div class="stat-label">Total Connections</div>
+        </div>
+    </div>
+    <div class="column is-one-third">
+        <div class="box stat-card">
+            <div class="stat-value" id="stat-registered">--</div>
+            <div class="stat-label">Registered Users</div>
+        </div>
+    </div>
+</div>
+
+<!-- Geo distribution & share stats -->
+<div class="columns">
+    <!-- Geographic Distribution -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-globe mr-2"></i>
+                Geographic Distribution
+            </h2>
+            <div id="geo-distribution" style="max-height: 320px; overflow-y: auto;">
+                <p class="has-text-grey has-text-centered">Loading&hellip;</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Statistics -->
+    <div class="column is-half">
+        <div class="box">
+            <h2 class="title is-5">
+                <i class="fas fa-chart-pie mr-2"></i>
+                Share Statistics
+            </h2>
+            <div id="share-stats-panel">
+                <p class="has-text-grey has-text-centered">Loading&hellip;</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Auto-refresh stats every 30 seconds
+    const REFRESH_INTERVAL = 30000;
+    let refreshTimer;
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        loadOnlineUsers();
+        loadStats();
+        loadGeoStats();
+        loadShareStats();
+        startAutoRefresh();
+    });
+    
+    function startAutoRefresh() {
+        refreshTimer = setInterval(() => {
+            refreshStats();
+        }, REFRESH_INTERVAL);
+    }
+    
+    async function refreshStats() {
+        try {
+            const status = await apiCall('GET', '/hub/status');
+            
+            document.getElementById('user-count').textContent = status.user_count || 0;
+            document.getElementById('online-count').textContent = status.user_count || 0;
+            document.getElementById('share-size').textContent = formatBytes(status.total_share || 0);
+            document.getElementById('uptime').textContent = formatUptime(status.uptime || 0);
+            
+            loadOnlineUsers();
+        } catch (error) {
+            console.error('Failed to refresh stats:', error);
+        }
+    }
+    
+    async function loadOnlineUsers() {
+        try {
+            const response = await apiCall('GET', '/users/online');
+            const users = response.users || [];
+            
+            const tbody = document.getElementById('online-users-body');
+            
+            if (users.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="has-text-centered has-text-grey">
+                            No users online
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = users.slice(0, 20).map(user => `
+                <tr>
+                    <td>
+                        <strong>${escapeHtml(user.nick)}</strong>
+                    </td>
+                    <td>
+                        <span class="tag ${getClassColor(user.user_class)}">${getClassName(user.user_class)}</span>
+                    </td>
+                    <td>${formatBytes(user.share || 0)}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="showUserInfo('${escapeHtml(user.nick)}')">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            ${user.class < {{ user.user_class }} ? `
+                            <button class="button is-warning is-light" onclick="kickUser('${escapeHtml(user.nick)}')">
+                                <i class="fas fa-shoe-prints"></i>
+                            </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load online users:', error);
+        }
+    }
+    
+    async function loadStats() {
+        try {
+            const stats = await apiCall('GET', '/hub/status');
+            
+            document.getElementById('stat-peak-users').textContent = stats.peak_users || '--';
+            document.getElementById('stat-total-connections').textContent = stats.total_connections || '--';
+            document.getElementById('stat-registered').textContent = stats.registered_users || '--';
+        } catch (error) {
+            console.error('Failed to load stats:', error);
+        }
+    }
+    
+    async function hubAction(action) {
+        const actionMessages = {
+            'start': 'Start the hub?',
+            'stop': 'Stop the hub? All users will be disconnected.',
+            'restart': 'Restart the hub? All users will be briefly disconnected.',
+        };
+        
+        confirmAction(
+            `${action.charAt(0).toUpperCase() + action.slice(1)} Hub`,
+            actionMessages[action],
+            async () => {
+                try {
+                    await apiCall('POST', `/hub/${action}`);
+                    showNotification(`Hub ${action} successful`, 'success');
+                    setTimeout(() => location.reload(), 2000);
+                } catch (error) {
+                    showNotification(`Failed to ${action} hub: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    async function kickUser(nick) {
+        confirmAction(
+            'Kick User',
+            `Kick ${nick} from the hub?`,
+            async () => {
+                try {
+                    await apiCall('POST', '/users/kick', { nick, reason: 'Kicked by admin' });
+                    showNotification(`${nick} has been kicked`, 'success');
+                    addActivity(`Kicked user: ${nick}`, 'warning');
+                    loadOnlineUsers();
+                } catch (error) {
+                    showNotification(`Failed to kick user: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    function showUserInfo(nick) {
+        // TODO: Show user info modal
+        showNotification('User info coming soon', 'info');
+    }
+    
+    function addActivity(message, type = 'info') {
+        const feed = document.getElementById('activity-feed');
+        const article = document.createElement('article');
+        article.className = `message is-${type} is-small`;
+        article.innerHTML = `
+            <div class="message-body">
+                ${escapeHtml(message)}
+                <br>
+                <small class="has-text-grey">Just now</small>
+            </div>
+        `;
+        feed.insertBefore(article, feed.firstChild);
+        
+        // Limit to 10 items
+        while (feed.children.length > 10) {
+            feed.lastChild.remove();
+        }
+    }
+    
+    // Utility functions
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+    
+    function formatUptime(seconds) {
+        if (seconds < 60) return seconds + 's';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return minutes + 'm';
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return hours + 'h ' + (minutes % 60) + 'm';
+        const days = Math.floor(hours / 24);
+        return days + 'd ' + (hours % 24) + 'h';
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function getClassName(classNum) {
+        const classes = {
+            0: 'User',
+            1: 'Registered',
+            2: 'VIP',
+            3: 'Operator',
+            4: 'Cheef',
+            5: 'Admin',
+            10: 'Master',
+        };
+        return classes[classNum] ?? 'User';
+    }
+    
+    function getClassColor(classNum) {
+        if (classNum >= 10) return 'is-danger';
+        if (classNum >= 5) return 'is-warning';
+        if (classNum >= 3) return 'is-info';
+        if (classNum >= 1) return 'is-success';
+        return 'is-light';
+    }
+
+    // ----- Geographic Distribution -----
+    async function loadGeoStats() {
+        const el = document.getElementById('geo-distribution');
+        try {
+            const data = await apiCall('GET', '/hub/geo-stats');
+            const dist = data.distribution || [];
+            if (dist.length === 0) {
+                el.innerHTML = '<p class="has-text-grey has-text-centered">No geographic data available</p>';
+                return;
+            }
+            let html = '<table class="table is-fullwidth is-narrow is-striped"><thead><tr><th>Country</th><th class="has-text-right">Users</th><th style="width:50%"></th></tr></thead><tbody>';
+            const maxCount = dist[0].count;
+            for (const entry of dist) {
+                const pct = maxCount > 0 ? Math.round(entry.count / data.total_users * 100) : 0;
+                const barWidth = maxCount > 0 ? Math.round(entry.count / maxCount * 100) : 0;
+                const cc = (entry.country_code || '??').toLowerCase();
+                const flag = cc !== '??' ? `<span class="fi fi-${cc}" title="${escapeHtml(entry.country || cc)}"></span> ` : '';
+                html += `<tr>
+                    <td>${flag}${escapeHtml(entry.country || entry.country_code || 'Unknown')}</td>
+                    <td class="has-text-right"><strong>${entry.count}</strong> <small class="has-text-grey">(${pct}%)</small></td>
+                    <td><progress class="progress is-primary is-small" value="${barWidth}" max="100">${barWidth}%</progress></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        } catch (err) {
+            console.error('Failed to load geo stats:', err);
+            el.innerHTML = '<p class="has-text-grey has-text-centered">Failed to load</p>';
+        }
+    }
+
+    // ----- Share Statistics -----
+    async function loadShareStats() {
+        const el = document.getElementById('share-stats-panel');
+        try {
+            const s = await apiCall('GET', '/hub/share-stats');
+            el.innerHTML = `
+                <div class="columns is-multiline">
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Total Share</p>
+                            <p class="title is-5">${escapeHtml(s.total_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Average Share</p>
+                            <p class="title is-5">${escapeHtml(s.average_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Median Share</p>
+                            <p class="title is-5">${escapeHtml(s.median_formatted)}</p>
+                        </div>
+                    </div>
+                    <div class="column is-half">
+                        <div class="has-text-centered">
+                            <p class="heading">Largest Share</p>
+                            <p class="title is-5">${escapeHtml(s.max_formatted)}</p>
+                            ${s.max_nick ? `<p class="has-text-grey is-size-7">${escapeHtml(s.max_nick)}</p>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="has-text-centered mt-2">
+                    <span class="tag is-light">${s.user_count} users</span>
+                    <span class="tag is-warning is-light ml-2">${s.zero_share_count} with 0 share</span>
+                </div>
+            `;
+        } catch (err) {
+            console.error('Failed to load share stats:', err);
+            el.innerHTML = '<p class="has-text-grey has-text-centered">Failed to load</p>';
+        }
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Redirects - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title"><i class="fas fa-directions mr-2"></i> Redirect Rules</h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="openAddModal()">
+                <i class="fas fa-plus mr-2"></i> Add Redirect
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="box">
+    <table class="table is-fullwidth is-striped is-hoverable">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Address</th>
+                <th>Flag</th>
+                <th>Enabled</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="redirect-table-body">
+            <tr><td colspan="5" class="has-text-centered">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Modal -->
+<div class="modal" id="redirect-modal">
+    <div class="modal-background" onclick="closeModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Add Redirect</p>
+            <button class="delete" onclick="closeModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label">Hub Address</label>
+                <input class="input" type="text" id="addr-input" placeholder="other-hub.example.com:411">
+            </div>
+            <div class="field">
+                <label class="label">Flag (bitmask)</label>
+                <input class="input" type="number" id="flag-input" value="0">
+                <p class="help">Redirect reason bitmask (0 = catch-all)</p>
+            </div>
+            <div class="field">
+                <label class="checkbox">
+                    <input type="checkbox" id="enable-input" checked> Enabled
+                </label>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-success" onclick="saveRedirect()">Save</button>
+            <button class="button" onclick="closeModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<script>
+const API = '/api/v1/redirects';
+const token = document.cookie.split(';').find(c => c.trim().startsWith('access_token='))?.split('=')[1] || '';
+const headers = {'Content-Type': 'application/json', 'Authorization': token};
+
+async function loadRedirects() {
+    const resp = await fetch(API, {headers});
+    if (!resp.ok) { document.getElementById('redirect-table-body').innerHTML = '<tr><td colspan="5">Error</td></tr>'; return; }
+    const data = await resp.json();
+    const tbody = document.getElementById('redirect-table-body');
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="5" class="has-text-centered">No redirects configured</td></tr>'; return; }
+    tbody.innerHTML = data.map(r => `<tr>
+        <td>${r.id}</td>
+        <td>${esc(r.address)}</td>
+        <td>${r.flag}</td>
+        <td><span class="tag ${r.enable ? 'is-success' : 'is-danger'}">${r.enable ? 'Yes' : 'No'}</span></td>
+        <td><button class="button is-small is-danger" onclick="deleteRedirect(${r.id})"><i class="fas fa-trash"></i></button></td>
+    </tr>`).join('');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function openAddModal() { document.getElementById('redirect-modal').classList.add('is-active'); }
+function closeModal() { document.getElementById('redirect-modal').classList.remove('is-active'); }
+
+async function saveRedirect() {
+    const body = {
+        address: document.getElementById('addr-input').value,
+        flag: parseInt(document.getElementById('flag-input').value) || 0,
+        enable: document.getElementById('enable-input').checked,
+    };
+    const resp = await fetch(API, {method: 'POST', headers, body: JSON.stringify(body)});
+    if (resp.ok) { closeModal(); loadRedirects(); } else { alert('Error: ' + (await resp.text())); }
+}
+
+async function deleteRedirect(id) {
+    if (!confirm('Delete redirect #' + id + '?')) return;
+    await fetch(API + '/' + id, {method: 'DELETE', headers});
+    loadRedirects();
+}
+
+loadRedirects();
+</script>
+{% endblock %}

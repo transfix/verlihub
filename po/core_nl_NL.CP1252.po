@@ -1037,7 +1037,7 @@ msgstr "Ban, unban, kick en tijdelijke banlijsten zijn schoongemaakt."
 #: ../src/cdcconsole.cpp:2284 ../src/cdcconsole.cpp:3084
 #: ../src/cdcconsole.cpp:3601 ../src/cdcconsole.cpp:3779
 msgid "This command is not implemented."
-msgstr "Deze opdracht is niet geïmplementeerd."
+msgstr "Deze opdracht is niet geÃ¯mplementeerd."
 
 #: ../src/cdcconsole.cpp:1729
 msgid "Please provide a valid ban time."
@@ -1157,7 +1157,7 @@ msgstr "Ongedefinieerde configuratie variabele: %s.%s"
 #: ../src/cdcconsole.cpp:2403
 #, c-format
 msgid "Updated configuration %s.%s: %s -> %s"
-msgstr "Configuratie geüpdate %s.%s: %s -> %s"
+msgstr "Configuratie geÃ¼pdate %s.%s: %s -> %s"
 
 #: ../src/cdcconsole.cpp:2412
 #, c-format
@@ -1194,12 +1194,12 @@ msgstr "%s is beperkt om de mainchat te gebruiken voor %s door %s zonder reden."
 #: ../src/cdcconsole.cpp:2609
 #, c-format
 msgid "Allowing user to use private chat again: %s"
-msgstr "Gebruikers toestaan de privé -chat weer te gebruiken: %s"
+msgstr "Gebruikers toestaan de privÃ© -chat weer te gebruiken: %s"
 
 #: ../src/cdcconsole.cpp:2611
 #, c-format
 msgid "Restricting user from using private chat: %s for %s"
-msgstr "Het beperken van de gebruiker van het gebruik van privé- chat: %s voor %s"
+msgstr "Het beperken van de gebruiker van het gebruik van privÃ©- chat: %s voor %s"
 
 #: ../src/cdcconsole.cpp:2619
 #, c-format
@@ -1214,12 +1214,12 @@ msgstr "%s is beperkt om de prive chat te gebruiken voor %s door %s zonder reden
 #: ../src/cdcconsole.cpp:2634
 #, c-format
 msgid "Allowing user to use main and private chat again: %s"
-msgstr "Gebruikers toestaan de main- en privé -chat weer gebruiken : %s"
+msgstr "Gebruikers toestaan de main- en privÃ© -chat weer gebruiken : %s"
 
 #: ../src/cdcconsole.cpp:2636
 #, c-format
 msgid "Restricting user from using main and private chat: %s for %s"
-msgstr "Het beperken van de gebruiker van het gebruik van main- en privé chat: %s voor %s"
+msgstr "Het beperken van de gebruiker van het gebruik van main- en privÃ© chat: %s voor %s"
 
 #: ../src/cdcconsole.cpp:2644
 #, c-format
@@ -1724,16 +1724,16 @@ msgstr "Ongeldige login volgorde, je hebt geen specificatie  support gegeven voo
 #: ../src/cdcproto.cpp:1719 ../src/cdcproto.cpp:1833
 #, c-format
 msgid "You're trying to send private message to an offline user: %s"
-msgstr "Je probeert privé-bericht te sturen naar een offline gebruiker : %s"
+msgstr "Je probeert privÃ©-bericht te sturen naar een offline gebruiker : %s"
 
 #: ../src/cdcproto.cpp:1738 ../src/cdcproto.cpp:1839
 #, c-format
 msgid "You're trying to send private message to a bot: %s"
-msgstr "Je probeert privé- bericht te sturen naar een bot : %s"
+msgstr "Je probeert privÃ©- bericht te sturen naar een bot : %s"
 
 #: ../src/cdcproto.cpp:1747 ../src/cdcproto.cpp:1847
 msgid "You're not allowed to use private chat right now."
-msgstr "Je mag de privé chat nu niet gebruiken."
+msgstr "Je mag de privÃ© chat nu niet gebruiken."
 
 #: ../src/cdcproto.cpp:1750 ../src/cdcproto.cpp:1850
 #, c-format
@@ -2082,7 +2082,7 @@ msgstr "Uw client tag rapoteerd minder dan 0 hubs of minder dan 0 slots, ziet er
 
 #: ../src/cdctag.cpp:95
 msgid "Unknown clients are not allowed in this hub."
-msgstr "Onbekend cliënten zijn niet toegestaan in deze hub."
+msgstr "Onbekend cliÃ«nten zijn niet toegestaan in deze hub."
 
 #: ../src/cdctag.cpp:101
 #, c-format
@@ -3222,12 +3222,12 @@ msgstr "De definitie is leeg of niet gespecificeerd. Definieer het met -d optie.
 
 #: ../src/ctriggers.cpp:328
 msgid "It's not allowed to define dbconfig file as trigger."
-msgstr "Het is niet toegestaan om dbconfig bestand te definiëren als trigger."
+msgstr "Het is niet toegestaan om dbconfig bestand te definiÃ«ren als trigger."
 
 #: ../src/ctriggers.cpp:331
 #, c-format
 msgid "User '%s' tried to define dbconfig as trigger"
-msgstr "Gebruiker '%s' probeerde dbconfig te definiëren als trigger"
+msgstr "Gebruiker '%s' probeerde dbconfig te definiÃ«ren als trigger"
 
 #: ../src/ctriggers.cpp:343
 #, c-format
@@ -3291,7 +3291,7 @@ msgstr "Nee [%s]"
 #: ../src/cuser.cpp:263
 #, c-format
 msgid "Can use private chat: %s"
-msgstr "Kan gebruik maken van privé- chat: %s"
+msgstr "Kan gebruik maken van privÃ©- chat: %s"
 
 #: ../src/cuser.cpp:267 ../src/cuser.cpp:271 ../src/cuser.cpp:273
 #, c-format
@@ -3359,11 +3359,11 @@ msgstr "U mag de main chat gebruiken."
 #: ../src/cuser.cpp:446
 #, c-format
 msgid "You're no longer allowed to use private chat for: %s"
-msgstr "Je mag de privé chat niet  meer gebruiken voor: %s"
+msgstr "Je mag de privÃ© chat niet  meer gebruiken voor: %s"
 
 #: ../src/cuser.cpp:449
 msgid "You're now allowed to use private chat."
-msgstr "U mag de privé -chat niet gebruiken voor."
+msgstr "U mag de privÃ© -chat niet gebruiken voor."
 
 #: ../src/cuser.cpp:456
 #, c-format
@@ -3456,7 +3456,7 @@ msgstr "U kunt geen gebruik maken van deze chatroom, gebruik man chat ."
 
 #: ../src/cuser.cpp:681
 msgid "Hub security doesn't accept private messages, use main chat instead."
-msgstr "Hub security accepteert geen privéberichten, gebruik main chat."
+msgstr "Hub security accepteert geen privÃ©berichten, gebruik main chat."
 
 #: ../src/cvhplugin.cpp:94
 #, c-format

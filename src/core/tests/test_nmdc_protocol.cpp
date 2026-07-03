@@ -1,0 +1,975 @@
+/*
+	Copyright (C) 2006-2026 Verlihub Team, info at verlihub dot net
+
+	Verlihub is free software; You can redistribute it
+	and modify it under the terms of the GNU General
+	Public License as published by the Free Software
+	Foundation, either version 3 of the license, or at
+	your option any later version.
+
+	Verlihub is distributed in the hope that it will be
+	useful, but without any warranty, without even the
+	implied warranty of merchantability or fitness for
+	a particular purpose. See the GNU General Public
+	License for more details.
+
+	Please see http://www.gnu.org/licenses/ for a copy
+	of the GNU General Public License.
+*/
+
+#include <gtest/gtest.h>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "../nmdc_protocol.h"
+#include "../compat_format.h"
+
+using namespace nVerliHub;
+using namespace NMDCProtocol;
+
+// =============================================================================
+// GenerateLock Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, GenerateLock_StartsWithExtendedProtocol) {
+    std::string lock = GenerateLock();
+    EXPECT_EQ(lock.substr(0, 16), "EXTENDEDPROTOCOL");
+}
+
+TEST(NMDCProtocolTest, GenerateLock_HasCorrectLength) {
+    std::string lock = GenerateLock();
+    // "EXTENDEDPROTOCOL" (16) + 20 random chars = 36
+    EXPECT_EQ(lock.size(), 36u);
+}
+
+TEST(NMDCProtocolTest, GenerateLock_ProducesUniqueValues) {
+    std::set<std::string> locks;
+    for (int i = 0; i < 100; ++i) {
+        locks.insert(GenerateLock());
+    }
+    // All 100 locks should be unique (extremely high probability)
+    EXPECT_EQ(locks.size(), 100u);
+}
+
+// =============================================================================
+// Escape / UnEscape Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, Escape_NullChar) {
+    std::string input(1, '\0');
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN000%/");
+}
+
+TEST(NMDCProtocolTest, Escape_Char5) {
+    std::string input(1, '\x05');
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN005%/");
+}
+
+TEST(NMDCProtocolTest, Escape_Dollar) {
+    std::string input = "$";
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN036%/");
+}
+
+TEST(NMDCProtocolTest, Escape_Backtick) {
+    std::string input = "`";
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN096%/");
+}
+
+TEST(NMDCProtocolTest, Escape_Pipe) {
+    std::string input = "|";
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN124%/");
+}
+
+TEST(NMDCProtocolTest, Escape_Tilde) {
+    std::string input = "~";
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "/%DCN126%/");
+}
+
+TEST(NMDCProtocolTest, Escape_NormalCharsPassthrough) {
+    std::string input = "Hello World 123";
+    EXPECT_EQ(Escape(input), input);
+}
+
+TEST(NMDCProtocolTest, Escape_MixedContent) {
+    std::string input = "test$value|end";
+    std::string escaped = Escape(input);
+    EXPECT_EQ(escaped, "test/%DCN036%/value/%DCN124%/end");
+}
+
+TEST(NMDCProtocolTest, UnEscape_NullChar) {
+    std::string input = "/%DCN000%/";
+    std::string result = UnEscape(input);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0], '\0');
+}
+
+TEST(NMDCProtocolTest, UnEscape_Dollar) {
+    std::string input = "/%DCN036%/";
+    EXPECT_EQ(UnEscape(input), "$");
+}
+
+TEST(NMDCProtocolTest, UnEscape_Pipe) {
+    std::string input = "/%DCN124%/";
+    EXPECT_EQ(UnEscape(input), "|");
+}
+
+TEST(NMDCProtocolTest, UnEscape_NormalCharsPassthrough) {
+    std::string input = "Hello World 123";
+    EXPECT_EQ(UnEscape(input), input);
+}
+
+TEST(NMDCProtocolTest, EscapeUnEscape_Roundtrip) {
+    // Test that Escape(input) -> UnEscape -> input for all special chars
+    for (int c : {0, 5, 36, 96, 124, 126}) {
+        std::string original(1, static_cast<char>(c));
+        std::string result = UnEscape(Escape(original));
+        EXPECT_EQ(result, original) << "Roundtrip failed for char " << c;
+    }
+}
+
+TEST(NMDCProtocolTest, EscapeUnEscape_ComplexRoundtrip) {
+    std::string original = "Hello";
+    original += '\0';
+    original += "$World|test~end`";
+    std::string result = UnEscape(Escape(original));
+    EXPECT_EQ(result, original);
+}
+
+// =============================================================================
+// Lock2Key Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, Lock2Key_EmptyString) {
+    EXPECT_EQ(Lock2Key(""), "");
+}
+
+TEST(NMDCProtocolTest, Lock2Key_SingleChar) {
+    EXPECT_EQ(Lock2Key("x"), "");  // length < 2
+}
+
+TEST(NMDCProtocolTest, Lock2Key_ProducesNonEmptyResult) {
+    std::string lock = "EXTENDEDPROTOCOL_test_lock_12345";
+    std::string key = Lock2Key(lock);
+    EXPECT_FALSE(key.empty());
+}
+
+TEST(NMDCProtocolTest, Lock2Key_DeterministicOutput) {
+    std::string lock = "EXTENDEDPROTOCOL_test_lock_12345";
+    std::string key1 = Lock2Key(lock);
+    std::string key2 = Lock2Key(lock);
+    EXPECT_EQ(key1, key2);
+}
+
+TEST(NMDCProtocolTest, Lock2Key_DifferentLocksGiveDifferentKeys) {
+    std::string key1 = Lock2Key("EXTENDEDPROTOCOLaaaaaaaaaaaa");
+    std::string key2 = Lock2Key("EXTENDEDPROTOCOLbbbbbbbbbbbb");
+    EXPECT_NE(key1, key2);
+}
+
+TEST(NMDCProtocolTest, Lock2Key_WorksWithGeneratedLock) {
+    // Verify Lock2Key handles locks produced by GenerateLock
+    std::string lock = GenerateLock();
+    std::string key = Lock2Key(lock);
+    EXPECT_FALSE(key.empty());
+}
+
+// =============================================================================
+// Message Construction Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeLock_Format) {
+    std::string result = MakeLock("MYLOCK123");
+    EXPECT_EQ(result, "$Lock MYLOCK123 Pk=verlihub-py");
+}
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsExpectedFeatures) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("$Supports"), std::string::npos);
+    EXPECT_NE(result.find("UserCommand"), std::string::npos);
+    EXPECT_NE(result.find("NoGetINFO"), std::string::npos);
+    EXPECT_NE(result.find("UserIP2"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeHubName_Format) {
+    EXPECT_EQ(MakeHubName("My Hub"), "$HubName My Hub");
+}
+
+TEST(NMDCProtocolTest, MakeHello_Format) {
+    EXPECT_EQ(MakeHello("JohnDoe"), "$Hello JohnDoe");
+}
+
+TEST(NMDCProtocolTest, MakeGetPass_Format) {
+    EXPECT_EQ(MakeGetPass(), "$GetPass");
+}
+
+TEST(NMDCProtocolTest, MakeBadPass_Format) {
+    EXPECT_EQ(MakeBadPass(), "$BadPass");
+}
+
+TEST(NMDCProtocolTest, MakeLoggedIn_Format) {
+    EXPECT_EQ(MakeLoggedIn(), "$LogedIn");
+}
+
+TEST(NMDCProtocolTest, MakeValidateDenide_Format) {
+    EXPECT_EQ(MakeValidateDenide("BadNick"), "$ValidateDenide BadNick");
+}
+
+TEST(NMDCProtocolTest, MakeValidateDenide_EmptyNick) {
+    EXPECT_EQ(MakeValidateDenide(""), "$ValidateDenide ");
+}
+
+TEST(NMDCProtocolTest, MakeHubIsFull_Format) {
+    EXPECT_EQ(MakeHubIsFull(), "$HubIsFull");
+}
+
+TEST(NMDCProtocolTest, MakeQuit_Format) {
+    EXPECT_EQ(MakeQuit("LeavingUser"), "$Quit LeavingUser");
+}
+
+TEST(NMDCProtocolTest, MakeNickList_MultipleNicks) {
+    std::vector<std::string> nicks = {"Alice", "Bob", "Charlie"};
+    std::string result = MakeNickList(nicks);
+    EXPECT_EQ(result, "$NickList Alice$$Bob$$Charlie$$");
+}
+
+TEST(NMDCProtocolTest, MakeNickList_Empty) {
+    std::vector<std::string> nicks;
+    EXPECT_EQ(MakeNickList(nicks), "$NickList ");
+}
+
+TEST(NMDCProtocolTest, MakeNickList_SingleNick) {
+    std::vector<std::string> nicks = {"Alice"};
+    EXPECT_EQ(MakeNickList(nicks), "$NickList Alice$$");
+}
+
+TEST(NMDCProtocolTest, MakeOpList_MultipleNicks) {
+    std::vector<std::string> nicks = {"Admin", "Mod"};
+    std::string result = MakeOpList(nicks);
+    EXPECT_EQ(result, "$OpList Admin$$Mod$$");
+}
+
+TEST(NMDCProtocolTest, MakeOpList_Empty) {
+    std::vector<std::string> nicks;
+    EXPECT_EQ(MakeOpList(nicks), "$OpList ");
+}
+
+TEST(NMDCProtocolTest, MakeBotMyINFO_DefaultEmail) {
+    std::string result = MakeBotMyINFO("BotNick", "My Bot Description");
+    EXPECT_NE(result.find("$MyINFO $ALL BotNick"), std::string::npos);
+    EXPECT_NE(result.find("My Bot Description"), std::string::npos);
+    EXPECT_NE(result.find("Bot\x01"), std::string::npos);
+    EXPECT_NE(result.find("$0$"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeBotMyINFO_WithEmail) {
+    std::string result = MakeBotMyINFO("Bot", "Desc", "bot@hub.com");
+    EXPECT_NE(result.find("bot@hub.com"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeChat_Format) {
+    std::string result = MakeChat("UserA", "Hello everyone!");
+    EXPECT_EQ(result, "<UserA> Hello everyone!");
+}
+
+TEST(NMDCProtocolTest, MakeChat_EmptyMessage) {
+    EXPECT_EQ(MakeChat("User", ""), "<User> ");
+}
+
+TEST(NMDCProtocolTest, MakePrivateMessage_Format) {
+    std::string result = MakePrivateMessage("Alice", "Bob", "Hi Bob!");
+    EXPECT_EQ(result, "$To: Bob From: Alice $<Alice> Hi Bob!");
+}
+
+TEST(NMDCProtocolTest, MakeHubTopic_Format) {
+    EXPECT_EQ(MakeHubTopic("Welcome!"), "$HubTopic Welcome!");
+}
+
+TEST(NMDCProtocolTest, MakeUserIP_Format) {
+    EXPECT_EQ(MakeUserIP("JohnDoe", "192.168.1.100"),
+              "$UserIP JohnDoe 192.168.1.100$$");
+}
+
+// =============================================================================
+// ParseMyINFO Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseMyINFO_ValidFullMessage) {
+    std::string msg = "$MyINFO $ALL TestUser Test Description<TestClient V:1.0,M:A,H:1/0/0,S:5>$ $DSL\x01$test@email.com$1073741824$";
+    MyINFOData data = ParseMyINFO(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.nick, "TestUser");
+    EXPECT_EQ(data.description, "Test Description");
+    EXPECT_EQ(data.tag, "<TestClient V:1.0,M:A,H:1/0/0,S:5>");
+    EXPECT_EQ(data.email, "test@email.com");
+    EXPECT_EQ(data.share_size, 1073741824u);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_NoTag) {
+    std::string msg = "$MyINFO $ALL SimpleUser Just a simple description$ $LAN(T3)\x01$$0$";
+    MyINFOData data = ParseMyINFO(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.nick, "SimpleUser");
+    EXPECT_EQ(data.description, "Just a simple description");
+    EXPECT_TRUE(data.tag.empty());
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_ZeroShare) {
+    std::string msg = "$MyINFO $ALL NewUser Test<Tag>$ $DSL\x01$$0$";
+    MyINFOData data = ParseMyINFO(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.share_size, 0u);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_LargeShare) {
+    // 10 TB = 10995116277760 bytes
+    std::string msg = "$MyINFO $ALL BigSharer Files<DC V:1.0>$ $100\x01$$10995116277760$";
+    MyINFOData data = ParseMyINFO(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.share_size, 10995116277760u);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_InvalidPrefix) {
+    MyINFOData data = ParseMyINFO("$Hello TestUser");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_EmptyString) {
+    MyINFOData data = ParseMyINFO("");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_MissingSeparator) {
+    // Missing "$ $" separator
+    MyINFOData data = ParseMyINFO("$MyINFO $ALL User DescOnly");
+    EXPECT_FALSE(data.valid);
+}
+
+// =============================================================================
+// ParsePrivateMessage Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParsePrivateMessage_Valid) {
+    std::string msg = "$To: Bob From: Alice $<Alice> Hello Bob!";
+    PrivateMessageData data = ParsePrivateMessage(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.to, "Bob");
+    EXPECT_EQ(data.from, "Alice");
+    EXPECT_EQ(data.message, "Hello Bob!");
+}
+
+TEST(NMDCProtocolTest, ParsePrivateMessage_EmptyMessage) {
+    // With empty message (after "> ")
+    std::string msg = "$To: Bob From: Alice $<Alice> ";
+    PrivateMessageData data = ParsePrivateMessage(msg);
+
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.to, "Bob");
+    EXPECT_EQ(data.from, "Alice");
+    EXPECT_TRUE(data.message.empty());
+}
+
+TEST(NMDCProtocolTest, ParsePrivateMessage_InvalidPrefix) {
+    PrivateMessageData data = ParsePrivateMessage("$Hello Bob");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParsePrivateMessage_MissingFrom) {
+    PrivateMessageData data = ParsePrivateMessage("$To: Bob");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParsePrivateMessage_MissingSeparator) {
+    PrivateMessageData data = ParsePrivateMessage("$To: Bob From: Alice");
+    EXPECT_FALSE(data.valid);
+}
+
+// =============================================================================
+// ParseChat Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseChat_Valid) {
+    ChatMessageData data = ParseChat("<JohnDoe> Hello world!");
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.nick, "JohnDoe");
+    EXPECT_EQ(data.message, "Hello world!");
+}
+
+TEST(NMDCProtocolTest, ParseChat_MultiWordMessage) {
+    ChatMessageData data = ParseChat("<User> This is a longer message with > symbols");
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.nick, "User");
+    EXPECT_EQ(data.message, "This is a longer message with > symbols");
+}
+
+TEST(NMDCProtocolTest, ParseChat_EmptyMessage) {
+    ChatMessageData data = ParseChat("<Nick> ");
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.nick, "Nick");
+    EXPECT_TRUE(data.message.empty());
+}
+
+TEST(NMDCProtocolTest, ParseChat_NotChat) {
+    ChatMessageData data = ParseChat("$Hello User");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParseChat_EmptyString) {
+    ChatMessageData data = ParseChat("");
+    EXPECT_FALSE(data.valid);
+}
+
+TEST(NMDCProtocolTest, ParseChat_MissingClosingBracket) {
+    ChatMessageData data = ParseChat("<UserNoClose some message");
+    EXPECT_FALSE(data.valid);
+}
+
+// =============================================================================
+// IsCommand Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, IsCommand_ExactMatch) {
+    EXPECT_TRUE(IsCommand("$Lock", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_WithParam) {
+    EXPECT_TRUE(IsCommand("$Lock MYLOCK123", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_WithPipe) {
+    EXPECT_TRUE(IsCommand("$GetPass|", "$GetPass"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_NoMatch) {
+    EXPECT_FALSE(IsCommand("$Hello User", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_PartialMatch) {
+    // "$LockExtra" should NOT match "$Lock" because next char is not space/pipe
+    EXPECT_FALSE(IsCommand("$LockExtra", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_ShorterMsg) {
+    EXPECT_FALSE(IsCommand("$Lo", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_EmptyMsg) {
+    EXPECT_FALSE(IsCommand("", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_ChatMessage) {
+    EXPECT_FALSE(IsCommand("<User> Hello", "$Lock"));
+}
+
+TEST(NMDCProtocolTest, IsCommand_VariousCommands) {
+    EXPECT_TRUE(IsCommand("$ValidateNick TestUser", "$ValidateNick"));
+    EXPECT_TRUE(IsCommand("$MyINFO $ALL User stuff", "$MyINFO"));
+    EXPECT_TRUE(IsCommand("$To: Bob From: Alice $<Alice> hi", "$To:"));
+    EXPECT_TRUE(IsCommand("$Search Hub:TTH:HASH", "$Search"));
+    EXPECT_TRUE(IsCommand("$Quit", "$Quit"));
+}
+
+// =============================================================================
+// GetCommandParam Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, GetCommandParam_WithParam) {
+    std::string param = GetCommandParam("$Lock MYLOCK123 Pk=test", "$Lock");
+    EXPECT_EQ(param, "MYLOCK123 Pk=test");
+}
+
+TEST(NMDCProtocolTest, GetCommandParam_NoParam) {
+    std::string param = GetCommandParam("$GetPass", "$GetPass");
+    EXPECT_TRUE(param.empty());
+}
+
+TEST(NMDCProtocolTest, GetCommandParam_WrongCommand) {
+    std::string param = GetCommandParam("$Hello User", "$Lock");
+    EXPECT_TRUE(param.empty());
+}
+
+TEST(NMDCProtocolTest, GetCommandParam_ValidateNick) {
+    std::string param = GetCommandParam("$ValidateNick TestUser", "$ValidateNick");
+    EXPECT_EQ(param, "TestUser");
+}
+
+TEST(NMDCProtocolTest, GetCommandParam_MyPass) {
+    std::string param = GetCommandParam("$MyPass secret123", "$MyPass");
+    EXPECT_EQ(param, "secret123");
+}
+
+TEST(NMDCProtocolTest, GetCommandParam_EmptyParamAfterSpace) {
+    // "$Lock " has a space but nothing after
+    std::string param = GetCommandParam("$Lock ", "$Lock");
+    EXPECT_TRUE(param.empty());
+}
+
+// =============================================================================
+// MakeChat / ParseChat Round-trip
+// =============================================================================
+
+TEST(NMDCProtocolTest, ChatRoundtrip) {
+    std::string original_nick = "TestUser";
+    std::string original_msg = "Hello, this is a test!";
+
+    std::string chat = MakeChat(original_nick, original_msg);
+    ChatMessageData parsed = ParseChat(chat);
+
+    EXPECT_TRUE(parsed.valid);
+    EXPECT_EQ(parsed.nick, original_nick);
+    EXPECT_EQ(parsed.message, original_msg);
+}
+
+// =============================================================================
+// MakePrivateMessage / ParsePrivateMessage Round-trip
+// =============================================================================
+
+TEST(NMDCProtocolTest, PrivateMessageRoundtrip) {
+    std::string from = "Alice";
+    std::string to = "Bob";
+    std::string msg_text = "Hey Bob, how are you?";
+
+    std::string pm = MakePrivateMessage(from, to, msg_text);
+    PrivateMessageData parsed = ParsePrivateMessage(pm);
+
+    EXPECT_TRUE(parsed.valid);
+    EXPECT_EQ(parsed.from, from);
+    EXPECT_EQ(parsed.to, to);
+    EXPECT_EQ(parsed.message, msg_text);
+}
+
+// =============================================================================
+// ParseTag Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseTag_FullTag) {
+    TagData tag = ParseTag("<DC++ V:0.868,M:A,H:1/0/0,S:5,L:100>");
+    EXPECT_EQ(tag.client_name, "DC++");
+    EXPECT_EQ(tag.client_version, "0.868");
+    EXPECT_EQ(tag.mode, 'A');
+    EXPECT_EQ(tag.slots, 5);
+    EXPECT_EQ(tag.hubs_normal, 1);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+    EXPECT_EQ(tag.upload_limit, 100);
+}
+
+TEST(NMDCProtocolTest, ParseTag_PassiveMode) {
+    TagData tag = ParseTag("<FlylinkDC++ V:5.08,M:P,H:3/2/1,S:10>");
+    EXPECT_EQ(tag.client_name, "FlylinkDC++");
+    EXPECT_EQ(tag.client_version, "5.08");
+    EXPECT_EQ(tag.mode, 'P');
+    EXPECT_EQ(tag.slots, 10);
+    EXPECT_EQ(tag.hubs_normal, 3);
+    EXPECT_EQ(tag.hubs_registered, 2);
+    EXPECT_EQ(tag.hubs_operator, 1);
+}
+
+TEST(NMDCProtocolTest, ParseTag_EmptyTag) {
+    TagData tag = ParseTag("");
+    EXPECT_EQ(tag.client_name, "");
+    EXPECT_EQ(tag.mode, '\0');
+}
+
+TEST(NMDCProtocolTest, ParseTag_NoBrackets) {
+    TagData tag = ParseTag("not a tag");
+    EXPECT_EQ(tag.client_name, "");
+}
+
+TEST(NMDCProtocolTest, ParseTag_OnlyClientName) {
+    TagData tag = ParseTag("<EiskaltDC++ V:2.4.0>");
+    EXPECT_EQ(tag.client_name, "EiskaltDC++");
+    EXPECT_EQ(tag.client_version, "2.4.0");
+}
+
+TEST(NMDCProtocolTest, ParseTag_Socks5Mode) {
+    TagData tag = ParseTag("<NMDC V:1.0,M:5,H:1/0/0,S:3>");
+    EXPECT_EQ(tag.mode, '5');
+}
+
+TEST(NMDCProtocolTest, ParseTag_EmptyBrackets) {
+    TagData tag = ParseTag("<>");
+    EXPECT_TRUE(tag.client_name.empty());
+}
+
+TEST(NMDCProtocolTest, ParseTag_NoVersionButHasFields) {
+    // No V: field — entire inner string becomes client_name.
+    // Comma-delimited fields still parse from first comma, but
+    // the M:A portion lives before the first comma and is skipped.
+    TagData tag = ParseTag("<StrongDC M:A,H:2/1/0,S:4>");
+    EXPECT_EQ(tag.client_name, "StrongDC M:A,H:2/1/0,S:4");
+    EXPECT_EQ(tag.mode, '\0');   // M: is before first comma
+    EXPECT_EQ(tag.slots, 4);
+    EXPECT_EQ(tag.hubs_normal, 2);
+    EXPECT_EQ(tag.hubs_registered, 1);
+    EXPECT_EQ(tag.hubs_operator, 0);
+    EXPECT_TRUE(tag.client_version.empty());
+}
+
+TEST(NMDCProtocolTest, ParseTag_MalformedHubField) {
+    // Non-numeric H values — stoi catch blocks
+    TagData tag = ParseTag("<DC V:1.0,H:abc/def/ghi>");
+    EXPECT_EQ(tag.client_name, "DC");
+    EXPECT_EQ(tag.hubs_normal, 0);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_PartialHubField) {
+    // Only one hub count (no slashes)
+    TagData tag = ParseTag("<DC V:1.0,H:5>");
+    EXPECT_EQ(tag.hubs_normal, 5);
+    EXPECT_EQ(tag.hubs_registered, 0);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_TwoPartHubField) {
+    // Two-part hubs (no operator count)
+    TagData tag = ParseTag("<DC V:1.0,H:5/3>");
+    EXPECT_EQ(tag.hubs_normal, 5);
+    EXPECT_EQ(tag.hubs_registered, 3);
+    EXPECT_EQ(tag.hubs_operator, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_EmptyModeValue) {
+    // Empty mode value
+    TagData tag = ParseTag("<DC V:1.0,M:,S:3>");
+    EXPECT_EQ(tag.mode, '\0');
+    EXPECT_EQ(tag.slots, 3);
+}
+
+TEST(NMDCProtocolTest, ParseTag_NegativeSlots) {
+    TagData tag = ParseTag("<DC V:1.0,S:-1>");
+    // Implementation may store -1 or 0 depending on stoi
+    EXPECT_LE(tag.slots, 0);
+}
+
+TEST(NMDCProtocolTest, ParseTag_UnknownFields) {
+    // Unknown key letters should be silently skipped
+    TagData tag = ParseTag("<DC V:1.0,X:foo,Z:bar,S:3>");
+    EXPECT_EQ(tag.client_name, "DC");
+    EXPECT_EQ(tag.client_version, "1.0");
+    EXPECT_EQ(tag.slots, 3);
+}
+
+TEST(NMDCProtocolTest, ParseTag_UploadLimitInPassiveMode) {
+    // Verify L: is parsed even in passive mode
+    TagData tag = ParseTag("<DC V:1.0,M:P,H:1/0/0,S:2,L:50>");
+    EXPECT_EQ(tag.mode, 'P');
+    EXPECT_EQ(tag.upload_limit, 50);
+}
+
+TEST(NMDCProtocolTest, ParseTag_ValidFieldSetTrue) {
+    TagData tag = ParseTag("<DC++ V:0.868,M:A,H:1/0/0,S:5>");
+    EXPECT_TRUE(tag.valid);
+}
+
+TEST(NMDCProtocolTest, ParseTag_InvalidSetFalse) {
+    TagData tag = ParseTag("");
+    EXPECT_FALSE(tag.valid);
+}
+
+// =============================================================================
+// ParseSR Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseSR_DirectedResult) {
+    std::string msg = "$SR sender some\\file.txt\x05\x0035/50\x05TTH:ABCDEFG (192.168.1.1:411)\x05target_nick";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_EQ(sr.to_nick, "target_nick");
+    EXPECT_FALSE(sr.payload.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_NoTarget) {
+    // Active SR results (UDP) have no \x05 target suffix
+    std::string msg = "$SR sender somefile.txt 35/50 TTH:ABCDEFG (192.168.1.1:411)";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_TRUE(sr.to_nick.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_Invalid) {
+    SearchResultData sr = ParseSR("not a search result");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_EmptyString) {
+    SearchResultData sr = ParseSR("");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_OnlyPrefix) {
+    // "$SR " with nothing after — no nick
+    SearchResultData sr = ParseSR("$SR ");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_NickOnly) {
+    // Nick but no space after it — find(' ') returns npos
+    SearchResultData sr = ParseSR("$SR sender");
+    EXPECT_FALSE(sr.valid);
+}
+
+TEST(NMDCProtocolTest, ParseSR_EmptyTargetNick) {
+    // Ends with \x05 but nothing after — to_nick should be empty
+    std::string msg = std::string("$SR sender payload\x05");
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_TRUE(sr.to_nick.empty());
+}
+
+TEST(NMDCProtocolTest, ParseSR_MultipleSep05) {
+    // payload contains multiple \x05 — rfind picks last one for target
+    std::string msg = std::string("$SR sender file\x05") + "35/50\x05TTH:ABC (10.0.0.1:411)\x05target";
+    SearchResultData sr = ParseSR(msg);
+    EXPECT_TRUE(sr.valid);
+    EXPECT_EQ(sr.from_nick, "sender");
+    EXPECT_EQ(sr.to_nick, "target");
+}
+
+// =============================================================================
+// MakeHubNameWithTopic Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_BothPresent) {
+    std::string result = MakeHubNameWithTopic("My Hub", "Welcome!");
+    EXPECT_EQ(result, "$HubName My Hub - Welcome!");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_EmptyTopic) {
+    std::string result = MakeHubNameWithTopic("My Hub", "");
+    EXPECT_EQ(result, "$HubName My Hub");
+}
+
+// =============================================================================
+// MakeForceMove Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeForceMove_Format) {
+    EXPECT_EQ(MakeForceMove("other-hub.com:411"), "$ForceMove other-hub.com:411");
+}
+
+TEST(NMDCProtocolTest, MakeForceMove_EmptyAddress) {
+    EXPECT_EQ(MakeForceMove(""), "$ForceMove ");
+}
+
+// =============================================================================
+// MakeBotList Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeBotList_MultipleNicks) {
+    std::vector<std::string> bots = {"Hub-Security", "OpChat"};
+    EXPECT_EQ(MakeBotList(bots), "$BotList Hub-Security$$OpChat$$");
+}
+
+TEST(NMDCProtocolTest, MakeBotList_Empty) {
+    std::vector<std::string> bots;
+    EXPECT_EQ(MakeBotList(bots), "$BotList ");
+}
+
+TEST(NMDCProtocolTest, MakeBotList_SingleBot) {
+    std::vector<std::string> bots = {"Hub-Security"};
+    EXPECT_EQ(MakeBotList(bots), "$BotList Hub-Security$$");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_EmptyName) {
+    std::string result = MakeHubNameWithTopic("", "Topic");
+    EXPECT_EQ(result, "$HubName  - Topic");
+}
+
+TEST(NMDCProtocolTest, MakeHubNameWithTopic_BothEmpty) {
+    std::string result = MakeHubNameWithTopic("", "");
+    EXPECT_EQ(result, "$HubName ");
+}
+
+// =============================================================================
+// MakeSupports New Features Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsBotList) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("BotList"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_NoZPipe0) {
+    std::string result = MakeSupports();
+    EXPECT_EQ(result.find("ZPipe0"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsBotINFO) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("BotINFO"), std::string::npos);
+}
+
+TEST(NMDCProtocolTest, MakeSupports_ContainsHubINFO) {
+    std::string result = MakeSupports();
+    EXPECT_NE(result.find("HubINFO"), std::string::npos);
+}
+
+// =============================================================================
+// ParseMyINFO Status Flag Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagNormal) {
+    // Status byte is the last char of speed field: \x01 = STATUS_NORMAL
+    std::string msg = "$MyINFO $ALL TestUser Desc<DC++ V:1.0,M:A,H:1/0/0,S:3>$ $LAN(T3)\x01$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x01);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagAway) {
+    std::string msg = "$MyINFO $ALL TestUser Desc<DC++ V:1.0,M:A,H:1/0/0,S:3>$ $LAN(T3)\x02$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x02);
+}
+
+// =============================================================================
+// Status Flag Constants Tests
+// =============================================================================
+
+TEST(NMDCProtocolTest, StatusFlagConstants_Values) {
+    EXPECT_EQ(STATUS_NORMAL, 0x01);
+    EXPECT_EQ(STATUS_AWAY, 0x02);
+    EXPECT_EQ(STATUS_SERVER, 0x04);
+    EXPECT_EQ(STATUS_FIREBALL, 0x08);
+    EXPECT_EQ(STATUS_TLS, 0x10);
+    EXPECT_EQ(STATUS_NAT, 0x20);
+}
+
+TEST(NMDCProtocolTest, StatusFlagConstants_NoBitOverlap) {
+    // All flags should be distinct powers of 2
+    unsigned char all = STATUS_NORMAL | STATUS_AWAY | STATUS_SERVER |
+                        STATUS_FIREBALL | STATUS_TLS | STATUS_NAT;
+    // 6 flags, each a distinct bit → population count should be 6
+    int bits = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (all & (1 << i)) bits++;
+    }
+    EXPECT_EQ(bits, 6);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagServer) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x04$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x04);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagFireball) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x08$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x08);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagTLS) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x10$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x10);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagNAT) {
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x20$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x20);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_StatusFlagComposite) {
+    // TLS + AWAY = 0x12
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $LAN(T3)\x12$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0x12);
+    EXPECT_TRUE(data.status_flag & STATUS_TLS);
+    EXPECT_TRUE(data.status_flag & STATUS_AWAY);
+    EXPECT_FALSE(data.status_flag & STATUS_FIREBALL);
+}
+
+TEST(NMDCProtocolTest, ParseMyINFO_EmptySpeedField) {
+    // Empty speed field — no status byte
+    std::string msg = "$MyINFO $ALL TestUser Desc$ $$email$1024$";
+    MyINFOData data = ParseMyINFO(msg);
+    EXPECT_TRUE(data.valid);
+    EXPECT_EQ(data.status_flag, 0);
+}
+
+// ============================================================
+// vh::fmt() compatibility shim tests
+// ============================================================
+
+TEST(CompatFormat, SingleStringPlaceholder) {
+    EXPECT_EQ(vh::fmt("Hello {}!", "World"), "Hello World!");
+}
+
+TEST(CompatFormat, MultipleStringPlaceholders) {
+    EXPECT_EQ(vh::fmt("{} and {}", "Alice", "Bob"), "Alice and Bob");
+}
+
+TEST(CompatFormat, IntegerPlaceholder) {
+    EXPECT_EQ(vh::fmt("port={}", 411), "port=411");
+}
+
+TEST(CompatFormat, MixedTypes) {
+    EXPECT_EQ(vh::fmt("{}:{}", "hub.example.com", 411), "hub.example.com:411");
+}
+
+TEST(CompatFormat, NoPlaceholders) {
+    EXPECT_EQ(vh::fmt("no placeholders here"), "no placeholders here");
+}
+
+TEST(CompatFormat, ThreePlaceholders) {
+    EXPECT_EQ(vh::fmt("{} + {} = {}", 1, 2, 3), "1 + 2 = 3");
+}
+
+TEST(CompatFormat, EmptyString) {
+    EXPECT_EQ(vh::fmt(""), "");
+}
+
+TEST(CompatFormat, ConsecutivePlaceholders) {
+    EXPECT_EQ(vh::fmt("{}{}{}", "a", "b", "c"), "abc");
+}
+
+TEST(CompatFormat, PlaceholderAtStart) {
+    EXPECT_EQ(vh::fmt("{} is here", "Value"), "Value is here");
+}
+
+TEST(CompatFormat, PlaceholderAtEnd) {
+    EXPECT_EQ(vh::fmt("value is {}", 42), "value is 42");
+}
+
+TEST(CompatFormat, BooleanValue) {
+    // boolalpha behavior: std::format uses "true"/"false",
+    // ostringstream also uses "true"/"false" with boolalpha
+    std::string result = vh::fmt("flag={}", true);
+    // Accept either "1" or "true" depending on implementation
+    EXPECT_TRUE(result == "flag=true" || result == "flag=1");
+}
+
+TEST(CompatFormat, FloatingPoint) {
+    std::string result = vh::fmt("pi={}", 3.14);
+    EXPECT_TRUE(result.find("pi=3.14") == 0);
+}
+
+TEST(CompatFormat, CStringArg) {
+    const char* name = "verlihub";
+    EXPECT_EQ(vh::fmt("hub={}", name), "hub=verlihub");
+}

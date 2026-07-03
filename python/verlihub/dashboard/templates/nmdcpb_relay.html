@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+
+{% block title %}NMDCpb Relay Admin — {{ hub_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="title">
+        <i class="fas fa-network-wired"></i> NMDCpb Relay Admin
+    </h1>
+    <p class="subtitle">Monitor and manage relay sessions, E2EPM, and NMDCpb users</p>
+
+    <!-- Stats cards -->
+    <div class="columns is-multiline" id="stats-cards">
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">PB Messages Routed</p>
+                    <p class="title" id="stat-pb-messages">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">NMDCpb Users</p>
+                    <p class="title" id="stat-pb-users">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">Active Relays</p>
+                    <p class="title" id="stat-active-relays">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">Relay Bytes Forwarded</p>
+                    <p class="title" id="stat-relay-bytes">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">E2EPM Forwarded</p>
+                    <p class="title" id="stat-e2epm">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">Rate Limited</p>
+                    <p class="title" id="stat-rate-limited">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">Opaque Forwards</p>
+                    <p class="title" id="stat-opaque">—</p>
+                </div>
+            </div>
+        </div>
+        <div class="column is-3">
+            <div class="card">
+                <div class="card-content has-text-centered">
+                    <p class="heading">Flood Mutes</p>
+                    <p class="title" id="stat-flood-mutes">—</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- E2EPM Encryption Stats -->
+    <div class="box mt-5">
+        <h2 class="title is-4">
+            <i class="fas fa-lock"></i> E2EPM Encryption Stats
+        </h2>
+        <div class="columns is-multiline" id="e2epm-cards">
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Total Forwarded</p>
+                        <p class="title is-5" id="e2epm-total">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Key Exchanges</p>
+                        <p class="title is-5" id="e2epm-kex">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Encrypted PMs</p>
+                        <p class="title is-5" id="e2epm-enc">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Session Ends</p>
+                        <p class="title is-5" id="e2epm-ends">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Priv. Searches</p>
+                        <p class="title is-5" id="e2epm-search">—</p>
+                    </div>
+                </div>
+            </div>
+            <div class="column is-2">
+                <div class="card">
+                    <div class="card-content has-text-centered">
+                        <p class="heading">Search Results</p>
+                        <p class="title is-5" id="e2epm-results">—</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <p class="is-size-7 has-text-grey mt-2" id="e2epm-status">
+            <i class="fas fa-info-circle"></i> E2EPM status: loading…
+        </p>
+    </div>
+
+    <!-- Relay sessions table -->
+    <div class="box mt-5">
+        <div class="level">
+            <div class="level-left">
+                <h2 class="title is-4">
+                    <i class="fas fa-exchange-alt"></i> Active Relay Sessions
+                </h2>
+            </div>
+            <div class="level-right">
+                <button class="button is-danger is-small" onclick="closeAllRelays()"
+                        id="btn-close-all" disabled>
+                    <i class="fas fa-times-circle mr-1"></i> Close All
+                </button>
+                <button class="button is-info is-small ml-2" onclick="refreshAll()">
+                    <i class="fas fa-sync-alt mr-1"></i> Refresh
+                </button>
+            </div>
+        </div>
+        <table class="table is-fullwidth is-striped is-hoverable" id="relay-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User A</th>
+                    <th>User B</th>
+                    <th>Bytes</th>
+                    <th>Age</th>
+                    <th>Idle</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="relay-tbody">
+                <tr><td colspan="7" class="has-text-centered has-text-grey">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- NMDCpb Users -->
+    <div class="box mt-5">
+        <h2 class="title is-4">
+            <i class="fas fa-users"></i> NMDCpb Users Online
+        </h2>
+        <table class="table is-fullwidth is-striped is-hoverable" id="users-table">
+            <thead>
+                <tr>
+                    <th>Nick</th>
+                    <th>Features</th>
+                    <th>Active Relays</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="users-tbody">
+                <tr><td colspan="4" class="has-text-centered has-text-grey">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Configuration (read-only) -->
+    <div class="box mt-5">
+        <h2 class="title is-4">
+            <i class="fas fa-cog"></i> Plugin Configuration
+        </h2>
+        <div class="columns is-multiline" id="config-cards">
+            <div class="column is-12">
+                <pre id="config-json" class="has-background-dark has-text-light p-4" style="border-radius:6px;">Loading…</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const BASE = '/dashboard/nmdcpb/api';
+
+function formatBytes(n) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (Math.abs(n) >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return i === 0 ? `${n} B` : `${n.toFixed(1)} ${units[i]}`;
+}
+
+function formatTime(secs) {
+    if (secs < 60) return `${secs}s`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m ${secs%60}s`;
+    return `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
+}
+
+async function fetchJSON(url) {
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+}
+
+async function loadStats() {
+    try {
+        const data = await fetchJSON(`${BASE}/stats`);
+        document.getElementById('stat-pb-messages').textContent = data.pb_messages_routed || 0;
+        document.getElementById('stat-pb-users').textContent = data.pb_users_count || 0;
+        document.getElementById('stat-active-relays').textContent = data.active_relay_sessions || 0;
+        document.getElementById('stat-relay-bytes').textContent = formatBytes(data.relay_bytes_forwarded || 0);
+        document.getElementById('stat-e2epm').textContent = data.e2epm_forwarded || 0;
+        document.getElementById('stat-rate-limited').textContent = data.rate_limited || 0;
+        document.getElementById('stat-opaque').textContent = data.relay_opaque_forwards || 0;
+        document.getElementById('stat-flood-mutes').textContent = data.flood_mutes || 0;
+
+        // E2EPM breakdown
+        if (data.e2epm) {
+            document.getElementById('e2epm-total').textContent = data.e2epm.total_forwarded || 0;
+            document.getElementById('e2epm-kex').textContent = data.e2epm.key_exchanges || 0;
+            document.getElementById('e2epm-enc').textContent = data.e2epm.encrypted_pms || 0;
+            document.getElementById('e2epm-ends').textContent = data.e2epm.session_ends || 0;
+            document.getElementById('e2epm-search').textContent = data.e2epm.private_searches || 0;
+            document.getElementById('e2epm-results').textContent = data.e2epm.search_results || 0;
+            const statusEl = document.getElementById('e2epm-status');
+            if (data.e2epm.enabled) {
+                statusEl.innerHTML = '<i class="fas fa-check-circle has-text-success"></i> E2EPM forwarding <strong>enabled</strong> — rate limit: ' + data.e2epm.rate_limit + ' msg/min';
+            } else {
+                statusEl.innerHTML = '<i class="fas fa-times-circle has-text-danger"></i> E2EPM forwarding <strong>disabled</strong>';
+            }
+        }
+
+        if (data.config) {
+            document.getElementById('config-json').textContent = JSON.stringify(data.config, null, 2);
+        }
+    } catch (e) {
+        console.error('Failed to load stats:', e);
+    }
+}
+
+async function loadRelays() {
+    try {
+        const data = await fetchJSON(`${BASE}/relays`);
+        const tbody = document.getElementById('relay-tbody');
+        const closeAllBtn = document.getElementById('btn-close-all');
+
+        if (!data.sessions || data.sessions.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="has-text-centered has-text-grey">No active relay sessions</td></tr>';
+            closeAllBtn.disabled = true;
+            return;
+        }
+
+        closeAllBtn.disabled = false;
+        tbody.innerHTML = data.sessions.map(s => `
+            <tr>
+                <td><strong>#${s.relay_id}</strong></td>
+                <td>${s.user_a}</td>
+                <td>${s.user_b}</td>
+                <td>${s.bytes_forwarded_human}</td>
+                <td>${formatTime(s.age_seconds)}</td>
+                <td class="${s.is_idle ? 'has-text-danger' : ''}">${formatTime(s.idle_seconds)}</td>
+                <td>
+                    <button class="button is-small is-danger" onclick="closeRelay(${s.relay_id})">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load relays:', e);
+    }
+}
+
+async function loadUsers() {
+    try {
+        const data = await fetchJSON(`${BASE}/users`);
+        const tbody = document.getElementById('users-tbody');
+
+        if (!data.users || data.users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="has-text-centered has-text-grey">No NMDCpb users online</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.users.map(u => `
+            <tr>
+                <td><strong>${u.nick}</strong></td>
+                <td>${u.features.map(f => `<span class="tag is-info is-light">${f}</span>`).join(' ')}</td>
+                <td>${u.active_relays}</td>
+                <td>
+                    ${u.active_relays > 0 ? `
+                    <button class="button is-small is-warning" onclick="closeUserRelays('${u.nick}')">
+                        <i class="fas fa-ban mr-1"></i> Close relays
+                    </button>` : ''}
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load users:', e);
+    }
+}
+
+async function closeRelay(relayId) {
+    if (!confirm(`Close relay session #${relayId}?`)) return;
+    try {
+        await fetch(`${BASE}/relay/${relayId}/close`, { method: 'POST', credentials: 'same-origin' });
+        refreshAll();
+    } catch (e) {
+        alert('Failed to close relay: ' + e.message);
+    }
+}
+
+async function closeAllRelays() {
+    if (!confirm('Close ALL relay sessions?')) return;
+    try {
+        await fetch(`${BASE}/relay/close-all`, { method: 'POST', credentials: 'same-origin' });
+        refreshAll();
+    } catch (e) {
+        alert('Failed to close relays: ' + e.message);
+    }
+}
+
+async function closeUserRelays(nick) {
+    if (!confirm(`Close all relay sessions for ${nick}?`)) return;
+    try {
+        await fetch(`${BASE}/relay/close-user/${encodeURIComponent(nick)}`, { method: 'POST', credentials: 'same-origin' });
+        refreshAll();
+    } catch (e) {
+        alert('Failed to close relays: ' + e.message);
+    }
+}
+
+function refreshAll() {
+    loadStats();
+    loadRelays();
+    loadUsers();
+}
+
+// Initial load
+refreshAll();
+
+// Auto-refresh every 5 seconds
+setInterval(refreshAll, 5000);
+</script>
+{% endblock %}

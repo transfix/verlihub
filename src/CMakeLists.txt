@@ -18,6 +18,15 @@
 
 INCLUDE_DIRECTORIES(${VERLIHUB_BINARY_DIR} ${VERLIHUB_SOURCE_DIR}/src)
 
+# Add new C++20 core library subdirectory
+add_subdirectory(core)
+
+# Add SWIG Python bindings subdirectory (optional, controlled by BUILD_PYTHON_BINDINGS)
+option(BUILD_PYTHON_BINDINGS "Build Python SWIG bindings for thin verlihub" ON)
+if(BUILD_PYTHON_BINDINGS)
+    add_subdirectory(swig)
+endif()
+
 SET(VERLIHUB_HDRS
 	casyncconn.h
 	casyncsocketserver.h
@@ -178,6 +187,34 @@ SET(VERLIHUB_SRCS
 	#verlihub.cpp
 )
 
+# NMDCpb protobuf extension
+if(Protobuf_FOUND)
+	set(NMDCPB_PROTO_DIR "${CMAKE_SOURCE_DIR}/python/verlihub/client/nmdcpb/proto")
+	set(NMDCPB_PROTO_FILE "${NMDCPB_PROTO_DIR}/nmdcpb.proto")
+	set(NMDCPB_GENERATED_DIR "${CMAKE_BINARY_DIR}/nmdcpb_generated")
+	file(MAKE_DIRECTORY ${NMDCPB_GENERATED_DIR})
+
+	# Generate C++ sources from proto file
+	add_custom_command(
+		OUTPUT "${NMDCPB_GENERATED_DIR}/nmdcpb.pb.cc" "${NMDCPB_GENERATED_DIR}/nmdcpb.pb.h"
+		COMMAND protobuf::protoc
+			--cpp_out=${NMDCPB_GENERATED_DIR}
+			-I${NMDCPB_PROTO_DIR}
+			${NMDCPB_PROTO_FILE}
+		DEPENDS ${NMDCPB_PROTO_FILE}
+		COMMENT "Generating NMDCpb protobuf C++ sources"
+	)
+
+	list(APPEND VERLIHUB_SRCS
+		"${NMDCPB_GENERATED_DIR}/nmdcpb.pb.cc"
+		cpbtranslate.cpp
+		crelay.cpp
+	)
+
+	include_directories(${NMDCPB_GENERATED_DIR})
+	include_directories(${Protobuf_INCLUDE_DIRS})
+endif()
+
 add_library(libverlihub_so SHARED ${VERLIHUB_SRCS})
 set_target_properties(libverlihub_so PROPERTIES OUTPUT_NAME ${PROJECT_NAME})
 
@@ -233,32 +270,51 @@ endif()
 
 target_link_libraries(libverlihub_so ${VERLIHUB_LIBS}) # pthread dl execinfo
 
-add_library(vhapi_so SHARED "script_api.cpp")
-set_target_properties(vhapi_so PROPERTIES OUTPUT_NAME "vhapi")
-target_link_libraries(vhapi_so libverlihub_so)
-
-add_executable(verlihub "verlihub.cpp")
-target_link_libraries(verlihub libverlihub_so)
+# Link protobuf for NMDCpb extension
+if(Protobuf_FOUND)
+	target_link_libraries(libverlihub_so protobuf::libprotobuf)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
-# generate verlihub_config
+# Python wheel build: install libverlihub.so into the wheel so auditwheel can
+# bundle it (and its transitive deps) alongside _verlihub_core.so.
+# Note: wheel.install-dir = "verlihub" in pyproject.toml maps CMAKE_INSTALL_PREFIX
+# to verlihub/ in the wheel, so DESTINATION must be "." to avoid doubling.
 
-MESSAGE(STATUS "[ .. ] Generating configuration executable: ${CMAKE_BINARY_DIR}/verlihub_config")
-STRING(REPLACE ";" " " VERLIHUB_USE_LIBS "${VERLIHUB_LIBS}")
-string(STRIP "${VERLIHUB_USE_LIBS}" VERLIHUB_USE_LIBS)
-CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/verlihub_config.cm" "${CMAKE_BINARY_DIR}/verlihub_config")
+if(PYTHON_WHEEL_BUILD)
+	install(TARGETS libverlihub_so
+		COMPONENT PythonModule
+		LIBRARY DESTINATION .
+	)
+endif()
 
 # ----------------------------------------------------------------------------------------------------
+# Targets only needed for the full server install (not the Python wheel)
 
-install(TARGETS vhapi_so libverlihub_so verlihub RUNTIME DESTINATION "bin" LIBRARY DESTINATION ${LIBDIR})
+if(NOT PYTHON_WHEEL_BUILD)
+	add_library(vhapi_so SHARED "script_api.cpp")
+	set_target_properties(vhapi_so PROPERTIES OUTPUT_NAME "vhapi")
+	target_link_libraries(vhapi_so libverlihub_so)
 
-INSTALL(
-	FILES "${VERLIHUB_BINARY_DIR}/verlihub_config"
-	DESTINATION "bin"
-	PERMISSIONS OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
-	WORLD_READ WORLD_EXECUTE
-)
+	add_executable(verlihub "verlihub.cpp")
+	target_link_libraries(verlihub libverlihub_so)
 
-INSTALL(FILES ${VERLIHUB_HDRS} "${VERLIHUB_BINARY_DIR}/dirsettings.h" DESTINATION "include/${PROJECT_NAME}")
+	# generate verlihub_config
+	MESSAGE(STATUS "[ .. ] Generating configuration executable: ${CMAKE_BINARY_DIR}/verlihub_config")
+	STRING(REPLACE ";" " " VERLIHUB_USE_LIBS "${VERLIHUB_LIBS}")
+	string(STRIP "${VERLIHUB_USE_LIBS}" VERLIHUB_USE_LIBS)
+	CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/cmake/verlihub_config.cm" "${CMAKE_BINARY_DIR}/verlihub_config")
+
+	install(TARGETS vhapi_so libverlihub_so verlihub RUNTIME DESTINATION "bin" LIBRARY DESTINATION ${LIBDIR})
+
+	INSTALL(
+		FILES "${VERLIHUB_BINARY_DIR}/verlihub_config"
+		DESTINATION "bin"
+		PERMISSIONS OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+		WORLD_READ WORLD_EXECUTE
+	)
+
+	INSTALL(FILES ${VERLIHUB_HDRS} "${VERLIHUB_BINARY_DIR}/dirsettings.h" DESTINATION "include/${PROJECT_NAME}")
+endif()
 
 # end of file

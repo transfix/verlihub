@@ -1,0 +1,533 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-cog mr-2"></i> Hub Configuration
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-success" onclick="saveAllConfig()">
+                <i class="fas fa-save mr-2"></i> Save All Changes
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Config tabs -->
+<div class="tabs is-boxed">
+    <ul>
+        <li class="is-active" id="tab-general">
+            <a onclick="switchConfigTab('general')">
+                <span class="icon"><i class="fas fa-sliders-h"></i></span>
+                <span>General</span>
+            </a>
+        </li>
+        <li id="tab-network">
+            <a onclick="switchConfigTab('network')">
+                <span class="icon"><i class="fas fa-network-wired"></i></span>
+                <span>Network</span>
+            </a>
+        </li>
+        <li id="tab-security">
+            <a onclick="switchConfigTab('security')">
+                <span class="icon"><i class="fas fa-shield-alt"></i></span>
+                <span>Security</span>
+            </a>
+        </li>
+        <li id="tab-limits">
+            <a onclick="switchConfigTab('limits')">
+                <span class="icon"><i class="fas fa-tachometer-alt"></i></span>
+                <span>Limits</span>
+            </a>
+        </li>
+        <li id="tab-messages">
+            <a onclick="switchConfigTab('messages')">
+                <span class="icon"><i class="fas fa-comment-alt"></i></span>
+                <span>Messages</span>
+            </a>
+        </li>
+        <li id="tab-embed">
+            <a onclick="switchConfigTab('embed')">
+                <span class="icon"><i class="fas fa-code"></i></span>
+                <span>Embed</span>
+            </a>
+        </li>
+    </ul>
+</div>
+
+<!-- General config panel -->
+<div id="panel-general" class="box">
+    <h2 class="subtitle">General Settings</h2>
+    
+    <div class="columns">
+        <div class="column">
+            <div class="field">
+                <label class="label">Hub Name</label>
+                <div class="control">
+                    <input class="input" type="text" id="config-hub_name" 
+                           value="{{ config.hub_name or '' }}" data-key="hub_name">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Hub Description</label>
+                <div class="control">
+                    <textarea class="textarea" id="config-hub_desc" rows="3"
+                              data-key="hub_desc">{{ config.hub_desc or '' }}</textarea>
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Hub Topic</label>
+                <div class="control">
+                    <input class="input" type="text" id="config-hub_topic" 
+                           value="{{ config.hub_topic or '' }}" data-key="hub_topic">
+                </div>
+            </div>
+        </div>
+        
+        <div class="column">
+            <div class="field">
+                <label class="label">Hub Owner</label>
+                <div class="control">
+                    <input class="input" type="text" id="config-hub_owner" 
+                           value="{{ config.hub_owner or '' }}" data-key="hub_owner">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Hub Category</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="config-hub_category" data-key="hub_category">
+                            <option value="">Select category...</option>
+                            <option value="General" {% if config.hub_category == 'General' %}selected{% endif %}>General</option>
+                            <option value="Music" {% if config.hub_category == 'Music' %}selected{% endif %}>Music</option>
+                            <option value="Movies" {% if config.hub_category == 'Movies' %}selected{% endif %}>Movies</option>
+                            <option value="Games" {% if config.hub_category == 'Games' %}selected{% endif %}>Games</option>
+                            <option value="Books" {% if config.hub_category == 'Books' %}selected{% endif %}>Books</option>
+                            <option value="Software" {% if config.hub_category == 'Software' %}selected{% endif %}>Software</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Default Encoding</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="config-hub_encoding" data-key="hub_encoding">
+                            <option value="UTF-8" {% if (config.hub_encoding or 'UTF-8') == 'UTF-8' %}selected{% endif %}>UTF-8</option>
+                            <option value="CP1252" {% if config.hub_encoding == 'CP1252' %}selected{% endif %}>CP1252 (Western European)</option>
+                            <option value="CP1251" {% if config.hub_encoding == 'CP1251' %}selected{% endif %}>CP1251 (Cyrillic)</option>
+                            <option value="CP1250" {% if config.hub_encoding == 'CP1250' %}selected{% endif %}>CP1250 (Central European)</option>
+                            <option value="CP1254" {% if config.hub_encoding == 'CP1254' %}selected{% endif %}>CP1254 (Turkish)</option>
+                            <option value="CP1256" {% if config.hub_encoding == 'CP1256' %}selected{% endif %}>CP1256 (Arabic)</option>
+                            <option value="ISO-8859-1" {% if config.hub_encoding == 'ISO-8859-1' %}selected{% endif %}>ISO-8859-1 (Latin-1)</option>
+                            <option value="GB18030" {% if config.hub_encoding == 'GB18030' %}selected{% endif %}>GB18030 (Chinese)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Network config panel -->
+<div id="panel-network" class="box" style="display: none;">
+    <h2 class="subtitle">Network Settings</h2>
+    
+    <div class="columns">
+        <div class="column">
+            <div class="field">
+                <label class="label">Listen Port</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-port" 
+                           value="{{ config.port or 411 }}" data-key="port">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Listen IP</label>
+                <div class="control">
+                    <input class="input" type="text" id="config-listen_ip" 
+                           value="{{ config.listen_ip or '0.0.0.0' }}" data-key="listen_ip">
+                </div>
+                <p class="help">Use 0.0.0.0 to listen on all interfaces</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">External IP/Host</label>
+                <div class="control">
+                    <input class="input" type="text" id="config-hub_host" 
+                           value="{{ config.hub_host or '' }}" data-key="hub_host">
+                </div>
+                <p class="help">Public hostname or IP for clients to connect</p>
+            </div>
+        </div>
+        
+        <div class="column">
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-use_regserver" data-key="use_regserver"
+                           {% if config.use_regserver %}checked{% endif %}>
+                    Register on Hub Lists
+                </label>
+                <p class="help">Periodically register this hub on external hublist servers</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">Hublist Servers (one per line)</label>
+                <div class="control">
+                    <textarea class="textarea" id="config-hublist_servers" rows="3"
+                              data-key="hublist_servers">{{ config.hublist_servers or '' }}</textarea>
+                </div>
+                <p class="help">e.g. hublist.te-home.net, hublist.pwiam.com</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-hublist_server_enabled" data-key="hublist_server_enabled"
+                           {% if config.hublist_server_enabled %}checked{% endif %}>
+                    Run Built-in Hublist Server
+                </label>
+                <p class="help">Allow other hubs to register on this instance (served at /api/v1/hublist)</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-enable_tls" data-key="enable_tls"
+                           {% if config.enable_tls %}checked{% endif %}>
+                    Enable TLS/SSL
+                </label>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Security config panel -->
+<div id="panel-security" class="box" style="display: none;">
+    <h2 class="subtitle">Security Settings</h2>
+    
+    <div class="columns">
+        <div class="column">
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-allow_unregistered" data-key="allow_unregistered"
+                           {% if config.allow_unregistered %}checked{% endif %}>
+                    Allow Unregistered Users
+                </label>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-require_password" data-key="require_password"
+                           {% if config.require_password %}checked{% endif %}>
+                    Require Password for Registered
+                </label>
+            </div>
+            
+            <div class="field">
+                <label class="label">Login Timeout (seconds)</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-login_timeout" 
+                           value="{{ config.login_timeout or 60 }}" data-key="login_timeout">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Max Password Attempts</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-max_pass_attempts" 
+                           value="{{ config.max_pass_attempts or 3 }}" data-key="max_pass_attempts">
+                </div>
+            </div>
+        </div>
+        
+        <div class="column">
+            <div class="field">
+                <label class="label">Flood Protection Level</label>
+                <div class="control">
+                    <div class="select is-fullwidth">
+                        <select id="config-flood_protection" data-key="flood_protection">
+                            <option value="0" {% if config.flood_protection == 0 %}selected{% endif %}>Disabled</option>
+                            <option value="1" {% if config.flood_protection == 1 %}selected{% endif %}>Low</option>
+                            <option value="2" {% if config.flood_protection == 2 %}selected{% endif %}>Medium</option>
+                            <option value="3" {% if config.flood_protection == 3 %}selected{% endif %}>High</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-chat_filter" data-key="chat_filter"
+                           {% if config.chat_filter %}checked{% endif %}>
+                    Enable Chat Filter
+                </label>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-anti_clone" data-key="anti_clone"
+                           {% if config.anti_clone %}checked{% endif %}>
+                    Anti-Clone Protection
+                </label>
+            </div>
+            
+            <div class="field">
+                <label class="label">
+                    <input type="checkbox" id="config-registration_require_invite" data-key="registration_require_invite"
+                           {% if config.registration_require_invite %}checked{% endif %}>
+                    Require Invite Code for Registration
+                </label>
+                <p class="help">When enabled, new users must provide a valid invite code to register via the API.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Limits config panel -->
+<div id="panel-limits" class="box" style="display: none;">
+    <h2 class="subtitle">Connection Limits</h2>
+    
+    <div class="columns">
+        <div class="column">
+            <div class="field">
+                <label class="label">Max Users</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-max_users" 
+                           value="{{ config.max_users or 1000 }}" data-key="max_users">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Min Share (Bytes)</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-min_share" 
+                           value="{{ config.min_share or 0 }}" data-key="min_share">
+                </div>
+                <p class="help">0 = no minimum share required</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">Min Slots</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-min_slots" 
+                           value="{{ config.min_slots or 0 }}" data-key="min_slots">
+                </div>
+            </div>
+        </div>
+        
+        <div class="column">
+            <div class="field">
+                <label class="label">Max Hubs (Users)</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-max_hubs_user" 
+                           value="{{ config.max_hubs_user or 0 }}" data-key="max_hubs_user">
+                </div>
+                <p class="help">0 = no limit</p>
+            </div>
+            
+            <div class="field">
+                <label class="label">Max Hubs (Operators)</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-max_hubs_op" 
+                           value="{{ config.max_hubs_op or 0 }}" data-key="max_hubs_op">
+                </div>
+            </div>
+            
+            <div class="field">
+                <label class="label">Max Connections per IP</label>
+                <div class="control">
+                    <input class="input" type="number" id="config-max_conn_per_ip" 
+                           value="{{ config.max_conn_per_ip or 5 }}" data-key="max_conn_per_ip">
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Messages config panel -->
+<div id="panel-messages" class="box" style="display: none;">
+    <h2 class="subtitle">Hub Messages</h2>
+    
+    <div class="field">
+        <label class="label">Welcome Message (MOTD)</label>
+        <div class="control">
+            <textarea class="textarea" id="config-hub_motd" rows="6"
+                      data-key="hub_motd">{{ config.hub_motd or '' }}</textarea>
+        </div>
+        <p class="help">Displayed to users when they connect</p>
+    </div>
+    
+    <div class="field">
+        <label class="label">Hub Security Bot Name</label>
+        <div class="control">
+            <input class="input" type="text" id="config-hub_security" 
+                   value="{{ config.hub_security or 'Hub-Security' }}" data-key="hub_security">
+        </div>
+    </div>
+    
+    <div class="field">
+        <label class="label">Op Chat Bot Name</label>
+        <div class="control">
+            <input class="input" type="text" id="config-opchat_name" 
+                   value="{{ config.opchat_name or 'OpChat' }}" data-key="opchat_name">
+        </div>
+    </div>
+</div>
+
+<!-- Embed / Status Widget -->
+<div id="panel-embed" class="box" style="display: none;">
+    <h2 class="subtitle"><i class="fas fa-code mr-2"></i> Embeddable Hub Status Widget</h2>
+
+    <div class="content">
+        <p>
+            Embed a slimmed-down, read-only hub status widget on your website or forum.
+            The widget requires <strong>no login</strong> and auto-refreshes every 60 seconds.
+        </p>
+    </div>
+
+    <div class="columns">
+        <div class="column is-half">
+            <h5 class="title is-6">Compact Widget (recommended)</h5>
+            <p class="mb-2">Shows user count, total share, operator count, health status, and top countries.</p>
+            <div class="field">
+                <label class="label">Iframe Code</label>
+                <div class="control">
+                    <textarea class="textarea is-family-code" id="embed-code-compact" rows="3" readonly
+                              onclick="this.select()">&lt;iframe src="{{ request.url_for('embed_dashboard') }}" width="400" height="450" frameborder="0" style="border:1px solid #ddd;border-radius:8px;"&gt;&lt;/iframe&gt;</textarea>
+                </div>
+                <p class="help">
+                    <button class="button is-small is-link is-light" onclick="copyEmbedCode('embed-code-compact')">
+                        <i class="fas fa-copy mr-1"></i> Copy
+                    </button>
+                </p>
+            </div>
+
+            <h5 class="title is-6 mt-5">Full Dashboard (public SPA)</h5>
+            <p class="mb-2">Full-featured read-only dashboard with tabs for Users, Countries, Cities, ASNs, IPs.</p>
+            <div class="field">
+                <label class="label">Iframe Code</label>
+                <div class="control">
+                    <textarea class="textarea is-family-code" id="embed-code-full" rows="3" readonly
+                              onclick="this.select()">&lt;iframe src="{{ request.url_for('spa_dashboard') }}" width="100%" height="800" frameborder="0" style="border:1px solid #ddd;border-radius:8px;"&gt;&lt;/iframe&gt;</textarea>
+                </div>
+                <p class="help">
+                    <button class="button is-small is-link is-light" onclick="copyEmbedCode('embed-code-full')">
+                        <i class="fas fa-copy mr-1"></i> Copy
+                    </button>
+                </p>
+            </div>
+
+            <h5 class="title is-6 mt-5">Direct Links</h5>
+            <div class="buttons">
+                <a class="button is-primary is-light" href="/dashboard/embed" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i> Open Compact Widget
+                </a>
+                <a class="button is-info is-light" href="/dashboard/spa" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i> Open Full SPA
+                </a>
+            </div>
+        </div>
+
+        <div class="column is-half">
+            <h5 class="title is-6">Live Preview</h5>
+            <div style="border:1px solid #ddd; border-radius:8px; overflow:hidden;">
+                <iframe id="embed-preview" src="/dashboard/embed" width="100%" height="450" frameborder="0" style="display:block;"></iframe>
+            </div>
+            <p class="help has-text-grey mt-2">
+                <i class="fas fa-info-circle mr-1"></i>
+                This is exactly what visitors will see — no authentication required.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Unsaved changes notification -->
+<div class="notification is-warning is-light" id="unsaved-notification" style="display: none; position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
+    <button class="delete" onclick="this.parentElement.style.display='none'"></button>
+    You have unsaved changes.
+    <button class="button is-success is-small ml-3" onclick="saveAllConfig()">Save Now</button>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let hasUnsavedChanges = false;
+    
+    function switchConfigTab(tab) {
+        // Update tab active state
+        const tabs = ['general', 'network', 'security', 'limits', 'messages', 'embed'];
+        tabs.forEach(t => {
+            document.getElementById(`tab-${t}`).classList.toggle('is-active', t === tab);
+            document.getElementById(`panel-${t}`).style.display = t === tab ? 'block' : 'none';
+        });
+    }
+
+    function copyEmbedCode(textareaId) {
+        const textarea = document.getElementById(textareaId);
+        textarea.select();
+        navigator.clipboard.writeText(textarea.value).then(() => {
+            showNotification('Embed code copied to clipboard!', 'success');
+        }).catch(() => {
+            document.execCommand('copy');
+            showNotification('Embed code copied!', 'success');
+        });
+    }
+    
+    // Track changes
+    document.querySelectorAll('input, textarea, select').forEach(el => {
+        el.addEventListener('change', () => {
+            hasUnsavedChanges = true;
+            document.getElementById('unsaved-notification').style.display = 'block';
+        });
+    });
+    
+    async function saveAllConfig() {
+        const config = {};
+        
+        // Gather all config values
+        document.querySelectorAll('[data-key]').forEach(el => {
+            const key = el.dataset.key;
+            
+            if (key === 'hublist_servers') {
+                // Split textarea lines into an array of server hostnames
+                config[key] = el.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+            } else if (el.type === 'checkbox') {
+                config[key] = el.checked;
+            } else if (el.type === 'number') {
+                config[key] = parseInt(el.value) || 0;
+            } else {
+                config[key] = el.value;
+            }
+        });
+        
+        try {
+            await apiCall('PUT', '/hub/config', config);
+            showNotification('Configuration saved successfully', 'success');
+            hasUnsavedChanges = false;
+            document.getElementById('unsaved-notification').style.display = 'none';
+        } catch (error) {
+            showNotification(`Failed to save configuration: ${error.message}`, 'danger');
+        }
+    }
+    
+    // Warn before leaving with unsaved changes
+    window.addEventListener('beforeunload', (e) => {
+        if (hasUnsavedChanges) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+</script>
+{% endblock %}

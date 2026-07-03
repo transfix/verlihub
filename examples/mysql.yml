@@ -1,0 +1,24 @@
+database:
+  type: mysql
+  host: mysql
+  user: verlihub
+  password: verlihub
+  name: verlihub
+  port: 3306
+
+hub:
+  name: "My Hub"
+  port: 4111
+
+users:
+  masters:
+    - nick: admin
+      password: changeme
+
+api:
+  enabled: true
+  port: 30000
+
+startup_commands:
+  - "!onplug python"
+  - "!api start 30000"

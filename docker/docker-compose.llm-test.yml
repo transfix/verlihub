@@ -1,0 +1,115 @@
+# Docker Compose for LLM Integration Tests
+#
+# Validates the full LLM chat + tool-calling pipeline using Ollama
+# with the small qwen2.5:0.5b model (CPU-only, ~400 MB RAM).
+#
+# Architecture:
+#   ollama          — Ollama inference server, pulls qwen2.5:0.5b on first run
+#   llm-hub         — verlihub-py with LLM + MCP enabled (SQLite in-memory)
+#   llm-tests       — Python test runner exercising /api/v1/llm/* endpoints
+#
+# Usage:
+#   # Run all LLM integration tests
+#   docker compose -f docker/docker-compose.llm-test.yml up --build --abort-on-container-exit llm-tests
+#
+#   # Clean up
+#   docker compose -f docker/docker-compose.llm-test.yml down -v
+
+services:
+  # ==========================================================================
+  # Ollama Inference Server
+  # ==========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: llm-test-ollama
+    # Run on CPU — no GPU required for the 1.5b model
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+    networks:
+      - llm-test-network
+    # Persist model weights across runs so CI doesn't re-download every time
+    volumes:
+      - ollama-models:/root/.ollama
+
+  # ==========================================================================
+  # Model puller — ensures qwen2.5:0.5b is available before tests start
+  # ==========================================================================
+  ollama-pull:
+    image: curlimages/curl:latest
+    container_name: llm-test-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling qwen2.5:0.5b model..."
+        curl -sf http://ollama:11434/api/pull -d '{"name":"qwen2.5:0.5b","stream":false}' \
+          --max-time 600 \
+          -o /dev/null \
+          && echo "Model pull complete" \
+          || { echo "Model pull failed"; exit 1; }
+    networks:
+      - llm-test-network
+
+  # ==========================================================================
+  # Verlihub-py with LLM enabled
+  # ==========================================================================
+  llm-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: llm-test-hub
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/llm-test.yml
+        --mode api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - llm-test-network
+
+  # ==========================================================================
+  # LLM Integration Test Runner
+  # ==========================================================================
+  llm-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: llm-test-runner
+    depends_on:
+      llm-hub:
+        condition: service_healthy
+    command: >
+      python docker/tests/test_llm_e2e.py
+        --api-url http://llm-hub:8000
+        --admin-user admin
+        --admin-pass admin123
+        --model qwen2.5:0.5b
+        --ollama-url http://ollama:11434
+    networks:
+      - llm-test-network
+
+volumes:
+  ollama-models:
+
+networks:
+  llm-test-network:
+    driver: bridge

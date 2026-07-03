@@ -1,0 +1,397 @@
+{% extends "base.html" %}
+
+{% block title %}Chat - {{ hub_name }}{% endblock %}
+
+{% block head %}
+<style>
+    .chat-container {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 200px);
+        min-height: 400px;
+    }
+
+    .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        background: var(--chat-bg, #fafafa);
+        border: 1px solid var(--chat-border, #dbdbdb);
+        border-radius: 6px;
+        padding: 1rem;
+    }
+
+    [data-theme="dark"] .chat-messages {
+        --chat-bg: #1a1a2e;
+        --chat-border: #2a2a4a;
+    }
+
+    .chat-msg {
+        margin-bottom: 0.5rem;
+        line-height: 1.6;
+        word-wrap: break-word;
+    }
+
+    .chat-msg .nick {
+        font-weight: 700;
+        cursor: default;
+    }
+
+    .chat-msg .nick.class-guest   { color: #7a7a7a; }
+    .chat-msg .nick.class-reg     { color: #48c774; }
+    .chat-msg .nick.class-vip     { color: #3298dc; }
+    .chat-msg .nick.class-op      { color: #00d1b2; }
+    .chat-msg .nick.class-cheef   { color: #ffdd57; }
+    .chat-msg .nick.class-admin   { color: #ff3860; }
+    .chat-msg .nick.class-master  { color: #f14668; font-weight: 900; }
+
+    .chat-msg .time {
+        font-size: 0.75rem;
+        color: #999;
+        margin-right: 0.4rem;
+    }
+
+    .chat-msg .text {
+        color: var(--chat-text, #363636);
+    }
+
+    [data-theme="dark"] .chat-msg .text {
+        --chat-text: #e4e4e4;
+    }
+
+    .chat-msg.system {
+        color: #7a7a7a;
+        font-style: italic;
+        font-size: 0.9rem;
+    }
+
+    .chat-msg.cmd-output {
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.85rem;
+        background: rgba(0,0,0,0.04);
+        border-radius: 4px;
+        padding: 0.5rem;
+        white-space: pre-wrap;
+        color: var(--cmd-text, #4a4a4a);
+    }
+
+    [data-theme="dark"] .chat-msg.cmd-output {
+        --cmd-text: #ce9178;
+        background: rgba(255,255,255,0.04);
+    }
+
+    .chat-input-bar {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+    }
+
+    .chat-input-bar input {
+        flex: 1;
+    }
+
+    .chat-sidebar {
+        max-height: calc(100vh - 200px);
+        overflow-y: auto;
+    }
+
+    .user-item {
+        display: flex;
+        align-items: center;
+        padding: 0.3rem 0;
+        font-size: 0.9rem;
+    }
+
+    .user-item .tag {
+        font-size: 0.65rem;
+        margin-right: 0.4rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="columns" style="margin-bottom: 0;">
+    <!-- Main chat area -->
+    <div class="column is-9">
+        <div class="box p-4" style="height: calc(100vh - 160px); display: flex; flex-direction: column;">
+            <!-- Header -->
+            <div class="level mb-3" style="flex-shrink: 0;">
+                <div class="level-left">
+                    <div class="level-item">
+                        <h1 class="title is-5 mb-0">
+                            <i class="fas fa-comments mr-2"></i>
+                            Hub Chat
+                        </h1>
+                    </div>
+                    <div class="level-item">
+                        <span class="tag is-rounded" id="chat-user-count">{{ user_count }} online</span>
+                    </div>
+                </div>
+                <div class="level-right">
+                    <div class="level-item">
+                        <button class="button is-small is-light" onclick="clearChat()" title="Clear chat window">
+                            <i class="fas fa-eraser"></i>
+                        </button>
+                    </div>
+                    <div class="level-item">
+                        <button class="button is-small is-light" onclick="scrollToBottom()" title="Scroll to bottom">
+                            <i class="fas fa-arrow-down"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Messages -->
+            <div class="chat-messages" id="chat-messages">
+                <div class="chat-msg system">Welcome to {{ hub_name }} admin chat. You are logged in as {{ user.nick }}.</div>
+                <div class="chat-msg system">Tip: Type hub commands starting with <strong>!</strong> or <strong>+</strong> (e.g. <code>!help</code>, <code>!ul</code>, <code>+reguser nick 1</code>).</div>
+            </div>
+
+            <!-- Input -->
+            <div class="chat-input-bar" style="flex-shrink: 0;">
+                <input class="input" type="text" id="chat-input"
+                       placeholder="Type a message or hub command (!help, !kick, etc.)..."
+                       autocomplete="off" autofocus>
+                <button class="button is-primary" id="chat-send-btn" onclick="sendMessage()">
+                    <i class="fas fa-paper-plane mr-1"></i> Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User sidebar -->
+    <div class="column is-3">
+        <div class="box chat-sidebar p-4" style="height: calc(100vh - 160px); display: flex; flex-direction: column;">
+            <h2 class="title is-6 mb-3" style="flex-shrink: 0;">
+                <i class="fas fa-users mr-2"></i>
+                Online Users
+                <span class="tag is-primary is-rounded is-small ml-1" id="sidebar-user-count">0</span>
+            </h2>
+            <div id="user-list" style="flex: 1; overflow-y: auto;">
+                <p class="has-text-grey is-size-7">Loading...</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput    = document.getElementById('chat-input');
+    const authToken    = '{{ auth_token }}';
+    const myNick       = '{{ user.nick }}';
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+    function escapeHtml(text) {
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    function timeStr() {
+        return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }
+
+    function nickClass(cls) {
+        if (cls >= 10) return 'class-master';
+        if (cls >= 5)  return 'class-admin';
+        if (cls >= 4)  return 'class-cheef';
+        if (cls >= 3)  return 'class-op';
+        if (cls >= 2)  return 'class-vip';
+        if (cls >= 1)  return 'class-reg';
+        return 'class-guest';
+    }
+
+    function getClassName(cls) {
+        const names = {0:'User',1:'Reg',2:'VIP',3:'Op',4:'Cheef',5:'Admin',10:'Master'};
+        return names[cls] ?? 'User';
+    }
+
+    function getClassColor(cls) {
+        if (cls >= 10) return 'is-danger';
+        if (cls >= 5)  return 'is-warning';
+        if (cls >= 3)  return 'is-info';
+        if (cls >= 1)  return 'is-success';
+        return 'is-light';
+    }
+
+    function isNearBottom() {
+        return chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
+    }
+
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // ------------------------------------------------------------------
+    // Rendering
+    // ------------------------------------------------------------------
+    function appendChat(nick, message, userClass) {
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'chat-msg';
+        const cls = nickClass(userClass !== undefined ? userClass : 0);
+        div.innerHTML =
+            `<span class="time">${timeStr()}</span>` +
+            `<span class="nick ${cls}">&lt;${escapeHtml(nick)}&gt;</span> ` +
+            `<span class="text">${escapeHtml(message)}</span>`;
+        chatMessages.appendChild(div);
+        if (wasNear) scrollToBottom();
+    }
+
+    function appendSystem(text) {
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'chat-msg system';
+        div.innerHTML = `<span class="time">${timeStr()}</span> ${escapeHtml(text)}`;
+        chatMessages.appendChild(div);
+        if (wasNear) scrollToBottom();
+    }
+
+    function appendCmdOutput(output) {
+        const wasNear = isNearBottom();
+        const div = document.createElement('div');
+        div.className = 'chat-msg cmd-output';
+        div.textContent = output;
+        chatMessages.appendChild(div);
+        if (wasNear) scrollToBottom();
+    }
+
+    function clearChat() {
+        chatMessages.innerHTML = '';
+        appendSystem('Chat cleared.');
+    }
+
+    // ------------------------------------------------------------------
+    // Sending
+    // ------------------------------------------------------------------
+    async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text) return;
+        chatInput.value = '';
+
+        // Hub command?
+        if (text.startsWith('!') || text.startsWith('+') || text.startsWith('-')) {
+            appendSystem(`$ ${text}`);
+            try {
+                const res = await fetch('/api/v1/console/execute', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + authToken,
+                    },
+                    body: JSON.stringify({ command: text }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    if (data.output) appendCmdOutput(data.output);
+                    if (data.message && !data.output) appendSystem(data.message);
+                } else {
+                    appendSystem('Error: ' + (data.detail || data.error || 'Command failed'));
+                }
+            } catch (e) {
+                appendSystem('Error: ' + e.message);
+            }
+            return;
+        }
+
+        // Normal chat message
+        try {
+            const res = await fetch('/api/v1/hub/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken,
+                },
+                body: JSON.stringify({ message: text }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                appendSystem('Failed to send message: ' + (data.detail || 'unknown error'));
+            }
+            // The WebSocket broadcast will show this message to everyone
+            // including us, so no need for optimistic append here.
+        } catch (e) {
+            appendSystem('Failed to send: ' + e.message);
+        }
+    }
+
+    chatInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // WebSocket events
+    // ------------------------------------------------------------------
+    function renderUserList(users) {
+        const ul = document.getElementById('user-list');
+        const countEl1 = document.getElementById('chat-user-count');
+        const countEl2 = document.getElementById('sidebar-user-count');
+        const count = users ? users.length : 0;
+        if (countEl1) countEl1.textContent = count + ' online';
+        if (countEl2) countEl2.textContent = count;
+
+        if (!users || users.length === 0) {
+            ul.innerHTML = '<p class="has-text-grey is-size-7">No users online</p>';
+            return;
+        }
+
+        ul.innerHTML = users.map(u =>
+            `<div class="user-item">` +
+                `<span class="tag ${getClassColor(u.user_class)} is-rounded">${getClassName(u.user_class)}</span>` +
+                `<span>${escapeHtml(u.nick)}</span>` +
+            `</div>`
+        ).join('');
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        // Real-time events
+        VHWebSocket.on('chat', msg => {
+            appendChat(msg.nick || '???', msg.message || '', msg.user_class);
+        });
+
+        VHWebSocket.on('user_join', msg => {
+            appendSystem(`${msg.nick || 'someone'} joined the hub`);
+            if (VHWebSocket.state.users.length > 0) {
+                renderUserList(VHWebSocket.state.users);
+            }
+        });
+
+        VHWebSocket.on('user_leave', msg => {
+            appendSystem(`${msg.nick || 'someone'} left the hub`);
+            if (VHWebSocket.state.users.length > 0) {
+                renderUserList(VHWebSocket.state.users);
+            }
+        });
+
+        VHWebSocket.on('stats', msg => {
+            if (msg.users) renderUserList(msg.users);
+        });
+
+        VHWebSocket.on('connected', msg => {
+            if (msg.users) renderUserList(msg.users);
+        });
+
+        VHWebSocket.on('hub_status', msg => {
+            if (msg.status === 'started') appendSystem('Hub started');
+            else if (msg.status === 'stopping') appendSystem('Hub is shutting down');
+        });
+
+        // Initial user list load
+        (async () => {
+            try {
+                const data = await apiCall('GET', '/users/online');
+                if (data.users) renderUserList(data.users);
+            } catch(e) { /* ignore */ }
+        })();
+
+        chatInput.focus();
+        scrollToBottom();
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,73 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [master, main, develop, verlihub-py, verlihub-py-e2e-ext]
+  pull_request:
+
+jobs:
+  integration-tests:
+    name: Docker Integration Tests
+    runs-on: self-hosted
+    timeout-minutes: 45
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.??* 2>/dev/null || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Docker availability
+        id: docker-check
+        run: |
+          if docker info >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Docker daemon is reachable"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Docker daemon is not available — Docker-dependent tests will be skipped"
+          fi
+
+      - name: Clean up previous Docker resources
+        if: steps.docker-check.outputs.available == 'true'
+        run: |
+          docker compose down --remove-orphans --volumes 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+      - name: Run dispatcher tests
+        run: ./run_integration_tests.sh --dispatcher
+
+      - name: Run single interpreter integration tests
+        if: steps.docker-check.outputs.available == 'true'
+        run: ./run_integration_tests.sh --single
+
+      - name: Run multi interpreter integration tests
+        if: steps.docker-check.outputs.available == 'true'
+        run: ./run_integration_tests.sh --multi
+
+      - name: Run C++ unit tests (Docker)
+        if: steps.docker-check.outputs.available == 'true'
+        run: ./run_integration_tests.sh --unit
+
+      - name: Collect logs on failure
+        if: failure() && steps.docker-check.outputs.available == 'true'
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose logs > /tmp/ci-logs/docker-compose.log 2>&1 || true
+          docker compose --profile multi logs >> /tmp/ci-logs/docker-compose.log 2>&1 || true
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: /tmp/ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Clean up
+        if: always() && steps.docker-check.outputs.available == 'true'
+        run: |
+          docker compose down --remove-orphans --volumes 2>/dev/null || true
+          docker compose --profile multi down --remove-orphans --volumes 2>/dev/null || true

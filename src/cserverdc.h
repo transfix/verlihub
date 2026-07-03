@@ -56,6 +56,10 @@ extern volatile sig_atomic_t pending_signal_crash;  // SIGSEGV and other crashes
 #include "czlib.h"
 #include "cconndc.h"
 
+#ifdef WITH_NMDCPB
+#include "crelay.h"
+#endif
+
 #define USER_ZONES 6
 
 #define BAD_NICK_CHARS_NMDC " $|"
@@ -231,6 +235,9 @@ class cServerDC : public cAsyncSocketServer
 		cMySQL mMySQL;
 		// VerliHub configuration
 		cDCConf mC;
+
+		/// Return max output buffer size from cDCConf.
+		unsigned long GetMaxOutBufSize() const override { return mC.max_outbuf_size; }
 		// Setup loader
 		cSetupList mSetupList;
 		// Protocol message handler
@@ -255,6 +262,10 @@ class cServerDC : public cAsyncSocketServer
 		cZLib *mZLib;
 		cMaxMindDB *mMaxMindDB; // maxminddb class
 		cICUConvert *mICUConvert; // icu converter and transliterator
+
+		#ifdef WITH_NMDCPB
+		nProtocol::cRelayManager *mRelayManager; // NMDCpb relay session manager
+		#endif
 		// Process name
 		string mExecPath;
 
@@ -861,6 +872,7 @@ private:
 			mOnParsedMsgSupports(mgr, "VH_OnParsedMsgSupports", &cVHPlugin::OnParsedMsgSupports),
 			mOnParsedMsgMyHubURL(mgr, "VH_OnParsedMsgMyHubURL", &cVHPlugin::OnParsedMsgMyHubURL),
 			mOnParsedMsgExtJSON(mgr, "VH_OnParsedMsgExtJSON", &cVHPlugin::OnParsedMsgExtJSON),
+			mOnParsedMsgNMDCpb(mgr, "VH_OnParsedMsgNMDCpb", &cVHPlugin::OnParsedMsgNMDCpb),
 			mOnParsedMsgBotINFO(mgr, "VH_OnParsedMsgBotINFO", &cVHPlugin::OnParsedMsgBotINFO),
 			mOnParsedMsgVersion(mgr, "VH_OnParsedMsgVersion", &cVHPlugin::OnParsedMsgVersion),
 			mOnParsedMsgMyPass(mgr, "VH_OnParsedMsgMyPass", &cVHPlugin::OnParsedMsgMyPass),
@@ -909,6 +921,7 @@ private:
 		cVHCBL_ConnMsgStr mOnParsedMsgSupports;
 		cVHCBL_Message mOnParsedMsgMyHubURL;
 		cVHCBL_Message mOnParsedMsgExtJSON;
+		cVHCBL_Message mOnParsedMsgNMDCpb;
 		cVHCBL_Message mOnParsedMsgBotINFO;
 		cVHCBL_Message mOnParsedMsgVersion;
 		cVHCBL_Message mOnParsedMsgMyPass;

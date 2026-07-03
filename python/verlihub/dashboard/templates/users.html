@@ -1,0 +1,767 @@
+{% extends "base.html" %}
+
+{% block title %}User Management - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<!-- Page header -->
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title">
+                <i class="fas fa-users mr-2"></i> User Management
+            </h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="openAddUserModal()">
+                <i class="fas fa-user-plus mr-2"></i> Add User
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Tabs for Online/Registered -->
+<div class="tabs is-boxed">
+    <ul>
+        <li class="is-active" id="tab-online">
+            <a onclick="switchTab('online')">
+                <span class="icon"><i class="fas fa-signal"></i></span>
+                <span>Online Users</span>
+                <span class="tag is-primary is-rounded ml-2" id="online-count">{{ online_users|length }}</span>
+            </a>
+        </li>
+        <li id="tab-registered">
+            <a onclick="switchTab('registered')">
+                <span class="icon"><i class="fas fa-user-check"></i></span>
+                <span>Registered Users</span>
+            </a>
+        </li>
+    </ul>
+</div>
+
+<!-- Search bar -->
+<div class="box">
+    <div class="field has-addons">
+        <div class="control is-expanded" style="position: relative;">
+            <input class="input" type="text" id="search-input" 
+                   placeholder="Search users by nickname..." value="{{ search or '' }}"
+                   autocomplete="off">
+            <div id="search-autocomplete" class="box" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; max-height:200px; overflow-y:auto; padding:0; margin-top:2px;"></div>
+        </div>
+        <div class="control">
+            <button class="button is-info" onclick="searchUsers()">
+                <i class="fas fa-search"></i>
+            </button>
+        </div>
+        <div class="control">
+            <button class="button" onclick="clearSearch()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Online users panel -->
+<div id="panel-online" class="box">
+    <!-- Clone/User summary + hide-clones filter -->
+    <div class="level mb-3" id="user-summary" style="display:none;">
+        <div class="level-left">
+            <div class="level-item">
+                <span class="tag is-medium is-primary is-light mr-2" id="summary-true-users">0 users</span>
+                <span class="tag is-medium is-danger is-light mr-2" id="summary-clones" style="display:none;">0 clones</span>
+                <span class="tag is-medium is-warning is-light" id="summary-nat" style="display:none;">0 NAT</span>
+            </div>
+        </div>
+        <div class="level-right">
+            <div class="level-item">
+                <label class="checkbox">
+                    <input type="checkbox" id="hide-clones-cb" onchange="toggleHideClones()">
+                    Hide clones
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Nickname</th>
+                    <th>Country</th>
+                    <th>IP Address</th>
+                    <th>Class</th>
+                    <th>Share</th>
+                    <th>Client</th>
+                    <th>Mode</th>
+                    <th>Online For</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="online-users-body">
+                {% for u in online_users %}
+                <tr>
+                    <td>
+                        <strong>{{ u.nick }}</strong>
+                        {% if u.get('is_clone') %}<span class="tag is-danger is-light ml-1" title="Possible clone">clone</span>{% endif %}
+                        {% if u.get('same_ip_nicks') %}<span class="tag is-warning is-light ml-1" title="NAT group">NAT</span>{% endif %}
+                    </td>
+                    <td>
+                        {% set cc = (u.get('country_code') or u.get('country') or '').lower() %}
+                        {% if cc and cc != '??' %}<span class="fi fi-{{ cc }}" title="{{ u.get('country_name', cc) }}"></span>{% else %}-{% endif %}
+                    </td>
+                    <td><code>{{ u.ip or '' }}</code></td>
+                    <td><span class="tag">{{ u.user_class }}</span></td>
+                    <td>{{ u.share or 0 }}</td>
+                    <td>{{ u.get('client', '') or u.get('tag', '') or '' }}</td>
+                    <td>{% set lt = u.get('login_time', 0) or 0 %}{% if lt >= 3600 %}{{ (lt // 3600) }}h {{ ((lt % 3600) // 60) }}m{% elif lt >= 60 %}{{ (lt // 60) }}m{% elif lt > 0 %}{{ lt }}s{% else %}-{% endif %}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" title="Info" onclick="showUserDetail('{{ u.nick }}')">
+                                <i class="fas fa-info-circle"></i>
+                            </button>
+                            <button class="button is-success is-light" title="Message" onclick="sendMessagePrompt('{{ u.nick }}')">
+                                <i class="fas fa-envelope"></i>
+                            </button>
+                            <button class="button is-warning is-light" title="Kick" onclick="kickUserPrompt('{{ u.nick }}')">
+                                <i class="fas fa-shoe-prints"></i>
+                            </button>
+                            <button class="button is-danger is-light" title="Ban" onclick="banUserPrompt('{{ u.nick }}')">
+                                <i class="fas fa-ban"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="has-text-centered has-text-grey">
+                        <i class="fas fa-user-slash fa-2x mb-3"></i>
+                        <p>No users online</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Registered users panel -->
+<div id="panel-registered" class="box" style="display: none;">
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable">
+            <thead>
+                <tr>
+                    <th>Nickname</th>
+                    <th>Class</th>
+                    <th>Registered</th>
+                    <th>Last Login</th>
+                    <th>Login Count</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="registered-users-body">
+                {% for u in registered_users %}
+                <tr class="{% if u.nick in online_users|map(attribute='nick') %}is-online{% endif %}">
+                    <td>
+                        <strong>{{ u.nick }}</strong>
+                        {% if u.nick in online_users|map(attribute='nick') %}
+                        <span class="tag is-primary is-light ml-2">Online</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="tag {% if u.user_class >= 10 %}is-danger{% elif u.user_class >= 5 %}is-warning{% elif u.user_class >= 3 %}is-info{% else %}is-light{% endif %}">
+                            {{ u.user_class }}
+                        </span>
+                    </td>
+                    <td>{{ u.reg_date.strftime('%Y-%m-%d') if u.reg_date else '-' }}</td>
+                    <td>{{ u.login_last.strftime('%Y-%m-%d %H:%M') if u.login_last else 'Never' }}</td>
+                    <td>{{ u.login_cnt or 0 }}</td>
+                    <td>
+                        <div class="buttons are-small">
+                            <button class="button is-info is-light" onclick="editUser('{{ u.nick }}')" title="Edit">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            {% if u.user_class < user.user_class %}
+                            <button class="button is-danger is-light" onclick="deleteUser('{{ u.nick }}')" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="has-text-centered has-text-grey">
+                        <i class="fas fa-database fa-2x mb-3"></i>
+                        <p>No registered users found</p>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Pagination -->
+    <nav class="pagination is-centered" role="navigation" aria-label="pagination">
+        {% if page > 1 %}
+        <a class="pagination-previous" href="?page={{ page - 1 }}{% if search %}&search={{ search }}{% endif %}">Previous</a>
+        {% else %}
+        <a class="pagination-previous" disabled>Previous</a>
+        {% endif %}
+        
+        {% if registered_users|length == per_page %}
+        <a class="pagination-next" href="?page={{ page + 1 }}{% if search %}&search={{ search }}{% endif %}">Next</a>
+        {% else %}
+        <a class="pagination-next" disabled>Next</a>
+        {% endif %}
+    </nav>
+</div>
+
+<!-- Add/Edit User Modal -->
+<div class="modal" id="user-modal">
+    <div class="modal-background" onclick="closeUserModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="user-modal-title">
+                <i class="fas fa-user-plus mr-2"></i> Add User
+            </p>
+            <button class="delete" aria-label="close" onclick="closeUserModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <form id="user-form">
+                <input type="hidden" id="edit-mode" value="add">
+                
+                <div class="field">
+                    <label class="label">Nickname</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="text" id="user-nick" required>
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-user"></i>
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Password</label>
+                    <div class="control has-icons-left">
+                        <input class="input" type="password" id="user-password">
+                        <span class="icon is-small is-left">
+                            <i class="fas fa-lock"></i>
+                        </span>
+                    </div>
+                    <p class="help">Leave blank to keep existing password (edit mode)</p>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Class</label>
+                    <div class="control">
+                        <div class="select is-fullwidth">
+                            <select id="user-class">
+                                <option value="0">0 - Guest</option>
+                                <option value="1" selected>1 - Registered</option>
+                                <option value="2">2 - VIP</option>
+                                <option value="3">3 - Operator</option>
+                                <option value="4">4 - Cheef</option>
+                                <option value="5">5 - Admin</option>
+                                {% if user.user_class >= 10 %}
+                                <option value="10">10 - Master</option>
+                                {% endif %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="field">
+                    <label class="label">Notes</label>
+                    <div class="control">
+                        <textarea class="textarea" id="user-notes" rows="2"></textarea>
+                    </div>
+                </div>
+            </form>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-primary" onclick="saveUser()">
+                <i class="fas fa-save mr-2"></i> Save
+            </button>
+            <button class="button" onclick="closeUserModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<!-- User Info Modal -->
+<div class="modal" id="user-info-modal">
+    <div class="modal-background" onclick="closeUserInfoModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">
+                <i class="fas fa-info-circle mr-2"></i> User Information
+            </p>
+            <button class="delete" aria-label="close" onclick="closeUserInfoModal()"></button>
+        </header>
+        <section class="modal-card-body" id="user-info-content">
+            Loading...
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button" onclick="closeUserInfoModal()">Close</button>
+        </footer>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function switchTab(tab) {
+        // Update tab active state
+        document.getElementById('tab-online').classList.toggle('is-active', tab === 'online');
+        document.getElementById('tab-registered').classList.toggle('is-active', tab === 'registered');
+        
+        // Show/hide panels
+        document.getElementById('panel-online').style.display = tab === 'online' ? 'block' : 'none';
+        document.getElementById('panel-registered').style.display = tab === 'registered' ? 'block' : 'none';
+    }
+    
+    function searchUsers() {
+        const search = document.getElementById('search-input').value;
+        window.location.href = `/dashboard/users?search=${encodeURIComponent(search)}`;
+    }
+    
+    function clearSearch() {
+        document.getElementById('search-input').value = '';
+        window.location.href = '/dashboard/users';
+    }
+    
+    // Add user modal
+    function openAddUserModal() {
+        document.getElementById('user-modal-title').innerHTML = '<i class="fas fa-user-plus mr-2"></i> Add User';
+        document.getElementById('edit-mode').value = 'add';
+        document.getElementById('user-nick').value = '';
+        document.getElementById('user-nick').disabled = false;
+        document.getElementById('user-password').value = '';
+        document.getElementById('user-class').value = '1';
+        document.getElementById('user-notes').value = '';
+        document.getElementById('user-modal').classList.add('is-active');
+    }
+    
+    async function editUser(nick) {
+        document.getElementById('user-modal-title').innerHTML = '<i class="fas fa-user-edit mr-2"></i> Edit User';
+        document.getElementById('edit-mode').value = 'edit';
+        document.getElementById('user-nick').value = nick;
+        document.getElementById('user-nick').disabled = true;
+        document.getElementById('user-password').value = '';
+        
+        try {
+            const user = await apiCall('GET', `/users/${nick}`);
+            document.getElementById('user-class').value = user.user_class;
+            document.getElementById('user-notes').value = user.notes || '';
+        } catch (error) {
+            showNotification('Failed to load user details', 'danger');
+            return;
+        }
+        
+        document.getElementById('user-modal').classList.add('is-active');
+    }
+    
+    function closeUserModal() {
+        document.getElementById('user-modal').classList.remove('is-active');
+    }
+    
+    async function saveUser() {
+        const mode = document.getElementById('edit-mode').value;
+        const nick = document.getElementById('user-nick').value;
+        const password = document.getElementById('user-password').value;
+        const userClass = parseInt(document.getElementById('user-class').value);
+        const notes = document.getElementById('user-notes').value;
+        
+        if (!nick) {
+            showNotification('Nickname is required', 'warning');
+            return;
+        }
+        
+        if (mode === 'add' && !password) {
+            showNotification('Password is required for new users', 'warning');
+            return;
+        }
+        
+        try {
+            const data = {
+                nick: nick,
+                user_class: userClass,
+                notes: notes,
+            };
+            
+            if (password) {
+                data.password = password;
+            }
+            
+            if (mode === 'add') {
+                await apiCall('POST', '/users/', data);
+                showNotification(`User ${nick} created successfully`, 'success');
+            } else {
+                await apiCall('PUT', `/users/${nick}`, data);
+                showNotification(`User ${nick} updated successfully`, 'success');
+            }
+            
+            closeUserModal();
+            location.reload();
+        } catch (error) {
+            showNotification(`Failed to save user: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function deleteUser(nick) {
+        confirmAction(
+            'Delete User',
+            `Are you sure you want to delete user "${nick}"? This action cannot be undone.`,
+            async () => {
+                try {
+                    await apiCall('DELETE', `/users/${nick}`);
+                    showNotification(`User ${nick} deleted`, 'success');
+                    location.reload();
+                } catch (error) {
+                    showNotification(`Failed to delete user: ${error.message}`, 'danger');
+                }
+            }
+        );
+    }
+    
+    // =====================================================================
+    // Action button handlers (Message, Kick, Ban)
+    // =====================================================================
+
+    function sendMessagePrompt(nick) {
+        const message = prompt(`Send a private message to "${nick}":`);
+        if (message === null || message.trim() === '') return;
+        apiCall('POST', '/users/message', { nick: nick, message: message.trim() })
+            .then(() => showNotification(`Message sent to ${nick}`, 'success'))
+            .catch(err => showNotification(`Failed to send message: ${err.message}`, 'danger'));
+    }
+
+    function kickUserPrompt(nick) {
+        confirmAction(
+            'Kick User',
+            `Are you sure you want to kick "${nick}" from the hub?`,
+            async () => {
+                const reason = prompt('Kick reason (optional):') || '';
+                try {
+                    await apiCall('POST', '/users/kick', { nick: nick, reason: reason });
+                    showNotification(`Kicked ${nick}`, 'success');
+                } catch (err) {
+                    showNotification(`Failed to kick: ${err.message}`, 'danger');
+                }
+            }
+        );
+    }
+
+    function banUserPrompt(nick) {
+        confirmAction(
+            'Ban User',
+            `Are you sure you want to ban "${nick}"? This will kick and prevent reconnection.`,
+            async () => {
+                const reason = prompt('Ban reason (optional):') || '';
+                try {
+                    await apiCall('POST', '/users/kick', { nick: nick, reason: 'Banned: ' + reason });
+                    showNotification(`Banned ${nick}`, 'warning');
+                } catch (err) {
+                    showNotification(`Failed to ban: ${err.message}`, 'danger');
+                }
+            }
+        );
+    }
+
+    // User info modal
+    function closeUserInfoModal() {
+        document.getElementById('user-info-modal').classList.remove('is-active');
+    }
+    
+    // Enter key triggers search
+    document.getElementById('search-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            searchUsers();
+        }
+    });
+
+    // =====================================================================
+    // Search autocomplete from live WebSocket user list
+    // =====================================================================
+    (function() {
+        const input = document.getElementById('search-input');
+        const dropdown = document.getElementById('search-autocomplete');
+        let hideTimeout = null;
+
+        function getAllNicks() {
+            return (VHWebSocket.state.users || []).map(u => u.nick).filter(Boolean);
+        }
+
+        input.addEventListener('input', function() {
+            const q = this.value.toLowerCase().trim();
+            if (!q) { dropdown.style.display = 'none'; return; }
+            const nicks = getAllNicks().filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+            if (!nicks.length) { dropdown.style.display = 'none'; return; }
+            dropdown.innerHTML = nicks.map(n => {
+                const idx = n.toLowerCase().indexOf(q);
+                const before = escapeHtml(n.slice(0, idx));
+                const match = escapeHtml(n.slice(idx, idx + q.length));
+                const after = escapeHtml(n.slice(idx + q.length));
+                return `<a class="dropdown-item" style="display:block;padding:0.4rem 0.75rem;cursor:pointer;" onmousedown="document.getElementById('search-input').value='${escapeHtml(n)}';document.getElementById('search-autocomplete').style.display='none';searchUsers();">${before}<strong>${match}</strong>${after}</a>`;
+            }).join('');
+            dropdown.style.display = 'block';
+        });
+
+        input.addEventListener('blur', function() {
+            hideTimeout = setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        });
+        input.addEventListener('focus', function() {
+            clearTimeout(hideTimeout);
+            if (this.value.trim()) this.dispatchEvent(new Event('input'));
+        });
+    })();
+
+    // =====================================================================
+    // WebSocket real-time updates for online user list
+    // =====================================================================
+    let hideClones = false;
+
+    function toggleHideClones() {
+        hideClones = document.getElementById('hide-clones-cb').checked;
+        if (VHWebSocket.state.users && VHWebSocket.state.users.length) {
+            renderOnlineUsers(VHWebSocket.state.users);
+        }
+    }
+
+    function getStatusIcon(statusFlag) {
+        if (!statusFlag) return '';
+        const icons = [];
+        if (statusFlag & 0x02) icons.push('<span class="tag is-warning is-light" title="Away">Away</span>');
+        if (statusFlag & 0x10) icons.push('<span class="tag is-success is-light" title="TLS">🔒</span>');
+        if (statusFlag & 0x08) icons.push('<span class="tag is-info is-light" title="Fireball">🔥</span>');
+        if (statusFlag & 0x20) icons.push('<span class="tag is-light" title="NAT/Firewall">🛡️</span>');
+        return icons.join(' ');
+    }
+
+    function getClassBadge(userClass) {
+        if (userClass >= 10) return '<span class="tag is-danger" title="Master">M</span>';
+        if (userClass >= 5) return '<span class="tag is-warning" title="Admin">A</span>';
+        if (userClass >= 3) return '<span class="tag is-info" title="Operator">Op</span>';
+        if (userClass >= 2) return '<span class="tag is-success" title="VIP">V</span>';
+        if (userClass >= 1) return '<span class="tag is-primary is-light" title="Registered">R</span>';
+        return '<span class="tag is-light" title="Guest">' + (userClass || 0) + '</span>';
+    }
+
+    function renderOnlineUsers(users) {
+        const tbody = document.getElementById('online-users-body');
+        const countBadge = document.getElementById('online-count');
+        const summaryDiv = document.getElementById('user-summary');
+
+        // Compute stats
+        const cloneCount = users.filter(u => u.is_clone).length;
+        const natCount = users.filter(u => u.same_ip_nicks && u.same_ip_nicks.length > 0 && !u.is_clone).length;
+        const trueUsers = users.length - cloneCount;
+
+        // Update summary bar
+        summaryDiv.style.display = users.length > 0 ? 'flex' : 'none';
+        document.getElementById('summary-true-users').textContent = trueUsers + ' user' + (trueUsers !== 1 ? 's' : '');
+        const cloneEl = document.getElementById('summary-clones');
+        cloneEl.textContent = cloneCount + ' clone' + (cloneCount !== 1 ? 's' : '');
+        cloneEl.style.display = cloneCount > 0 ? 'inline-flex' : 'none';
+        const natEl = document.getElementById('summary-nat');
+        natEl.textContent = natCount + ' NAT';
+        natEl.style.display = natCount > 0 ? 'inline-flex' : 'none';
+
+        // Filter if hide clones enabled
+        const displayUsers = hideClones ? users.filter(u => !u.is_clone) : users;
+
+        if (countBadge) countBadge.textContent = users.length;
+
+        if (!displayUsers || displayUsers.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="9" class="has-text-centered has-text-grey">
+                        <i class="fas fa-user-slash fa-2x mb-3"></i>
+                        <p>${hideClones && users.length > 0 ? 'All visible users are clones' : 'No users online'}</p>
+                    </td>
+                </tr>`;
+            return;
+        }
+
+        tbody.innerHTML = displayUsers.map(u => {
+            const cc = (u.country_code || u.country || '').toLowerCase();
+            const flag = cc && cc !== '??' ? `<span class="fi fi-${cc}" title="${escapeHtml(u.country_name || cc)}"></span>` : '-';
+            const cloneTag = u.is_clone ? ' <span class="tag is-danger is-light">clone</span>' : '';
+            const natTag = !u.is_clone && u.same_ip_nicks && u.same_ip_nicks.length > 0 ? ' <span class="tag is-warning is-light">NAT</span>' : '';
+            const botBadge = u.user_class === 0 && (u.nick || '').startsWith('[') ? ' <span class="tag is-link is-light" title="Bot">🤖</span>' : '';
+            const opBadge = u.user_class >= 3 ? ' <span class="tag is-info is-light" title="Operator">🔑</span>' : '';
+            const modeChar = u.mode || '';
+            const modeLabel = modeChar === 'A' ? '<span class="tag is-success is-light" title="Active">A</span>'
+                : modeChar === 'P' ? '<span class="tag is-warning is-light" title="Passive">P</span>'
+                : modeChar === '5' ? '<span class="tag is-light" title="SOCKS5">S5</span>'
+                : '<span class="has-text-grey">-</span>';
+
+            return `<tr${u.is_clone ? ' style="opacity:0.6"' : ''}>
+                <td><strong>${escapeHtml(u.nick)}</strong>${opBadge}${botBadge}${cloneTag}${natTag}</td>
+                <td>${flag}</td>
+                <td><code>${escapeHtml(u.ip || '')}</code></td>
+                <td>${getClassBadge(u.user_class)}</td>
+                <td>${formatBytes(u.share || 0)}</td>
+                <td>${escapeHtml(u.client || u.tag || '')}${u.client_version ? ' <small class="has-text-grey">' + escapeHtml(u.client_version) + '</small>' : ''}</td>
+                <td>${modeLabel}${u.slots ? ' <small title="Slots">' + u.slots + 'S</small>' : ''}</td>
+                <td>${formatOnlineTime(u.login_time || 0)}</td>
+                <td>
+                    <div class="buttons are-small">
+                        <button class="button is-info is-light" title="Info" onclick="showUserDetail('${escapeHtml(u.nick)}')"><i class="fas fa-info-circle"></i></button>
+                        <button class="button is-success is-light" title="Message" onclick="sendMessagePrompt('${escapeHtml(u.nick)}')"><i class="fas fa-envelope"></i></button>
+                        <button class="button is-warning is-light" title="Kick" onclick="kickUserPrompt('${escapeHtml(u.nick)}')"><i class="fas fa-shoe-prints"></i></button>
+                        <button class="button is-danger is-light" title="Ban" onclick="banUserPrompt('${escapeHtml(u.nick)}')"><i class="fas fa-ban"></i></button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text || '';
+        return div.innerHTML;
+    }
+
+    function formatBytes(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatOnlineTime(seconds) {
+        if (!seconds || seconds <= 0) return '-';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h > 0) return h + 'h ' + m + 'm';
+        if (m > 0) return m + 'm';
+        return s + 's';
+    }
+
+    // Listen for WS updates
+    document.addEventListener('DOMContentLoaded', () => {
+        VHWebSocket.on('stats', msg => {
+            if (msg.users) renderOnlineUsers(msg.users);
+        });
+        VHWebSocket.on('connected', msg => {
+            if (msg.users) renderOnlineUsers(msg.users);
+        });
+        VHWebSocket.on('user_join', () => {
+            if (VHWebSocket.state.users.length) renderOnlineUsers(VHWebSocket.state.users);
+        });
+        VHWebSocket.on('user_leave', () => {
+            if (VHWebSocket.state.users.length) renderOnlineUsers(VHWebSocket.state.users);
+        });
+    });
+
+    // =====================================================================
+    // User detail modal
+    // =====================================================================
+    async function showUserDetail(nick) {
+        const content = document.getElementById('user-info-content');
+        const modal = document.getElementById('user-info-modal');
+        content.innerHTML = '<p class="has-text-centered">Loading&hellip;</p>';
+        modal.classList.add('is-active');
+
+        try {
+            const u = await apiCall('GET', `/users/online/${encodeURIComponent(nick)}`);
+            const cc = (u.country_code || '').toLowerCase();
+            const flag = cc && cc !== '??' ? `<span class="fi fi-${cc}"></span> ` : '';
+            const className = getClassName(u.user_class);
+
+            // Mode description
+            const modeMap = {'A': 'Active', 'P': 'Passive', '5': 'SOCKS5'};
+            const modeDesc = modeMap[u.mode] || u.mode || '-';
+
+            // Status flags
+            let statusParts = [];
+            const sf = u.status_flag || 0;
+            if (sf & 0x01) statusParts.push('Normal');
+            if (sf & 0x02) statusParts.push('Away');
+            if (sf & 0x04) statusParts.push('Server');
+            if (sf & 0x08) statusParts.push('Fireball');
+            if (sf & 0x10) statusParts.push('TLS');
+            if (sf & 0x20) statusParts.push('NAT/Firewall');
+            const statusDesc = statusParts.length ? statusParts.join(', ') : '-';
+
+            let cloneHtml = '';
+            if (u.is_clone && u.clone_nicks && u.clone_nicks.length) {
+                cloneHtml = `<div class="notification is-danger is-light mt-3">
+                    <strong><i class="fas fa-exclamation-triangle mr-1"></i> Possible Clone</strong>
+                    <br>Same IP &amp; share as: ${u.clone_nicks.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+                </div>`;
+            }
+
+            let natHtml = '';
+            if (u.same_ip_nicks && u.same_ip_nicks.length) {
+                natHtml = `<div class="notification is-warning is-light mt-3">
+                    <strong><i class="fas fa-network-wired mr-1"></i> NAT Group</strong>
+                    <br>Same IP as: ${u.same_ip_nicks.map(n => `<strong>${escapeHtml(n)}</strong>`).join(', ')}
+                </div>`;
+            }
+
+            content.innerHTML = `
+                <div class="columns is-multiline">
+                    <div class="column is-half">
+                        <h5 class="title is-6 mb-2"><i class="fas fa-user mr-1"></i> Identity</h5>
+                        <table class="table is-narrow is-fullwidth">
+                            <tr><td class="has-text-weight-bold" style="width:40%">Nickname</td><td>${escapeHtml(u.nick)}</td></tr>
+                            <tr><td class="has-text-weight-bold">Class</td><td><span class="tag ${getClassColor(u.user_class)}">${className}</span></td></tr>
+                            <tr><td class="has-text-weight-bold">Client</td><td>${escapeHtml(u.client || '-')}${u.client_version ? ' <small class="has-text-grey">v' + escapeHtml(u.client_version) + '</small>' : ''}</td></tr>
+                            <tr><td class="has-text-weight-bold">Description</td><td>${escapeHtml(u.description || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Tag</td><td><code>${escapeHtml(u.tag || '-')}</code></td></tr>
+                            <tr><td class="has-text-weight-bold">Email</td><td>${escapeHtml(u.email || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Share</td><td>${formatBytes(u.share || 0)}</td></tr>
+                            <tr><td class="has-text-weight-bold">Online For</td><td>${formatOnlineTime(u.login_time || 0)}</td></tr>
+                        </table>
+                    </div>
+                    <div class="column is-half">
+                        <h5 class="title is-6 mb-2"><i class="fas fa-globe mr-1"></i> Network &amp; Geo</h5>
+                        <table class="table is-narrow is-fullwidth">
+                            <tr><td class="has-text-weight-bold" style="width:40%">IP</td><td><code>${escapeHtml(u.ip || '-')}</code></td></tr>
+                            <tr><td class="has-text-weight-bold">Hostname</td><td>${escapeHtml(u.hostname || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Country</td><td>${flag}${escapeHtml(u.country_name || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">City / Region</td><td>${escapeHtml(u.city || '-')}${u.region ? ', ' + escapeHtml(u.region) : ''}</td></tr>
+                            <tr><td class="has-text-weight-bold">Timezone</td><td>${escapeHtml(u.timezone || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">ISP</td><td>${escapeHtml(u.isp || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">ASN</td><td>${escapeHtml(u.as_number || '-')} ${escapeHtml(u.as_name || '')}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                <div class="columns is-multiline">
+                    <div class="column is-full">
+                        <h5 class="title is-6 mb-2"><i class="fas fa-cogs mr-1"></i> Connection Details</h5>
+                        <table class="table is-narrow is-fullwidth">
+                            <tr><td class="has-text-weight-bold" style="width:20%">Mode</td><td>${escapeHtml(modeDesc)}</td>
+                                <td class="has-text-weight-bold" style="width:20%">Slots</td><td>${u.slots || '-'}</td></tr>
+                            <tr><td class="has-text-weight-bold">Hubs (N/R/O)</td><td>${u.hubs_normal || 0} / ${u.hubs_registered || 0} / ${u.hubs_operator || 0}</td>
+                                <td class="has-text-weight-bold">Speed</td><td>${escapeHtml(u.speed || '-')}</td></tr>
+                            <tr><td class="has-text-weight-bold">Status</td><td>${statusDesc}</td>
+                                <td class="has-text-weight-bold">Supports</td><td><small>${escapeHtml(u.supports || '-')}</small></td></tr>
+                        </table>
+                    </div>
+                </div>
+                ${cloneHtml}
+                ${natHtml}
+            `;
+        } catch (err) {
+            content.innerHTML = `<p class="has-text-danger">Failed to load user detail: ${escapeHtml(err.message || String(err))}</p>`;
+        }
+    }
+
+    function getClassName(classNum) {
+        const classes = {0:'User',1:'Registered',2:'VIP',3:'Operator',4:'Cheef',5:'Admin',10:'Master'};
+        return classes[classNum] ?? 'User';
+    }
+    function getClassColor(classNum) {
+        if (classNum >= 10) return 'is-danger';
+        if (classNum >= 5) return 'is-warning';
+        if (classNum >= 3) return 'is-info';
+        if (classNum >= 1) return 'is-success';
+        return 'is-light';
+    }
+</script>
+{% endblock %}

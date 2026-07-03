@@ -53,6 +53,12 @@ void cUserCollection::ufSendWithFeature::operator()(cUserBase *user)
 		user->Send(mData, false, !mCache); // no pipe
 }
 
+void cUserCollection::ufSendWithoutFeature::operator()(cUserBase *user)
+{
+	if (user && user->CanSend() && !user->HasFeature(mFeature))
+		user->Send(mData, false, !mCache); // no pipe
+}
+
 void cUserCollection::ufSendWithMyFlag::operator()(cUserBase *user)
 {
 	if (user && user->CanSend() && user->GetMyFlag(mFlag))
@@ -238,6 +244,27 @@ void cUserCollection::SendToAllWithFeature(string &data, const unsigned feature,
 
 	if (Log(4))
 		LogStream() << "Stop SendToAllWithFeature" << endl;
+
+	if (mSendAllCache.size())
+		mSendAllCache.clear();
+
+	ShrinkStringToFit(mSendAllCache);
+
+	if (pipe)
+		data.erase(data.size() - 1, 1);
+}
+
+void cUserCollection::SendToAllWithoutFeature(string &data, const unsigned feature, const bool cache, const bool pipe)
+{
+	AppendPipe(mSendAllCache, data, pipe);
+
+	if (Log(4))
+		LogStream() << "Start SendToAllWithoutFeature" << endl;
+
+	for_each(this->begin(), this->end(), ufSendWithoutFeature(mSendAllCache, feature, cache));
+
+	if (Log(4))
+		LogStream() << "Stop SendToAllWithoutFeature" << endl;
 
 	if (mSendAllCache.size())
 		mSendAllCache.clear();

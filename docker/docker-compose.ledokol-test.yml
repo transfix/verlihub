@@ -1,0 +1,169 @@
+# Ledokol Integration Test Compose
+#
+# Exercises RoLex's ledokol Lua script through both:
+#   1. Legacy C++ Verlihub (real Lua plugin)
+#   2. Verlihub-py Python hub (ledokol-compat plugin)
+#
+# Ledokol source: https://github.com/Verlihub/ledokol
+#
+# Usage:
+#   # Run legacy tests (C++ hub + ledokol.lua)
+#   docker compose -f docker/docker-compose.ledokol-test.yml \
+#     --profile ledokol-legacy up --build --abort-on-container-exit
+#
+#   # Run verlihub-py tests
+#   docker compose -f docker/docker-compose.ledokol-test.yml \
+#     --profile ledokol-py up --build --abort-on-container-exit
+#
+#   # Run both test suites
+#   docker compose -f docker/docker-compose.ledokol-test.yml \
+#     --profile ledokol-legacy --profile ledokol-py \
+#     up --build --abort-on-container-exit
+
+services:
+  # ==========================================================================
+  # Shared MySQL Database
+  # ==========================================================================
+  mysql:
+    image: mysql:8.0
+    container_name: ledokol-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: verlihub
+      MYSQL_USER: verlihub
+      MYSQL_PASSWORD: verlihub
+    volumes:
+      - ledokol-mysql-data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - ledokol-net
+
+  # ==========================================================================
+  # Legacy Verlihub Hub with Ledokol Lua Script
+  # ==========================================================================
+  verlihub-legacy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PYTHON_MODE: single
+    container_name: ledokol-legacy-hub
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub_ledokol
+      VH_HUB_NAME: "Ledokol Legacy Test Hub"
+      VH_HUB_PORT: "4111"
+      VH_ADMIN_NICK: admin
+      VH_ADMIN_PASS: admin
+    volumes:
+      - legacy-config:/etc/verlihub
+      - ledokol-scripts:/usr/local/share/verlihub/scripts
+      - ./tests/ledokol_setup.sh:/usr/local/bin/ledokol_setup.sh:ro
+    networks:
+      - ledokol-net
+    profiles:
+      - ledokol-legacy
+    command: ["bash", "/usr/local/bin/ledokol_setup.sh"]
+
+  # ==========================================================================
+  # Legacy Ledokol Test Runner
+  # ==========================================================================
+  ledokol-test-legacy:
+    image: python:3.11-slim
+    container_name: ledokol-test-legacy
+    depends_on:
+      - verlihub-legacy
+    environment:
+      HUB_HOST: verlihub-legacy
+      HUB_PORT: "4111"
+      ADMIN_NICK: admin
+      ADMIN_PASS: admin
+      DOCKER_LEDOKOL_TEST: "1"
+    volumes:
+      - ./tests:/tests:ro
+    working_dir: /tests
+    command: ["bash", "/tests/run_ledokol_legacy.sh"]
+    networks:
+      - ledokol-net
+    profiles:
+      - ledokol-legacy
+
+  # ==========================================================================
+  # Verlihub-py Hub
+  # ==========================================================================
+  verlihub-py:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        PYTHON_MODE: single
+    container_name: ledokol-py-hub
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      VH_DB_HOST: mysql
+      VH_DB_USER: verlihub
+      VH_DB_PASS: verlihub
+      VH_DB_NAME: verlihub_py_ledokol
+      VH_HUB_NAME: "Ledokol Py Test Hub"
+      VH_HUB_PORT: "4111"
+      VH_ADMIN_NICK: admin
+      VH_ADMIN_PASS: admin
+      VERLIHUB_PYTHON_VENV: /opt/verlihub-venv
+      PYTHON_MODE: single
+    ports:
+      - "4113:4111"
+      - "30001:30000"
+    volumes:
+      - py-config:/etc/verlihub
+      - ../plugins/python/scripts:/usr/local/share/verlihub/scripts:ro
+    networks:
+      - ledokol-net
+    profiles:
+      - ledokol-py
+
+  # ==========================================================================
+  # Verlihub-py Ledokol Test Runner
+  # ==========================================================================
+  ledokol-test-py:
+    image: python:3.11-slim
+    container_name: ledokol-test-py
+    depends_on:
+      - verlihub-py
+    environment:
+      HUB_HOST: verlihub-py
+      HUB_PORT: "4111"
+      API_PORT: "30000"
+      ADMIN_NICK: admin
+      ADMIN_PASS: admin
+      DOCKER_LEDOKOL_TEST: "1"
+    volumes:
+      - ./tests:/tests:ro
+      - ../python:/python:ro
+    working_dir: /tests
+    command: ["bash", "/tests/run_ledokol_py.sh"]
+    networks:
+      - ledokol-net
+    profiles:
+      - ledokol-py
+
+volumes:
+  ledokol-mysql-data:
+  legacy-config:
+  py-config:
+  ledokol-scripts:
+
+networks:
+  ledokol-net:
+    driver: bridge

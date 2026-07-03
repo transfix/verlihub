@@ -1,0 +1,857 @@
+// NMDC Protocol Buffer Extension — Wire Schema
+// Version: 1.0.0-draft
+//
+// This schema defines all protobuf messages used by the NMDCpb protocol
+// extension for NMDC Direct Connect hubs and clients.
+//
+// Wire format:
+//   $PB <base64url_encoded_PbEnvelope>|    (text mode, for control messages)
+//   $PBB <length_hex>\n<raw_bytes>|        (binary mode, for bulk data)
+//   $PBR <relay_id_hex> <length_hex>\n<encrypted_bytes>|  (relay data)
+//
+// Feature negotiation: clients and hubs advertise "NMDCpb" in $Supports.
+
+syntax = "proto3";
+package nmdcpb;
+
+option optimize_for = SPEED;
+
+// ============================================================================
+// Envelope — wraps every NMDCpb message
+// ============================================================================
+
+message PbEnvelope {
+  // Routing type (borrowed from ADC type system)
+  enum RouteType {
+    BROADCAST = 0;    // To all NMDCpb clients (like ADC B-type)
+    DIRECT = 1;       // To a specific user (like ADC D-type)
+    HUB = 2;          // Client→hub only (like ADC H-type)
+    INFO = 3;         // Hub→client (like ADC I-type)
+    ECHO = 4;         // Like DIRECT but sender gets a copy (like ADC E-type)
+    FEATURE = 5;      // Broadcast to clients with specific features
+  }
+
+  RouteType route = 1;
+  string from_nick = 2;      // Sender (validated by hub)
+  string to_nick = 3;        // Target (for DIRECT/ECHO)
+  string features = 4;       // Required features (for FEATURE route)
+  uint64 timestamp = 5;      // Unix timestamp milliseconds
+  uint32 sequence = 6;       // Per-connection sequence number
+
+  // Payload — exactly one of:
+  oneof payload {
+    PbChat chat = 10;
+    PbUserInfo user_info = 11;
+    PbSearch search = 12;
+    PbSearchResult search_result = 13;
+    PbConnect connect = 14;
+    PbHubInfo hub_info = 15;
+    PbUserList user_list = 16;
+    PbRelayRequest relay_request = 20;
+    PbRelayAck relay_ack = 21;
+    PbRelayData relay_data = 22;
+    PbRelayClosed relay_closed = 23;
+    PbRelayStatus relay_status = 24;
+    PbPMKeyExchange pm_key_exchange = 25;
+    PbEncryptedPM encrypted_pm = 26;
+    PbPMSessionEnd pm_session_end = 27;
+    PbStatus status = 30;
+    PbExtension extension = 31;
+    PbMediaUpload media_upload = 40;
+    PbMediaMeta media_meta = 41;
+    PbMediaDelete media_delete = 42;
+    PbMediaCapabilities media_capabilities = 43;
+    PbP2PMediaStatus p2p_media_status = 44;
+    PbCallOffer call_offer = 50;
+    PbCallAnswer call_answer = 51;
+    PbCallCandidate call_candidate = 52;
+    PbCallEnd call_end = 53;
+    PbCallMediaControl call_media_control = 54;
+    PbHubStream hub_stream = 55;
+    PbPrivateSearch private_search = 60;
+    PbPrivateSearchResult private_search_result = 61;
+    PbRelayResume relay_resume = 70;
+    PbSegmentRequest segment_request = 71;
+    PbSegmentInfo segment_info = 72;
+    PbUserQuery user_query = 73;
+    PbUserQueryResult user_query_result = 74;
+
+    // Channel messages (Phase 4.5)
+    PbChannel channel = 80;
+    PbChannelList channel_list = 81;
+    PbChannelCreated channel_created = 82;
+    PbChannelMemberUpdate channel_member_update = 83;
+    PbChannelInvite channel_invite = 84;
+    PbChannelInviteResponse channel_invite_response = 85;
+    PbChannelHistory channel_history = 86;
+    PbChannelEncrypted channel_encrypted = 87;
+    PbSenderKeyRotation sender_key_rotation = 88;
+
+    // Media pipeline (Phase 7)
+    PbMediaPacket media_packet = 90;
+    PbMediaCapabilityExchange media_cap_exchange = 91;
+  }
+}
+
+// ============================================================================
+// Core Messages
+// ============================================================================
+
+// Chat message (replaces <nick> text| and $To: nick ...)
+message PbChat {
+  string text = 1;
+  bool is_action = 2;             // /me action (third-person)
+  string target_nick = 3;        // PM target (empty = public chat)
+  bool is_pm = 4;
+  repeated PbMediaRef attachments = 5;    // Hub-hosted media attachments
+  string channel_id = 6;                  // Channel ID (empty = #general / main chat)
+  repeated PbP2PMediaRef p2p_attachments = 7;  // P2P media attachments (served via relay)
+}
+
+// User information (replaces $MyINFO $ALL nick ...)
+message PbUserInfo {
+  enum UserClass {
+    USER = 0;
+    REGISTERED = 1;
+    VIP = 2;
+    OPERATOR = 3;
+    CHEEF = 4;
+    ADMIN = 5;
+    MASTER = 10;
+  }
+
+  string nick = 1;
+  string description = 2;
+  string tag = 3;                 // Client tag e.g. <EiskaltDC++ V:2.4.2,...>
+  string email = 4;
+  uint64 share_size = 5;
+  uint32 shared_files = 6;
+  uint32 upload_slots = 7;
+  uint32 free_slots = 8;
+  string connection_speed = 9;
+  uint32 upload_speed_bps = 10;
+  uint32 download_speed_bps = 11;
+  string ipv4 = 12;
+  string ipv6 = 13;
+  uint32 udp_port = 14;
+  uint32 tcp_port = 15;
+  bool is_passive = 16;
+  bool supports_tls = 17;
+  string tls_keyprint = 18;      // SHA256 fingerprint
+  UserClass user_class = 19;
+  bool is_away = 20;
+  string hub_url = 21;
+  string client_id = 22;         // CID (borrowed from ADC)
+  repeated string features = 23; // Supported sub-features (E2EPM, MediaShare, etc.)
+  map<string, string> extra = 24; // Extensible key-value pairs
+}
+
+// Search request (replaces $Search ...)
+message PbSearch {
+  enum FileType {
+    ANY = 0;
+    AUDIO = 1;
+    COMPRESSED = 2;
+    DOCUMENT = 3;
+    EXECUTABLE = 4;
+    PICTURE = 5;
+    VIDEO = 6;
+    DIRECTORY = 7;
+    TTH = 8;
+  }
+
+  enum SizeMode {
+    NONE = 0;
+    AT_LEAST = 1;
+    AT_MOST = 2;
+    EXACT = 3;
+  }
+
+  string query = 1;
+  repeated string exclude = 2;   // Excluded terms
+  FileType file_type = 3;
+  SizeMode size_mode = 4;
+  uint64 size = 5;
+  string tth = 6;                // TTH root hash (base32)
+  string token = 7;              // Search token for result matching
+  repeated string extensions = 8; // File extension filter
+  uint32 max_results = 9;
+}
+
+// Search result (replaces $SR ...)
+message PbSearchResult {
+  string nick = 1;
+  string filename = 2;
+  uint64 size = 3;
+  uint32 free_slots = 4;
+  uint32 total_slots = 5;
+  string tth = 6;
+  string hub_name = 7;
+  string hub_url = 8;
+  string token = 9;
+  bool is_directory = 10;
+  string path = 11;              // Full path within share
+}
+
+// Connection request (replaces $ConnectToMe / $RevConnectToMe)
+message PbConnect {
+  enum ConnectType {
+    CONNECT_TO_ME = 0;
+    REV_CONNECT_TO_ME = 1;
+    NAT_TRAVERSAL = 2;
+    HUB_RELAY = 3;               // Request relay through hub
+  }
+
+  ConnectType type = 1;
+  string target_nick = 2;
+  string ip = 3;
+  uint32 port = 4;
+  bool use_tls = 5;
+  string token = 6;
+  string protocol = 7;           // "NMDC" or "ADC/1.0"
+}
+
+// Hub information (replaces $HubName, $HubTopic, etc.)
+message PbHubInfo {
+  string name = 1;
+  string topic = 2;
+  string description = 3;
+  uint32 user_count = 4;
+  uint64 total_share = 5;
+  uint32 min_share = 6;
+  uint32 max_users = 7;
+  string hub_url = 8;
+  repeated string failover_urls = 9;
+  string encoding = 10;
+  map<string, string> rules = 11;
+  uint32 protocol_version = 12;
+  string session_token = 13;     // Auth token for HTTP API (media, etc.)
+}
+
+// User list (replaces $NickList, $OpList, $BotList in one message)
+message PbUserList {
+  repeated PbUserInfo users = 1;
+  bool is_full = 2;              // true = complete list, false = delta update
+  repeated string removed_nicks = 3; // For delta updates
+}
+
+// Status message (replaces $ValidateDenide, $BadPass, $HubIsFull, etc.)
+message PbStatus {
+  enum Severity {
+    INFO = 0;
+    WARNING = 1;
+    ERROR = 2;
+    FATAL = 3;
+  }
+
+  uint32 code = 1;
+  Severity severity = 2;
+  string message = 3;
+  string detail = 4;
+}
+
+// Extensible payload for future extensions
+message PbExtension {
+  string type_url = 1;           // e.g. "nmdcpb.custom/my_extension"
+  bytes payload = 2;
+}
+
+// ============================================================================
+// HubRelay Messages
+// ============================================================================
+
+// Relay session request
+message PbRelayRequest {
+  enum RelayPurpose {
+    FILE_TRANSFER = 0;
+    FILE_LIST = 1;
+    STREAM = 2;
+    GENERIC = 3;
+  }
+
+  string target_nick = 1;
+  string token = 2;              // Unique session token
+  bytes public_key = 3;          // X25519 ephemeral public key (32 bytes)
+  RelayPurpose purpose = 4;
+  uint64 estimated_size = 5;
+}
+
+// Relay session acknowledgment
+message PbRelayAck {
+  string token = 1;
+  bool accepted = 2;
+  bytes public_key = 3;          // Responder's X25519 ephemeral public key
+  uint32 relay_id = 4;           // Assigned by hub upon mutual acceptance
+  string reject_reason = 5;
+}
+
+// Relay data (documentation — actual transfer uses $PBR framing)
+message PbRelayData {
+  uint32 relay_id = 1;
+  bytes data = 2;                // Encrypted chunk (ChaCha20-Poly1305)
+  uint64 offset = 3;             // Byte offset in stream
+}
+
+// Relay session close
+message PbRelayClosed {
+  enum CloseReason {
+    NORMAL = 0;
+    ERROR = 1;
+    TIMEOUT = 2;
+    HUB_LIMIT = 3;
+    USER_DISCONNECT = 4;
+  }
+
+  uint32 relay_id = 1;
+  CloseReason reason = 2;
+}
+
+// Relay status (hub → client)
+message PbRelayStatus {
+  uint32 relay_id = 1;
+  uint64 bytes_relayed = 2;
+  uint32 active_sessions = 3;
+  uint32 max_sessions = 4;
+  uint64 bandwidth_used = 5;
+  uint64 bandwidth_limit = 6;
+}
+
+// Relay resume (sent by receiver to sender to resume from a given offset)
+message PbRelayResume {
+  uint32 relay_id = 1;
+  uint64 resume_offset = 2;       // Byte offset to resume from
+  bytes partial_sha256 = 3;       // SHA-256 of data received so far (for verification)
+  string token = 4;               // Original relay session token
+}
+
+// Segment request (multi-source swarming)
+message PbSegmentRequest {
+  string file_tth = 1;            // TTH root hash (base32) identifying the file
+  uint64 file_size = 2;           // Total file size in bytes
+  uint64 segment_offset = 3;      // Start offset of requested segment
+  uint64 segment_length = 4;      // Length of requested segment
+  string request_id = 5;          // Unique request ID for correlation
+}
+
+// Segment info (response to segment request)
+message PbSegmentInfo {
+  string request_id = 1;
+  bool available = 2;             // Whether the peer can serve this segment
+  uint64 segment_offset = 3;
+  uint64 segment_length = 4;
+  string peer_nick = 5;           // Nick of the peer offering this segment
+}
+
+// User query (for stealth hub-wide search — hub routes to matching users)
+message PbUserQuery {
+  string query_id = 1;            // Unique query ID
+  string feature_filter = 2;      // Required feature (e.g., "NMDCpb")
+  uint64 min_share_size = 3;      // Minimum shared bytes
+  uint32 max_results = 4;         // Max users to return
+  bool sweep = 5;                 // If true, hub sends PbPrivateSearch to each match
+  PbPrivateSearch search = 6;     // Search query to sweep (only if sweep=true)
+}
+
+message PbUserQueryResult {
+  string query_id = 1;            // Matches the request's query_id
+  repeated string nicks = 2;      // Matching user nicks
+  uint32 total_matching = 3;      // Total matching (may exceed nicks if max_results)
+  bool sweep_started = 4;         // True if sweep was initiated
+  uint32 sweep_count = 5;         // Number of users the search was sent to
+  string error = 6;               // Non-empty if query failed
+}
+
+// ============================================================================
+// E2E Encrypted PM Messages
+// ============================================================================
+
+// PM key exchange
+message PbPMKeyExchange {
+  string target_nick = 1;
+  bytes public_key = 2;          // X25519 ephemeral public key (32 bytes)
+  bytes key_signature = 3;       // Optional: signature proving key ownership
+  string key_fingerprint = 4;    // Human-readable fingerprint for verification
+  uint32 protocol_version = 5;   // E2EPM protocol version (initially 1)
+}
+
+// Encrypted private message
+message PbEncryptedPM {
+  string target_nick = 1;
+  uint64 nonce = 2;              // Monotonically increasing counter
+  bytes ciphertext = 3;          // ChaCha20-Poly1305 encrypted PbPMPlaintext
+  bytes sender_pubkey_hint = 4;  // First 8 bytes of sender's session public key
+}
+
+// PM plaintext (encrypted inside PbEncryptedPM.ciphertext — never sent cleartext)
+message PbPMPlaintext {
+  string text = 1;
+  bool is_action = 2;            // /me action
+  uint64 timestamp = 3;
+  string reply_to_hash = 4;      // SHA-256 of message being replied to
+  map<string, string> extra = 5; // Extensible metadata
+  repeated PbEncryptedMediaRef encrypted_attachments = 6;
+}
+
+// PM session terminated
+message PbPMSessionEnd {
+  enum Reason {
+    NORMAL_CLOSE = 0;
+    KEY_ROTATION = 1;
+    SECURITY_ALERT = 2;
+  }
+
+  string target_nick = 1;
+  Reason reason = 2;
+}
+
+// ============================================================================
+// MediaShare Messages
+// ============================================================================
+
+// Media upload request (client → hub)
+message PbMediaUpload {
+  string filename = 1;
+  string mime_type = 2;
+  uint64 size = 3;
+  uint32 requested_ttl = 4;
+  bool is_encrypted = 5;
+  string checksum_sha256 = 6;
+}
+
+// Media metadata (hub → client)
+message PbMediaMeta {
+  string media_id = 1;
+  string url = 2;
+  string thumbnail_url = 3;
+  string mime_type = 4;
+  uint64 size = 5;
+  string filename = 6;
+  uint64 expires_at = 7;
+  string uploader_nick = 8;
+  uint32 width = 9;
+  uint32 height = 10;
+  uint32 duration_ms = 11;
+  string checksum_sha256 = 12;
+}
+
+// Media delete request
+message PbMediaDelete {
+  string media_id = 1;
+  string reason = 2;
+}
+
+// Media reference (embedded in PbChat.attachments)
+message PbMediaRef {
+  string media_id = 1;
+  string url = 2;
+  string thumbnail_url = 3;
+  string mime_type = 4;
+  string filename = 5;
+  uint64 size = 6;
+  uint32 width = 7;
+  uint32 height = 8;
+  uint32 duration_ms = 9;
+}
+
+// Encrypted media reference (inside PbPMPlaintext.encrypted_attachments)
+message PbEncryptedMediaRef {
+  string media_id = 1;
+  string url = 2;
+  string filename = 3;
+  string mime_type = 4;
+  uint64 size = 5;
+  bytes file_encryption_key = 6; // 32-byte ChaCha20-Poly1305 key
+  bytes file_nonce = 7;          // 12-byte nonce for file encryption
+  uint32 width = 8;
+  uint32 height = 9;
+  uint32 duration_ms = 10;
+}
+
+// Media capabilities (hub → client, sent after login)
+message PbMediaCapabilities {
+  bool enabled = 1;
+  uint64 max_file_size = 2;
+  uint64 user_quota_remaining = 3;
+  uint32 max_ttl = 4;
+  uint32 default_ttl = 5;
+  repeated string allowed_types = 6;
+  bool thumbnails_available = 7;
+  string upload_url = 8;
+  bool p2p_enabled = 9;                // P2P media mode available
+  bool p2p_default = 10;               // P2P is the default mode for public channels
+  uint64 p2p_max_size = 11;            // Max P2P media file size (bytes)
+}
+
+// P2P media reference — shared via TTH, downloaded via relay from poster's DC share
+message PbP2PMediaRef {
+  string tth = 1;                      // Tiger Tree Hash (base32) of the file
+  string filename = 2;                 // Original filename
+  string mime_type = 3;                // MIME type
+  uint64 size = 4;                     // File size in bytes
+  string source_nick = 5;             // Nick of the original poster (primary source)
+  repeated string alt_source_nicks = 6; // Other known sources (users who cached it)
+  uint32 width = 7;                    // Image/video width (0 if N/A)
+  uint32 height = 8;                   // Image/video height (0 if N/A)
+  uint32 duration_ms = 9;              // Audio/video duration (0 if N/A)
+  bool is_encrypted = 10;              // True if file is E2E encrypted (private channel)
+  bytes file_encryption_key = 11;      // 32-byte key (only inside E2EPM/channel ciphertext)
+  bytes file_nonce = 12;               // 12-byte nonce (only inside E2EPM/channel ciphertext)
+}
+
+// P2P media download status — progress/availability updates
+message PbP2PMediaStatus {
+  enum Status {
+    AVAILABLE = 0;         // Source(s) online — download can begin
+    DOWNLOADING = 1;       // Download in progress
+    COMPLETED = 2;         // Download finished, file cached locally
+    UNAVAILABLE = 3;       // No sources currently online
+    FAILED = 4;            // Download failed (error in reason field)
+    CACHED = 5;            // File already in local cache (no download needed)
+  }
+
+  string tth = 1;                      // Identifies which P2P media this status is for
+  Status status = 2;
+  uint64 bytes_downloaded = 3;         // Progress (bytes received so far)
+  uint64 total_size = 4;               // Total file size
+  uint32 active_sources = 5;           // Number of peers currently serving data
+  string reason = 6;                   // Error/status reason text
+  string channel_id = 7;               // Channel context (empty = main chat / PM)
+}
+
+// ============================================================================
+// Channel Messages (Phase 4.5)
+// ============================================================================
+
+// Channel role enum (shared by PbChannel and PbChannelMemberUpdate)
+enum ChannelRole {
+  CHANNEL_MEMBER = 0;
+  CHANNEL_ADMIN = 1;
+  CHANNEL_OWNER = 2;
+  CHANNEL_READONLY = 3;
+}
+
+// Channel management actions (client → hub)
+message PbChannel {
+  enum ChannelAction {
+    LIST_CHANNELS = 0;    // Request the channel list
+    CREATE = 1;           // Create a new channel
+    DELETE = 2;           // Delete a channel (owner/admin)
+    JOIN = 3;             // Join a channel
+    LEAVE = 4;            // Leave a channel
+    SET_TOPIC = 5;        // Set channel topic
+    KICK = 6;             // Kick a member
+    SET_ROLE = 7;         // Change a member's role
+  }
+
+  ChannelAction action = 1;
+  string channel_id = 2;       // Channel identifier (alphanumeric slug)
+  string name = 3;             // Display name (e.g., "#photos")
+  string topic = 4;            // Channel topic text
+  bool is_private = 5;         // True for E2E-encrypted private channels
+  string target_nick = 6;      // For KICK / SET_ROLE operations
+  ChannelRole target_role = 7; // For SET_ROLE
+}
+
+// Channel list (hub → client, response to LIST_CHANNELS or on login)
+message PbChannelList {
+  message ChannelInfo {
+    string channel_id = 1;
+    string name = 2;
+    string topic = 3;
+    uint32 member_count = 4;
+    bool is_private = 5;
+    string owner_nick = 6;
+    uint64 created_at = 7;     // Unix timestamp
+  }
+  repeated ChannelInfo channels = 1;
+}
+
+// Channel created confirmation (hub → creator)
+message PbChannelCreated {
+  string channel_id = 1;
+  string owner_nick = 2;
+  bool is_private = 3;
+}
+
+// Channel member update (hub → channel members)
+message PbChannelMemberUpdate {
+  enum UpdateType {
+    JOINED = 0;
+    LEFT = 1;
+    KICKED = 2;
+    ROLE_CHANGED = 3;
+  }
+
+  string channel_id = 1;
+  string nick = 2;
+  UpdateType update_type = 3;
+  ChannelRole new_role = 4;    // For ROLE_CHANGED
+  string reason = 5;           // For KICKED
+}
+
+// Channel invite (owner/admin → target user, forwarded by hub)
+message PbChannelInvite {
+  string channel_id = 1;
+  string target_nick = 2;
+  string inviter_nick = 3;     // Set by hub
+}
+
+// Channel invite response (target → hub)
+message PbChannelInviteResponse {
+  string channel_id = 1;
+  bool accepted = 2;
+}
+
+// Channel message history (hub → client, sent on channel join)
+message PbChannelHistory {
+  string channel_id = 1;
+  repeated PbChat messages = 2;                     // Recent public channel messages
+  repeated PbChannelEncrypted encrypted_messages = 3; // Private channel history (if enabled)
+}
+
+// Encrypted channel message (for private/E2E channels)
+message PbChannelEncrypted {
+  string channel_id = 1;
+  uint32 sender_key_id = 2;    // Identifies which sender key was used
+  uint64 nonce = 3;            // Message counter for this sender key
+  bytes ciphertext = 4;        // ChaCha20-Poly1305 encrypted PbChannelPlaintext
+  string from_nick = 5;        // Sender (validated by hub, used for key lookup)
+}
+
+// Channel plaintext (encrypted inside PbChannelEncrypted.ciphertext)
+// NEVER sent over the wire in cleartext.
+message PbChannelPlaintext {
+  string text = 1;
+  bool is_action = 2;          // /me action
+  uint64 timestamp = 3;
+  string reply_to_hash = 4;    // SHA-256 of message being replied to
+  map<string, string> extra = 5; // Extensible metadata
+  repeated PbP2PMediaRef p2p_attachments = 6; // P2P media (private channels always use P2P)
+  repeated PbMediaRef hub_attachments = 7;    // Hub-hosted media (only in public channels)
+}
+
+// Sender key distribution (sent via E2EPM to each channel member)
+message PbSenderKeyDistribution {
+  string channel_id = 1;
+  uint32 key_id = 2;           // Unique ID for this key generation
+  bytes sender_key = 3;        // 32-byte ChaCha20-Poly1305 key
+  string sender_nick = 4;      // Who this key belongs to
+  uint32 key_generation = 5;   // Monotonically increasing generation counter
+}
+
+// Sender key rotation request (hub → channel members)
+message PbSenderKeyRotation {
+  string channel_id = 1;
+  string reason = 2;           // "member_left", "member_joined", "periodic", "manual"
+  string trigger_nick = 3;     // Nick of the member who left/joined (if applicable)
+}
+
+// ============================================================================
+// VoiceVideo Messages
+// ============================================================================
+
+// Call offer (initiator → target via hub)
+message PbCallOffer {
+  enum MediaType {
+    AUDIO = 0;
+    VIDEO = 1;
+    SCREEN_SHARE = 2;
+  }
+
+  string target_nick = 1;
+  string call_id = 2;            // UUID
+  bool is_group = 3;
+  repeated MediaType media = 4;
+  repeated CodecInfo codecs = 5;
+  string group_id = 6;
+}
+
+// Call answer (target → initiator via hub)
+message PbCallAnswer {
+  string call_id = 1;
+  bool accepted = 2;
+  repeated CodecInfo codecs = 3;
+  string reject_reason = 4;
+}
+
+// Codec information
+message CodecInfo {
+  string name = 1;               // "opus", "vp8", "vp9", "av1"
+  uint32 clock_rate = 2;
+  uint32 channels = 3;
+  uint32 bitrate = 4;
+  map<string, string> params = 5;
+}
+
+// ICE-like candidate
+message PbCallCandidate {
+  string call_id = 1;
+  string candidate = 2;
+}
+
+// Call end
+message PbCallEnd {
+  enum EndReason {
+    NORMAL = 0;
+    TIMEOUT = 1;
+    ERROR = 2;
+    REJECTED = 3;
+    BUSY = 4;
+  }
+
+  string call_id = 1;
+  EndReason reason = 2;
+  uint32 duration_sec = 3;
+}
+
+// In-call media control
+message PbCallMediaControl {
+  string call_id = 1;
+  bool audio_muted = 2;
+  bool video_muted = 3;
+  bool screen_sharing = 4;
+}
+
+// Hub-wide stream management
+message PbHubStream {
+  enum StreamAction {
+    START_STREAM = 0;
+    STOP_STREAM = 1;
+    STREAM_AVAILABLE = 2;
+    STREAM_ENDED = 3;
+    JOIN_STREAM = 4;
+    LEAVE_STREAM = 5;
+    STREAM_UPDATE = 6;
+  }
+
+  StreamAction action = 1;
+  string stream_id = 2;
+  string title = 3;
+  string broadcaster_nick = 4;
+  repeated PbCallOffer.MediaType media = 5;
+  repeated CodecInfo codecs = 6;
+  uint32 viewer_count = 7;
+  uint32 max_viewers = 8;
+  uint32 bitrate = 9;
+  string description = 10;
+}
+
+// ============================================================================
+// Private Search (targeted search against a specific user's shares)
+// ============================================================================
+
+// Private search request — sent DIRECT to a specific user via $PBR.
+// The hub routes it without broadcasting, so search spy tools cannot see it.
+// Optionally encrypted inside PbEncryptedPM for full privacy from hub.
+message PbPrivateSearch {
+  string search_id = 1;           // Unique ID to correlate request/response
+  string query = 2;               // Search string (filename pattern or keywords)
+  string tth = 3;                 // TTH root hash (base32) — mutually exclusive with query
+
+  // Re-use PbSearch.FileType enum values
+  enum FileType {
+    ANY = 0;
+    AUDIO = 1;
+    COMPRESSED = 2;
+    DOCUMENT = 3;
+    EXECUTABLE = 4;
+    PICTURE = 5;
+    VIDEO = 6;
+    DIRECTORY = 7;
+    TTH = 8;
+  }
+  FileType file_type = 4;
+
+  uint64 min_size = 5;            // Minimum file size bytes (0 = no limit)
+  uint64 max_size = 6;            // Maximum file size bytes (0 = no limit)
+  uint32 max_results = 7;         // Maximum results to return (default: 10, max: 100)
+  repeated string extensions = 8; // File extension filter (e.g., ["mp3", "flac"])
+}
+
+// Private search results — sent back via $PBR to the requester only.
+message PbPrivateSearchResult {
+  string search_id = 1;           // Matches the request's search_id
+
+  message Result {
+    string filename = 1;
+    string path = 2;              // Full path within share
+    uint64 size = 3;
+    string tth = 4;               // Tiger Tree Hash (base32)
+    uint32 free_slots = 5;
+    uint32 total_slots = 6;
+    bool is_directory = 7;
+  }
+  repeated Result results = 2;
+
+  bool is_partial = 3;            // true if results were truncated by max_results
+  string error = 4;               // Non-empty if search failed (e.g., "search disabled")
+}
+
+// ============================================================================
+// Phase 7: Media Pipeline Messages
+// ============================================================================
+
+// Encoded media packet — sent over relay for voice/video calls and hub streams.
+// Each packet contains a single encoded frame (audio or video).
+message PbMediaPacket {
+  enum MediaType {
+    AUDIO = 0;
+    VIDEO = 1;
+  }
+
+  string call_id = 1;            // Call or stream ID this packet belongs to
+  MediaType media_type = 2;
+  uint32 sequence = 3;           // Monotonically increasing sequence number
+  uint64 timestamp_us = 4;      // Capture timestamp in microseconds (from stream start)
+  uint32 ssrc = 5;              // Synchronization source identifier (per-sender)
+  string codec = 6;             // Codec name: "opus", "vp8", "vp9"
+  uint32 sample_rate = 7;       // Audio: sample rate (48000). Video: 0
+  uint32 channels = 8;          // Audio: channel count (1 or 2). Video: 0
+  uint32 width = 9;             // Video: frame width. Audio: 0
+  uint32 height = 10;           // Video: frame height. Audio: 0
+  bool is_keyframe = 11;        // Video: true if this is a keyframe
+  uint32 duration_us = 12;      // Frame duration in microseconds (audio: 20000 for 20ms)
+  bytes payload = 15;           // Encoded frame data (Opus packet or VP8/VP9 frame)
+}
+
+// Codec capability exchange — sent during call setup to negotiate codecs.
+message PbMediaCapabilityExchange {
+  string call_id = 1;
+
+  message AudioCodecCap {
+    string name = 1;            // "opus"
+    uint32 min_bitrate = 2;
+    uint32 max_bitrate = 3;
+    uint32 preferred_bitrate = 4;
+    repeated uint32 sample_rates = 5;
+    repeated uint32 channel_counts = 6;
+    bool dtx = 7;
+    bool fec = 8;
+    bool cbr = 9;
+  }
+
+  message VideoCodecCap {
+    string name = 1;            // "vp8", "vp9"
+    uint32 min_bitrate = 2;
+    uint32 max_bitrate = 3;
+    uint32 preferred_bitrate = 4;
+    uint32 max_width = 5;
+    uint32 max_height = 6;
+    uint32 max_fps = 7;
+    bool hardware_accel = 8;
+  }
+
+  repeated AudioCodecCap audio_codecs = 2;
+  repeated VideoCodecCap video_codecs = 3;
+
+  // Selected codecs (populated in answer/ack after negotiation)
+  string selected_audio_codec = 10;
+  uint32 selected_audio_bitrate = 11;
+  uint32 selected_audio_sample_rate = 12;
+  uint32 selected_audio_channels = 13;
+  string selected_video_codec = 14;
+  uint32 selected_video_bitrate = 15;
+  uint32 selected_video_width = 16;
+  uint32 selected_video_height = 17;
+  uint32 selected_video_fps = 18;
+}

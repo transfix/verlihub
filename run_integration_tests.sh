@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verlihub Integration Test Runner
-# Run with: sg docker ./run_integration_tests.sh [options]
+# Run with: sg docker -c "./run_integration_tests.sh [options]"
 #
 # Examples:
 #   ./run_integration_tests.sh              # Run all tests
@@ -79,9 +79,9 @@ while [[ $# -gt 0 ]]; do
             echo "If no test type is specified, all tests will be run."
             echo ""
             echo "Examples:"
-            echo "  sg docker $0              # Run all tests"
-            echo "  sg docker $0 --single     # Single interpreter only"
-            echo "  sg docker $0 --dispatcher # Quick dispatcher tests"
+            echo "  sg docker -c \"$0\"              # Run all tests"
+            echo "  sg docker -c \"$0 --single\"     # Single interpreter only"
+            echo "  sg docker -c \"$0 --dispatcher\" # Quick dispatcher tests"
             exit 0
             ;;
         *)
@@ -121,38 +121,73 @@ log_info() {
     echo -e "${YELLOW}→ $1${NC}"
 }
 
+# Check if Docker daemon is reachable
+docker_available() {
+    docker info >/dev/null 2>&1
+}
+
 cleanup() {
     if $CLEANUP; then
         log_info "Cleaning up containers..."
-        docker compose down --remove-orphans 2>/dev/null || true
+        if docker_available; then
+            docker compose down --remove-orphans 2>/dev/null || true
+        fi
     fi
 }
 
 # Run dispatcher tests (no hub required)
+# Falls back to running directly with Python if Docker is unavailable,
+# since these are pure unit tests with no service dependencies.
 run_dispatcher_tests() {
     log_header "Running Dispatcher Unit Tests"
-    
-    if ! $NO_BUILD; then
-        log_info "Building dispatcher test container..."
-        docker compose build dispatcher-tests 2>&1 | tail -5
-    fi
-    
-    log_info "Running tests..."
-    if docker compose --profile dispatcher-test run --rm dispatcher-tests; then
-        RESULTS["dispatcher"]="PASSED"
-        log_success "Dispatcher tests passed"
-        return 0
+
+    if docker_available; then
+        if ! $NO_BUILD; then
+            log_info "Building dispatcher test container..."
+            docker compose build dispatcher-tests 2>&1 | tail -5
+        fi
+
+        log_info "Running tests (Docker)..."
+        if docker compose --profile dispatcher-test run --rm dispatcher-tests; then
+            RESULTS["dispatcher"]="PASSED"
+            log_success "Dispatcher tests passed"
+            return 0
+        else
+            RESULTS["dispatcher"]="FAILED"
+            log_failure "Dispatcher tests failed"
+            return 1
+        fi
     else
-        RESULTS["dispatcher"]="FAILED"
-        log_failure "Dispatcher tests failed"
-        return 1
+        log_info "Docker not available — running dispatcher tests directly..."
+        local test_script="${SCRIPT_DIR}/docker/tests/test_dispatcher.py"
+        if [[ ! -f "$test_script" ]]; then
+            RESULTS["dispatcher"]="FAILED"
+            log_failure "Dispatcher test script not found: $test_script"
+            return 1
+        fi
+        export SCRIPTS_PATH="${SCRIPT_DIR}/plugins/python/scripts"
+        if python3 "$test_script"; then
+            RESULTS["dispatcher"]="PASSED"
+            log_success "Dispatcher tests passed (direct)"
+            return 0
+        else
+            RESULTS["dispatcher"]="FAILED"
+            log_failure "Dispatcher tests failed"
+            return 1
+        fi
     fi
 }
 
 # Run single interpreter integration tests
 run_single_tests() {
     log_header "Running Single Interpreter Integration Tests"
-    
+
+    if ! docker_available; then
+        RESULTS["single"]="FAILED"
+        log_failure "Docker is not available — single interpreter tests require Docker (MySQL + hub containers)"
+        return 1
+    fi
+
     if ! $NO_BUILD; then
         log_info "Building single interpreter containers..."
         docker compose build verlihub 2>&1 | tail -5
@@ -188,7 +223,13 @@ run_single_tests() {
 # Run multi interpreter integration tests
 run_multi_tests() {
     log_header "Running Multi Interpreter Integration Tests"
-    
+
+    if ! docker_available; then
+        RESULTS["multi"]="FAILED"
+        log_failure "Docker is not available — multi interpreter tests require Docker (MySQL + hub containers)"
+        return 1
+    fi
+
     if ! $NO_BUILD; then
         log_info "Building multi interpreter containers..."
         docker compose --profile multi build verlihub-multi 2>&1 | tail -5
@@ -224,7 +265,13 @@ run_multi_tests() {
 # Run C++ unit tests
 run_unit_tests() {
     log_header "Running C++ Unit Tests"
-    
+
+    if ! docker_available; then
+        RESULTS["unit"]="FAILED"
+        log_failure "Docker is not available — C++ unit tests require Docker (MySQL + test-builder container)"
+        return 1
+    fi
+
     if ! $NO_BUILD; then
         log_info "Building test runner container..."
         docker compose --profile test build test-runner 2>&1 | tail -5

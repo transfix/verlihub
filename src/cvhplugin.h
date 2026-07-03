@@ -182,6 +182,13 @@ public:
 	virtual bool OnParsedMsgExtJSON(nSocket::cConnDC *conn, nProtocol::cMessageDC *msg) { return true; }
 
 	/*
+		Event handler function that is called when $PB, $PBB, or $PBR message is received.
+		Use RegisterCallBack("VH_OnParsedMsgNMDCpb") to register it.
+		This event is discardable.
+	*/
+	virtual bool OnParsedMsgNMDCpb(nSocket::cConnDC *conn, nProtocol::cMessageDC *msg) { return true; }
+
+	/*
 	* Event handler function that is called when $BotINFO message is received.
 	* Use RegisterCallBack("VH_OnParsedMsgBotINFO") to register it. This event can be discarded.
 	* conn = The pointer to the connection that sent the message.

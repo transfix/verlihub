@@ -146,6 +146,10 @@ cServerDC::cServerDC(string CfgBase, const string &ExecPath):
 	mMaxMindDB = new cMaxMindDB(this);
 	mICUConvert = new cICUConvert(this);
 
+	#ifdef WITH_NMDCPB
+	mRelayManager = new nProtocol::cRelayManager();
+	#endif
+
 	unsigned int i, j;
 
 	for (i = 0; i < 2; i++) {
@@ -343,6 +347,13 @@ cServerDC::~cServerDC()
 		delete mICUConvert;
 		mICUConvert = NULL;
 	}
+
+	#ifdef WITH_NMDCPB
+	if (mRelayManager) {
+		delete mRelayManager;
+		mRelayManager = NULL;
+	}
+	#endif
 
 	mMySQL.Close();
 
@@ -964,6 +975,9 @@ unsigned int cServerDC::SearchToAll(cConnDC *conn, string &data, string &tths, b
 				if (!other || !other->ok || !other->mpUser || !other->mpUser->mInList) // base condition
 					continue;
 
+				if (other->mFeatures & eSF_RELAYONLY) // dont send active search to relay-only user (would leak IP via UDP response)
+					continue;
+
 				if (tth && !(other->mFeatures & eSF_TTHSEARCH)) // dont send to user without tth search support
 					continue;
 
@@ -1001,6 +1015,9 @@ unsigned int cServerDC::SearchToAll(cConnDC *conn, string &data, string &tths, b
 				other = (cConnDC*)(*i);
 
 				if (!other || !other->ok || !other->mpUser || !other->mpUser->mInList) // base condition
+					continue;
+
+				if (other->mFeatures & eSF_RELAYONLY) // dont send active search to relay-only user (would leak IP via UDP response)
 					continue;
 
 				if (tth && !(other->mFeatures & eSF_TTHSEARCH)) // dont send to user without tth search support
@@ -1446,8 +1463,10 @@ bool cServerDC::ShowUserToAll(cUser *user)
 	}
 
 	if (mC.send_user_ip) { // send userip to operators
-		if (user->mxConn) // real user
+		if (user->mxConn && !(user->mxConn->mFeatures & eSF_RELAYONLY)) // real user, not relay-only
 			mP.Create_UserIP(data, user->mNick, user->mxConn->AddrIP());
+		else if (user->mxConn && (user->mxConn->mFeatures & eSF_RELAYONLY)) // relay-only: redact IP
+			mP.Create_UserIP(data, user->mNick, "0.0.0.0");
 		else // bots have local ip
 			mP.Create_UserIP(data, user->mNick, "127.0.0.1");
 
@@ -1476,6 +1495,10 @@ void cServerDC::ShowUserIP(cAsyncConn *conn)
 		return;
 
 	if (!conc->mpUser->mT.login) // only after login
+		return;
+
+	// Don't broadcast IP for relay-only users
+	if (conc->mFeatures & eSF_RELAYONLY)
 		return;
 
 	if (mC.send_user_ip) { // send userip to operators
@@ -1913,6 +1936,18 @@ int cServerDC::OnTimer(const cTime &now)
 
 	if (mC.mmdb_cache && mC.mmdb_cache_mins && ((mTime.Sec() - mMaxMindDB->mClean.Sec()) >= 60)) // clean mmdb cache every minute
 		mMaxMindDB->MMDBCacheClean(); // do not confuse with MMDBCacheClear
+
+	#ifdef WITH_NMDCPB
+	// Clean up timed-out relay sessions every 60 seconds
+	if (mRelayManager && mC.relay_enabled && mC.relay_idle_timeout) {
+		static time_t sLastRelayCleanup = 0;
+
+		if ((mTime.Sec() - sLastRelayCleanup) >= 60) {
+			mRelayManager->CleanupTimedOut(mTime.Sec(), mC.relay_idle_timeout);
+			sLastRelayCleanup = mTime.Sec();
+		}
+	}
+	#endif
 
 	if (mC.detect_ctmtohub && ((mTime.Sec() - mCtmToHubConf.mTime.Sec()) >= 60)) { // ctm2hub
 		unsigned long total = mCtmToHubList.size();

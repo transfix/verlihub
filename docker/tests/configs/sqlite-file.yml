@@ -1,0 +1,24 @@
+# SQLite file-based configuration
+# Persistent storage using SQLite database file
+environment: development
+mode: api
+
+database:
+  type: sqlite
+  path: /data/verlihub.db
+  
+api:
+  host: "0.0.0.0"
+  port: 8000
+  username: admin
+  password: admin123
+  cors_origins:
+    - "*"
+  
+hub:
+  name: "SQLite File Test Hub"
+  port: 4111
+  max_users: 100
+
+logging:
+  level: debug

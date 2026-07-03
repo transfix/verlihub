@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Triggers - {{ hub_name }} Dashboard{% endblock %}
+
+{% block content %}
+<div class="level">
+    <div class="level-left">
+        <div class="level-item">
+            <h1 class="title"><i class="fas fa-bolt mr-2"></i> Trigger Management</h1>
+        </div>
+    </div>
+    <div class="level-right">
+        <div class="level-item">
+            <button class="button is-primary" onclick="openAddModal()">
+                <i class="fas fa-plus mr-2"></i> Add Trigger
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="box">
+    <table class="table is-fullwidth is-striped is-hoverable">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Command</th>
+                <th>Response</th>
+                <th>Send As</th>
+                <th>Class Range</th>
+                <th>Flags</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="trigger-table-body">
+            <tr><td colspan="7" class="has-text-centered">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal" id="trigger-modal">
+    <div class="modal-background" onclick="closeModal()"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title" id="modal-title">Add Trigger</p>
+            <button class="delete" onclick="closeModal()"></button>
+        </header>
+        <section class="modal-card-body">
+            <input type="hidden" id="edit-id">
+            <div class="field">
+                <label class="label">Command</label>
+                <input class="input" type="text" id="cmd-input" placeholder="!help">
+            </div>
+            <div class="field">
+                <label class="label">Response</label>
+                <textarea class="textarea" id="resp-input" placeholder="Help text here..."></textarea>
+            </div>
+            <div class="field">
+                <label class="label">Send As (bot nick, leave empty for hub)</label>
+                <input class="input" type="text" id="sendas-input" placeholder="">
+            </div>
+            <div class="columns">
+                <div class="column">
+                    <div class="field">
+                        <label class="label">Min Class</label>
+                        <input class="input" type="number" id="minclass-input" value="1">
+                    </div>
+                </div>
+                <div class="column">
+                    <div class="field">
+                        <label class="label">Max Class</label>
+                        <input class="input" type="number" id="maxclass-input" value="10">
+                    </div>
+                </div>
+            </div>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-success" onclick="saveTrigger()">Save</button>
+            <button class="button" onclick="closeModal()">Cancel</button>
+        </footer>
+    </div>
+</div>
+
+<script>
+const API = '/api/v1/triggers';
+const token = document.cookie.split(';').find(c => c.trim().startsWith('access_token='))?.split('=')[1] || '';
+const headers = {'Content-Type': 'application/json', 'Authorization': token};
+
+async function loadTriggers() {
+    const resp = await fetch(API, {headers});
+    if (!resp.ok) { document.getElementById('trigger-table-body').innerHTML = '<tr><td colspan="7">Error loading triggers</td></tr>'; return; }
+    const data = await resp.json();
+    const tbody = document.getElementById('trigger-table-body');
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="has-text-centered">No triggers configured</td></tr>'; return; }
+    tbody.innerHTML = data.map(t => `<tr>
+        <td>${t.id}</td>
+        <td><code>${esc(t.command)}</code></td>
+        <td>${esc(t.response?.substring(0, 80))}${(t.response?.length||0) > 80 ? '...' : ''}</td>
+        <td>${esc(t.send_as || '-')}</td>
+        <td>${t.min_class} – ${t.max_class}</td>
+        <td>${t.flags}</td>
+        <td><button class="button is-small is-danger" onclick="deleteTrigger(${t.id})"><i class="fas fa-trash"></i></button></td>
+    </tr>`).join('');
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function openAddModal() {
+    document.getElementById('modal-title').textContent = 'Add Trigger';
+    document.getElementById('edit-id').value = '';
+    document.getElementById('cmd-input').value = '';
+    document.getElementById('resp-input').value = '';
+    document.getElementById('sendas-input').value = '';
+    document.getElementById('minclass-input').value = '1';
+    document.getElementById('maxclass-input').value = '10';
+    document.getElementById('trigger-modal').classList.add('is-active');
+}
+
+function closeModal() { document.getElementById('trigger-modal').classList.remove('is-active'); }
+
+async function saveTrigger() {
+    const body = {
+        command: document.getElementById('cmd-input').value,
+        response: document.getElementById('resp-input').value,
+        send_as: document.getElementById('sendas-input').value,
+        min_class: parseInt(document.getElementById('minclass-input').value) || 1,
+        max_class: parseInt(document.getElementById('maxclass-input').value) || 10,
+    };
+    const resp = await fetch(API, {method: 'POST', headers, body: JSON.stringify(body)});
+    if (resp.ok) { closeModal(); loadTriggers(); } else { alert('Error: ' + (await resp.text())); }
+}
+
+async function deleteTrigger(id) {
+    if (!confirm('Delete trigger #' + id + '?')) return;
+    await fetch(API + '/' + id, {method: 'DELETE', headers});
+    loadTriggers();
+}
+
+loadTriggers();
+</script>
+{% endblock %}

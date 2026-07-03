@@ -33,6 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblua5.4-dev \
     python3-dev \
     pkg-config \
+    libgtest-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -62,6 +65,12 @@ RUN mkdir -p build && cd build && \
     make -j$(nproc) && \
     make install
 
+# Test builder - extends builder with core tests
+FROM builder AS test-builder
+RUN cd /src/build && \
+    cmake -DBUILD_CORE_TESTS=ON . && \
+    make -j$(nproc)
+
 # Runtime image
 FROM ubuntu:24.04 AS runtime
 
@@ -89,6 +98,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mysql-client \
     curl \
     netcat-openbsd \
+    git \
+    libprotobuf32t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed files from builder
@@ -109,7 +120,7 @@ RUN python3 -m venv /opt/verlihub-venv && \
     /opt/verlihub-venv/bin/pip install --upgrade pip && \
     if [ "$PYTHON_MODE" = "single" ]; then \
         echo "Installing FastAPI dependencies for single-interpreter mode"; \
-        /opt/verlihub-venv/bin/pip install fastapi uvicorn requests; \
+        /opt/verlihub-venv/bin/pip install fastapi uvicorn requests httpx openai pyyaml; \
     else \
         echo "Minimal venv for multi-interpreter mode (script isolation)"; \
     fi

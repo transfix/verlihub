@@ -1,0 +1,71 @@
+# Docker Compose for Remote vLLM Integration Tests
+#
+# Validates the full LLM chat + tool-calling pipeline using an external
+# vLLM endpoint (Qwen3.5-35B-A3B).  No local GPU or model download needed.
+#
+# Architecture:
+#   vllm-hub        — verlihub-py with LLM + MCP enabled (SQLite in-memory)
+#                     configured to call the remote vLLM server
+#   vllm-tests      — Python test runner exercising /api/v1/llm/* endpoints
+#
+# Usage:
+#   # Run all remote vLLM integration tests
+#   docker compose -f docker/docker-compose.vllm-remote-test.yml up --build --abort-on-container-exit vllm-tests
+#
+#   # Clean up
+#   docker compose -f docker/docker-compose.vllm-remote-test.yml down -v
+
+services:
+  # ==========================================================================
+  # Verlihub-py with LLM enabled (pointing at remote vLLM)
+  # ==========================================================================
+  vllm-hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: vllm-remote-test-hub
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: >
+      python3 -m verlihub.server
+        -c /app/docker/tests/configs/vllm-remote-test.yml
+        --mode api
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - vllm-test-network
+
+  # ==========================================================================
+  # Remote vLLM Integration Test Runner
+  # ==========================================================================
+  vllm-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.verlihub-py
+    container_name: vllm-remote-test-runner
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      vllm-hub:
+        condition: service_healthy
+    command: >
+      python docker/tests/test_vllm_remote_e2e.py
+        --api-url http://vllm-hub:8000
+        --admin-user admin
+        --admin-pass admin123
+        --model Qwopus3.5-27B-v3.5-Q5_K_M.gguf
+        --vllm-url https://qwopus.tinyhost.xyz
+    networks:
+      - vllm-test-network
+
+networks:
+  vllm-test-network:
+    driver: bridge

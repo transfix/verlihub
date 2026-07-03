@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     libprotobuf-dev \
     protobuf-compiler \
+    swig \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

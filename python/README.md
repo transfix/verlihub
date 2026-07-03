@@ -15,6 +15,8 @@ A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 - **CLI Tools** - Command-line management utilities
 - **Performance Benchmarks** - Load testing and performance analysis
 - **Remote Client** - Python client library for hub administration
+- **NMDCpb Protocol Extension** - Protobuf structured messaging with hub-relayed
+  transfers, E2E encrypted PM, media sharing, channels, and voice/video signaling
 
 ## Quick Start
 
@@ -93,6 +95,47 @@ Access the dashboard at `http://localhost:8000/dashboard/`
 - **Console** - Command execution interface
 - **Config** - Hub configuration (Master only)
 - **Plugins** - Plugin management (Admin only)
+
+## NMDCpb Protocol Extension
+
+verlihub-py ships the **server side** of NMDCpb — a protobuf-based structured
+messaging layer that extends classic NMDC with six integrated features. The hub
+negotiates `NMDCpb` in `$Supports`, dispatches `$PB`/`$PBR` envelopes to a Python
+plugin, and transparently translates to legacy NMDC (`$<nick>`, `$To:`, `$Search`)
+for non-NMDCpb clients.
+
+| Extension | Capability |
+|-----------|------------|
+| **NMDCpb** | Protobuf message dispatch, legacy translation, feature negotiation |
+| **HubRelay** | Hub-brokered relay sessions for encrypted, NAT-friendly transfers |
+| **E2EPM** | End-to-end encrypted private messages with key-exchange forwarding |
+| **MediaShare** | Media storage (filesystem/S3), HTTP upload/download API, P2P routing |
+| **Channels** | Channel lifecycle, membership, message routing, E2E sender keys |
+| **VoiceVideo** | 1:1 and group call signaling, hub streams, SFU fan-out |
+
+### Admin surface
+
+- **Chat commands** (operator, class ≥ 5): `+nmdcpb stats`, `+nmdcpb users`,
+  `+nmdcpb relay`, `+nmdcpb channel list|create|delete|info`
+- **REST API** under `/dashboard/nmdcpb/api` (admin JWT, `user_class ≥ 5`):
+  `GET /api/stats`, `GET /api/users`, `GET /api/relays`, `GET /api/relay/{id}`,
+  `POST /api/relay/{id}/close`, `POST /api/relay/close-all`,
+  `POST /api/relay/close-user/{nick}`
+- **Media API** mounted at `/api/media/` (per-user HMAC bearer tokens):
+  `POST /upload`, `GET /quota`, `GET /{id}`, `GET /{id}/thumb`,
+  `GET /{id}/meta`, `DELETE /{id}`
+- **WebSocket** `/ws/relay` streams `relay_created` / `relay_closed` events
+- **Dashboard** at `/dashboard/nmdcpb/` with live stats, relay/user tables, and
+  admin actions
+
+### Detailed documentation
+
+| Document | Contents |
+|----------|----------|
+| [NMDCPB_PROTOCOL.md](../docs/NMDCPB_PROTOCOL.md) | Wire format, envelope types, feature negotiation |
+| [NMDCPB_IMPLEMENTATION.md](../docs/NMDCPB_IMPLEMENTATION.md) | Hub plugin architecture, message flow, storage backends |
+| [NMDCPB_ADMIN_GUIDE.md](../docs/NMDCPB_ADMIN_GUIDE.md) | Commands, REST/WebSocket API, dashboard, config, troubleshooting |
+| [NMDCPB_PROTOCOL_WORKFLOWS.md](../docs/NMDCPB_PROTOCOL_WORKFLOWS.md) | End-to-end sequence walkthroughs for every extension |
 
 ## Performance Benchmarks
 

@@ -53,7 +53,10 @@ jobs:
           # Use manylinux_2_28 image (AlmaLinux 8 based)
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
 
-          # Install C++ build dependencies inside the container
+          # Install C++ build dependencies inside the container.
+          # lua-devel is REQUIRED: the wheel always builds the Lua plugin
+          # (PYTHON_WHEEL_BUILD still compiles plugins/lua), so its absence
+          # is a fatal CMake configure error.
           CIBW_BEFORE_ALL_LINUX: >
             dnf install -y epel-release &&
             dnf install -y
@@ -64,6 +67,7 @@ jobs:
             pcre-devel
             gettext-devel
             libxcrypt-devel
+            lua-devel
             swig cmake gcc-c++ ninja-build
 
           # auditwheel repair is run by cibuildwheel automatically

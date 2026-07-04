@@ -34,6 +34,13 @@ jobs:
             arch: x86_64
 
     steps:
+      # Self-hosted runners can accumulate root-owned files from container
+      # (e.g. Docker-based) jobs; actions/checkout's clean step then fails with
+      # EACCES. Remove the workspace up front so checkout starts clean.
+      - name: Clean stale workspace (root-owned leftovers)
+        working-directory: /
+        run: sudo rm -rf "${{ github.workspace }}" && mkdir -p "${{ github.workspace }}"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -98,6 +105,10 @@ jobs:
     runs-on: [self-hosted, linux, x64]
 
     steps:
+      - name: Clean stale workspace (root-owned leftovers)
+        working-directory: /
+        run: sudo rm -rf "${{ github.workspace }}" && mkdir -p "${{ github.workspace }}"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

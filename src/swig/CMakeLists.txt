@@ -23,7 +23,12 @@
 find_package(SWIG 4.0 REQUIRED)
 include(UseSWIG)
 
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+# Development.Module (not Development) so we don't require libpython for embedding.
+# SWIG produces a Python extension module that is loaded by the interpreter; on
+# Linux it must NOT link libpython (symbols are resolved by the host at runtime).
+# The full Development component pulls in Development.Embed, which is absent in
+# manylinux images and breaks the wheel build.
+find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
 
 # Verify Python version >= 3.10 for SQLModel compatibility
 if(Python3_VERSION VERSION_LESS "3.10")
@@ -69,7 +74,7 @@ target_link_libraries(verlihub_core
     PRIVATE
         verlihub_core_lib  # The refactored core library
         libverlihub_so     # Main verlihub shared library for plugin management
-        Python3::Python
+        Python3::Module    # Extension-module target: no libpython embed (manylinux-safe)
 )
 
 # Set output name (remove lib prefix)

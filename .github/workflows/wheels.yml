@@ -79,9 +79,13 @@ jobs:
           CIBW_TEST_COMMAND: >
             python -c "from verlihub import verlihub_core; print('verlihub_core OK')"
 
-          # Tell scikit-build-core to build the SWIG module
+          # Tell scikit-build-core to build the SWIG module.
+          # WITH_PYTHON=OFF disables the *embedded-interpreter hub plugin*
+          # (plugins/python), which links libpython for embedding and cannot
+          # build in manylinux. It is unrelated to the pip SWIG bindings that
+          # this wheel ships (_verlihub_core), so turning it off is correct.
           CIBW_ENVIRONMENT: >
-            CMAKE_ARGS="-DBUILD_PYTHON_BINDINGS=ON -DPYTHON_WHEEL_BUILD=ON -DUSE_CUSTOM_AUTOSPRINTF=ON"
+            CMAKE_ARGS="-DBUILD_PYTHON_BINDINGS=ON -DPYTHON_WHEEL_BUILD=ON -DUSE_CUSTOM_AUTOSPRINTF=ON -DWITH_PYTHON=OFF"
 
       - uses: actions/upload-artifact@v4
         with:

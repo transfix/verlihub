@@ -148,7 +148,13 @@ The `python/` directory contains a complete Python-based management stack:
   * **GeoIP Enrichment** — MaxMind .mmdb + ip-api.com fallback for country, city, ISP
   * **User Insights** — clone detection, share stats, geo distribution, status flags
   * **Embeddable Widget** — standalone dashboard embed for external sites (`/dashboard/embed`)
-  * **NMDCpb Extension** — Protobuf structured messaging (`$PB`/`$PBR`), hub-relayed transfers, E2EPM encrypted private messages, and PrivateSearch
+  * **NMDCpb Extension** — protobuf structured messaging (`$PB`/`$PBR`) with six integrated
+    features: hub-relayed transfers (HubRelay), E2E encrypted private messages (E2EPM),
+    media sharing (filesystem/S3 storage + HTTP API), channels with E2E sender keys, and
+    voice/video call signaling with SFU group fan-out. Legacy NMDC clients are transparently
+    supported via translation. See [docs/NMDCPB_PROTOCOL.md](docs/NMDCPB_PROTOCOL.md),
+    [docs/NMDCPB_IMPLEMENTATION.md](docs/NMDCPB_IMPLEMENTATION.md), and
+    [docs/NMDCPB_ADMIN_GUIDE.md](docs/NMDCPB_ADMIN_GUIDE.md).
 
 ## Quick Start
 

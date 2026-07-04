@@ -902,25 +902,26 @@ class TestRouterRegistration:
 
     def test_hublist_router_in_api(self):
         """hublist_router is included in the main api_router."""
+        from fastapi import FastAPI
         from verlihub.api import api_router
-        route_paths = [r.path for r in api_router.routes if hasattr(r, "path")]
+        # Mount into an app and read the OpenAPI schema: newer FastAPI wraps
+        # included routers in lazy `_IncludedRouter` objects that don't expose
+        # `.path`, but their endpoints always surface in the OpenAPI paths.
+        app = FastAPI()
+        app.include_router(api_router)
+        route_paths = list(app.openapi().get("paths", {}).keys())
         # The hublist endpoints should be under /api/v1/hublist
         hublist_paths = [p for p in route_paths if "hublist" in p]
         assert len(hublist_paths) > 0, "hublist routes not registered in api_router"
 
     def test_hublist_endpoints_exist(self):
         """All expected hublist endpoints are registered."""
+        from fastapi import FastAPI
         from verlihub.api import api_router
-        route_paths = set()
-        for route in api_router.routes:
-            if hasattr(route, "path"):
-                route_paths.add(route.path)
-            if hasattr(route, "routes"):
-                for sub in route.routes:
-                    if hasattr(sub, "path"):
-                        route_paths.add(sub.path)
+        app = FastAPI()
+        app.include_router(api_router)
+        all_paths = " ".join(app.openapi().get("paths", {}).keys())
         # Check key endpoints exist (they may be nested)
-        all_paths = " ".join(route_paths)
         assert "hublist" in all_paths
 
 

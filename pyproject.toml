@@ -23,18 +23,19 @@ requires = ["scikit-build-core>=0.10", "swig>=4.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "verlihub"
+name = "verlihub-py"
 version = "1.7.0.0"
-description = "Python FastAPI wrapper for Verlihub DC hub with native C++ core"
+description = "Python FastAPI wrapper for Verlihub DC hub with native C++ core (a modified fork of Verlihub, maintained at github.com/transfix/verlihub)"
 readme = "python/README.md"
 license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.10"
 authors = [
     {name = "Verlihub Team", email = "info@verlihub.net"},
+    {name = "Joe Rivera"},
 ]
 keywords = ["dc", "direct-connect", "hub", "p2p", "fastapi"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Framework :: FastAPI",
     "Intended Audience :: System Administrators",
@@ -94,9 +95,10 @@ verlihub-bench = "verlihub.benchmarks.cli:main"
 verlihub-mcp = "verlihub.client.mcp:main"
 
 [project.urls]
-Homepage = "https://verlihub.net"
-Repository = "https://github.com/verlihub/verlihub"
+Homepage = "https://github.com/transfix/verlihub"
+Repository = "https://github.com/transfix/verlihub"
 Documentation = "https://verlihub.net/doc/"
+"Upstream project" = "https://github.com/verlihub/verlihub"
 
 # --- scikit-build-core settings ---
 

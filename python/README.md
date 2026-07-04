@@ -2,6 +2,11 @@
 
 A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 
+> **Fork notice:** `verlihub-py` is a **modified fork** of
+> [Verlihub](https://github.com/verlihub/verlihub), maintained at
+> [github.com/transfix/verlihub](https://github.com/transfix/verlihub). It is not the
+> original project. Licensed GPL-3.0-or-later; all upstream copyrights are preserved.
+
 ## Features
 
 - **REST API** - Full hub management via HTTP endpoints
@@ -10,15 +15,31 @@ A FastAPI-based REST API and web dashboard for managing Verlihub DC hubs.
 - **CLI Tools** - Command-line management utilities
 - **Performance Benchmarks** - Load testing and performance analysis
 - **Remote Client** - Python client library for hub administration
+- **NMDCpb Protocol Extension** - Protobuf structured messaging with hub-relayed
+  transfers, E2E encrypted PM, media sharing, channels, and voice/video signaling
+- **LLM & MCP Integration** - AI chat assistant with hub tool-calling, an NMDC
+  `Hub-Security` bot, and a Model Context Protocol server for AI editors
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-cd python
+# From PyPI (recommended)
+pip install verlihub-py
+
+# With LLM / MCP integration extras (OpenAI-compatible client + MCP server)
+pip install "verlihub-py[ai]"
+
+# From source (development)
+git clone https://github.com/transfix/verlihub
+cd verlihub/python
 pip install -e ".[dev]"
 ```
+
+> **Note:** the published wheels bundle the native Verlihub C++ core (built via
+> scikit-build-core + SWIG). A source build additionally needs CMake, SWIG, a
+> C++17 compiler, and the hub's build dependencies.
 
 ### Running the API Server
 
@@ -88,6 +109,76 @@ Access the dashboard at `http://localhost:8000/dashboard/`
 - **Console** - Command execution interface
 - **Config** - Hub configuration (Master only)
 - **Plugins** - Plugin management (Admin only)
+
+## NMDCpb Protocol Extension
+
+verlihub-py ships the **server side** of NMDCpb — a protobuf-based structured
+messaging layer that extends classic NMDC with six integrated features. The hub
+negotiates `NMDCpb` in `$Supports`, dispatches `$PB`/`$PBR` envelopes to a Python
+plugin, and transparently translates to legacy NMDC (`$<nick>`, `$To:`, `$Search`)
+for non-NMDCpb clients.
+
+| Extension | Capability |
+|-----------|------------|
+| **NMDCpb** | Protobuf message dispatch, legacy translation, feature negotiation |
+| **HubRelay** | Hub-brokered relay sessions for encrypted, NAT-friendly transfers |
+| **E2EPM** | End-to-end encrypted private messages with key-exchange forwarding |
+| **MediaShare** | Media storage (filesystem/S3), HTTP upload/download API, P2P routing |
+| **Channels** | Channel lifecycle, membership, message routing, E2E sender keys |
+| **VoiceVideo** | 1:1 and group call signaling, hub streams, SFU fan-out |
+
+### Admin surface
+
+- **Chat commands** (operator, class ≥ 5): `+nmdcpb stats`, `+nmdcpb users`,
+  `+nmdcpb relay`, `+nmdcpb channel list|create|delete|info`
+- **REST API** under `/dashboard/nmdcpb/api` (admin JWT, `user_class ≥ 5`):
+  `GET /api/stats`, `GET /api/users`, `GET /api/relays`, `GET /api/relay/{id}`,
+  `POST /api/relay/{id}/close`, `POST /api/relay/close-all`,
+  `POST /api/relay/close-user/{nick}`
+- **Media API** mounted at `/api/media/` (per-user HMAC bearer tokens):
+  `POST /upload`, `GET /quota`, `GET /{id}`, `GET /{id}/thumb`,
+  `GET /{id}/meta`, `DELETE /{id}`
+- **WebSocket** `/ws/relay` streams `relay_created` / `relay_closed` events
+- **Dashboard** at `/dashboard/nmdcpb/` with live stats, relay/user tables, and
+  admin actions
+
+### Client library
+
+A high-level Python client for these extensions (E2E-encrypted PM, hub-relayed
+transfers, media sharing, channels) ships in `verlihub.client.nmdcpb` — see
+**[NMDCpb Client Library](#nmdcpb-client-library-e2epm--hubrelay--mediashare--channels)**
+below.
+
+### Detailed documentation
+
+| Document | Contents |
+|----------|----------|
+| [NMDCPB_PROTOCOL.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_PROTOCOL.md) | Wire format, envelope types, feature negotiation |
+| [NMDCPB_IMPLEMENTATION.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_IMPLEMENTATION.md) | Hub plugin architecture, message flow, storage backends |
+| [NMDCPB_ADMIN_GUIDE.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_ADMIN_GUIDE.md) | Commands, REST/WebSocket API, dashboard, config, troubleshooting |
+| [NMDCPB_PROTOCOL_WORKFLOWS.md](https://github.com/transfix/verlihub/blob/master/docs/NMDCPB_PROTOCOL_WORKFLOWS.md) | End-to-end sequence walkthroughs for every extension |
+
+## LLM & MCP Integration
+
+verlihub-py includes optional LLM integration that connects to any
+**OpenAI-compatible backend** (Ollama, vLLM, llama.cpp, LiteLLM, OpenRouter, or a
+hosted API):
+
+- **AI Chat Assistant** — a dashboard chat tab (`POST /api/v1/llm/chat`,
+  streaming over `/ws/llm-chat`) where admins ask natural-language questions and
+  the LLM executes **hub tool-calls** (list users, kick, ban, read stats) and
+  feeds results back for a final answer.
+- **NMDC `Hub-Security` Bot** — hub users chat with an LLM-backed bot via PM or
+  main chat, with session memory, a mood engine, web access (search/fetch/RSS),
+  and persistent notes.
+- **MCP Server** — a [Model Context Protocol](https://modelcontextprotocol.io/)
+  server exposing the hub as tools/resources/prompts to AI editors (VS Code,
+  Claude Desktop) over stdio or HTTP; ships the `verlihub-mcp` CLI.
+
+Enable it in config and point `base_url` at your backend. See
+**[LLM_INTEGRATION.md](https://github.com/transfix/verlihub/blob/master/python/docs/LLM_INTEGRATION.md)** for the full architecture,
+configuration reference, setup guides (Ollama/vLLM/llama.cpp), the tool-calling
+flow, bot features, and MCP server/client usage.
 
 ## Performance Benchmarks
 
@@ -230,6 +321,112 @@ users = client.get_users()
 client.disconnect()
 ```
 
+### NMDCpb Client Library (E2EPM · HubRelay · MediaShare · Channels)
+
+Beyond the raw protocol, verlihub-py ships a high-level **NMDCpb client**
+(`verlihub.client.nmdcpb`) that speaks the protobuf overlay and exposes
+ergonomic, strongly-typed APIs for the extension features. It doubles as the
+reference client that validates the hub-side implementation. Requires the
+`protobuf` + `cryptography` extras.
+
+```python
+from verlihub.client import NMDCpbClient  # also: WireCodec, E2EPMSession, E2EPMManager
+
+client = NMDCpbClient("mybot", "password")
+await client.connect("nmdc://hub.example.com:411")
+
+# Structured chat / PM (protobuf)
+await client.send_pb_chat("Hello from protobuf!")
+await client.send_pb_pm("Alice", "Hi Alice")
+```
+
+#### End-to-end encrypted PM (E2EPM)
+
+X25519 key exchange + ChaCha20-Poly1305, with 4-emoji verification
+fingerprints and Trust-On-First-Use key continuity — negotiated
+automatically on first use:
+
+```python
+client.on_e2epm_established = lambda peer, fp: print(f"Secure with {peer}: {fp}")
+client.on_encrypted_pm      = lambda frm, text, enc: print(f"[E2E] {frm}: {text}")
+
+await client.send_encrypted_pm("Alice", "Secret message")
+```
+
+Lower-level session control is available via `E2EPMManager` / `E2EPMSession`
+(`initiate_session`, `handle_key_exchange`, `encrypt_message`,
+`decrypt_message`).
+
+#### Hub-relayed transfers (HubRelay)
+
+Hub-brokered, NAT-friendly, resumable file relay with SHA-256 verification:
+
+```python
+from verlihub.client.nmdcpb.relay import RelayFileTransfer
+
+relay = RelayFileTransfer(client, download_dir="/downloads")
+info  = await relay.send_file("Alice", "/path/to/file.bin")   # -> TransferInfo (progress, speed, state)
+
+# …or drive the protocol directly:
+client.on_relay_request = lambda frm, token, purpose, size: None
+await client.accept_relay(token)
+await client.send_relay_data(relay_id, chunk, offset)
+await client.close_relay(relay_id)
+
+client.relay_only_mode = True    # privacy: force all transfers through the hub relay
+```
+
+Admin REST surface (dashboard, `user_class ≥ 5`) at `/dashboard/nmdcpb/api`:
+`GET /relays`, `GET /relay/{id}`, `POST /relay/{id}/close`,
+`POST /relay/close-all`, `POST /relay/close-user/{nick}`; live events over
+the `/ws/relay` WebSocket (`relay_created` / `relay_closed`).
+
+#### Media sharing (MediaShare)
+
+Server-side storage with per-user quota, TTL, thumbnails, and a REST surface:
+
+```python
+from verlihub.client.nmdcpb.media_storage import MediaStorage, MediaConfig
+
+store = MediaStorage(MediaConfig())
+meta  = store.store(data, "clip.mp4", "video/mp4", uploader="mybot")   # -> MediaMeta
+quota = store.get_quota("mybot")
+```
+
+REST API (per-user HMAC bearer tokens), mounted at `/api/media`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/media/upload` | Upload a file (multipart) |
+| `GET /api/media/{id}` | Download the file |
+| `GET /api/media/{id}/thumb` | Download the thumbnail |
+| `GET /api/media/{id}/meta` | Metadata JSON |
+| `GET /api/media/quota` | Per-user quota |
+| `DELETE /api/media/{id}` | Delete (owner or admin) |
+
+#### Channels
+
+Server-managed public/private channels with member roles
+(`MEMBER`/`ADMIN`/`OWNER`/`READONLY`), message history, and group
+sender-key encryption. Managed by
+`verlihub.client.nmdcpb.channel_manager.ChannelManager` (auto-creates and
+auto-joins `#general`); driven over the protobuf protocol with actions:
+list / create / delete / join / leave / set-topic / kick / set-role.
+
+#### Protobuf message types
+
+All wire types are importable for advanced/manual use:
+
+```python
+from verlihub.client.nmdcpb.nmdcpb_pb2 import (
+    PbEnvelope,
+    PbPMKeyExchange, PbEncryptedPM, PbPMPlaintext,        # E2EPM
+    PbMediaUpload, PbMediaMeta, PbMediaRef,               # MediaShare
+    PbRelayRequest, PbRelayAck, PbRelayData, PbRelayClosed,  # HubRelay
+    PbChannel, PbChannelList, PbChannelMemberUpdate,      # Channels
+)
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -325,4 +522,4 @@ python/
 
 ## License
 
-GPL-3.0-or-later - See [LICENSE](../License.md) for details.
+GPL-3.0-or-later - See [LICENSE](https://github.com/transfix/verlihub/blob/master/License.md) for details.
